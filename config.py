@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import os
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
+from platform_util import app_config_dir
+
 APP_NAME = "CursorToken剩余进度"
-CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "CursorTokenTray"
+CONFIG_DIR = app_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {

@@ -13,6 +13,7 @@ import customtkinter as ctk
 from app_icon import apply_window_icon
 from config import load_config, save_config
 from dpi_util import enable_dpi_awareness
+from platform_util import IS_MAC, set_dock_visible
 from ui_ctk import (
     ACCENT,
     BG,
@@ -35,15 +36,15 @@ _DISPLAY_MODE_LABELS = (
     ("dot", "仅色点"),
 )
 
-_G_ACCOUNT = "\ue77b"
-_G_KEY = "\ue72e"
-_G_GLOBE = "\ue774"
-_G_NOTIFY = "\uea8f"
-_G_CLOCK = "\ue121"
-_G_ALERT = "\ue7ba"
-_G_TRAY = "\ue770"
-_G_POWER = "\ue7e8"
-_G_SETTINGS = "\ue713"
+_G_ACCOUNT = "👤" if IS_MAC else "\ue77b"
+_G_KEY = "🔑" if IS_MAC else "\ue72e"
+_G_GLOBE = "🌐" if IS_MAC else "\ue774"
+_G_NOTIFY = "🔔" if IS_MAC else "\uea8f"
+_G_CLOCK = "⏱" if IS_MAC else "\ue121"
+_G_ALERT = "⚠" if IS_MAC else "\ue7ba"
+_G_TRAY = "📊" if IS_MAC else "\ue770"
+_G_POWER = "⏻" if IS_MAC else "\ue7e8"
+_G_SETTINGS = "⚙" if IS_MAC else "\ue713"
 
 
 class SettingsWindow:
@@ -165,6 +166,7 @@ class SettingsWindow:
 
         with self._lock:
             self._root = root
+        set_dock_visible(True)
         root.title("设置")
         root.resizable(True, True)
 
@@ -183,6 +185,7 @@ class SettingsWindow:
             with self._lock:
                 if self._root is root:
                     self._root = None
+            set_dock_visible(False)
             try:
                 root.destroy()
             except tk.TclError:
@@ -224,7 +227,10 @@ class SettingsWindow:
         page_meta = {
             "account": {"title": "账户与登录", "desc": "粘贴或导入会话 Token。"},
             "notify": {"title": "刷新与通知", "desc": "刷新频率与额度提醒。"},
-            "tray": {"title": "托盘与启动", "desc": "托盘样式与开机自启。"},
+            "tray": {
+                "title": "菜单栏与启动" if IS_MAC else "托盘与启动",
+                "desc": "菜单栏图标与登录自启。" if IS_MAC else "托盘样式与开机自启。",
+            },
         }
         self._current_page = "account"
 
@@ -284,7 +290,7 @@ class SettingsWindow:
 
         add_nav("account", "账户与登录", _G_ACCOUNT)
         add_nav("notify", "刷新与通知", _G_NOTIFY)
-        add_nav("tray", "托盘与启动", _G_TRAY)
+        add_nav("tray", "菜单栏与启动" if IS_MAC else "托盘与启动", _G_TRAY)
 
         # ========== 账户页 ==========
         account_body = make_page("account")
@@ -319,7 +325,11 @@ class SettingsWindow:
         import_exp = CTkSettingsRow(
             account_body,
             title="从浏览器导入",
-            description="读取本机已登录浏览器，或打开网站登录。",
+            description=(
+                "读取 Safari / Chrome / Edge / Firefox，或打开网站登录。"
+                if IS_MAC
+                else "读取本机已登录浏览器，或打开网站登录。"
+            ),
             glyph=_G_GLOBE,
         )
         import_exp.grid(row=2, column=0, sticky="ew")
@@ -544,7 +554,12 @@ class SettingsWindow:
         rev_map = {v: k for k, v in _DISPLAY_MODE_LABELS}
         cur_mode = str(cfg.get("tray_display_mode") or "ring")
         mode_var = tk.StringVar(value=mode_map.get(cur_mode, "圆环百分比"))
-        mode_exp = CTkSettingsRow(tray_body, title="托盘显示", description="圆环 / 数字 / 色点。", glyph=_G_TRAY)
+        mode_exp = CTkSettingsRow(
+            tray_body,
+            title="菜单栏图标" if IS_MAC else "托盘显示",
+            description="圆环 / 数字 / 色点。",
+            glyph=_G_TRAY,
+        )
         mode_exp.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         ctk.CTkComboBox(
             mode_exp.control_host,

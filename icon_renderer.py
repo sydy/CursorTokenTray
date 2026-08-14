@@ -22,12 +22,18 @@ def remaining_color(remaining_percent: float) -> tuple[int, int, int]:
 
 @lru_cache(maxsize=1)
 def tray_icon_size() -> int:
-    """尽量用大图，Windows 缩放到托盘时更清晰。"""
+    """尽量用大图，系统缩放到托盘 / 菜单栏时更清晰。"""
     try:
+        import sys
+
+        if sys.platform == "darwin":
+            from dpi_util import enable_dpi_awareness
+
+            scale = enable_dpi_awareness()
+            return max(44, min(128, int(22 * scale * 2)))
         import ctypes
 
         sm = int(ctypes.windll.user32.GetSystemMetrics(49))  # SM_CXSMICON
-        # 至少 256；高 DPI 可到 512
         return max(256, min(512, sm * 16))
     except Exception:
         return DEFAULT_SIZE
@@ -340,8 +346,17 @@ def _fit_font(text: str, target_px: float):
         r"C:\Windows\Fonts\msyhbd.ttc",
         r"C:\Windows\Fonts\segoeui.ttf",
         r"C:\Windows\Fonts\arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/SFNS.ttf",
         "seguisb.ttf",
         "arialbd.ttf",
+        "Arial.ttf",
     )
     base = None
     for path in paths:

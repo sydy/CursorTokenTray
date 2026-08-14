@@ -1,14 +1,12 @@
-"""托盘图标点击检测：仅轮询图标矩形，绝不占用托盘消息线程。悬停不弹窗。"""
+"""托盘 / 菜单栏图标点击检测。Windows 轮询图标矩形；macOS 交给 pystray 默认动作。"""
 
 from __future__ import annotations
 
-import ctypes
 import logging
 import threading
 from collections.abc import Callable
-from ctypes import wintypes
 
-from pystray._util import win32 as win32util
+from platform_util import IS_MAC, IS_WIN, cursor_pos
 
 log = logging.getLogger("tray_hover")
 
@@ -17,38 +15,17 @@ VK_RBUTTON = 0x02
 VK_LBUTTON = 0x01
 
 
-class GUID(ctypes.Structure):
-    _fields_ = [
-        ("Data1", wintypes.DWORD),
-        ("Data2", wintypes.WORD),
-        ("Data3", wintypes.WORD),
-        ("Data4", wintypes.BYTE * 8),
-    ]
-
-
-class NOTIFYICONIDENTIFIER(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("hWnd", wintypes.HWND),
-        ("uID", wintypes.UINT),
-        ("guidItem", GUID),
-    ]
-
-
-Shell_NotifyIconGetRect = ctypes.windll.shell32.Shell_NotifyIconGetRect
-Shell_NotifyIconGetRect.argtypes = [
-    ctypes.POINTER(NOTIFYICONIDENTIFIER),
-    ctypes.POINTER(wintypes.RECT),
-]
-Shell_NotifyIconGetRect.restype = ctypes.HRESULT
-
-
 def icon_uid(icon) -> int:
     return id(icon) & 0xFFFFFFFF
 
 
 def patch_pystray_uid(icon) -> None:
-    """修复 pystray 误写 hID、实际 uID=0 的问题（须在 NIM_ADD 前调用）。"""
+    """修复 pystray 误写 hID、实际 uID=0 的问题（须在 NIM_ADD 前调用）。非 Windows 为空操作。"""
+    if not IS_WIN:
+        return
+    import ctypes
+
+    from pystray._util import win32 as win32util
 
     def _message(code, flags, **kwargs):
         nid = win32util.NOTIFYICONDATAW(
@@ -96,6 +73,8 @@ class HoverWatcher:
         self._lbtn_was_down = False
 
     def start(self) -> None:
+        if not IS_WIN:
+            return
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -174,7 +153,7 @@ class HoverWatcher:
         top -= HIT_PAD
         right += HIT_PAD
         bottom += HIT_PAD
-        x, y = _cursor_pos()
+        x, y = cursor_pos()
         return left <= x <= right and top <= y <= bottom
 
 
@@ -186,7 +165,7 @@ def enable_hover_flyout(
     on_right_click: Callable[[], None] | None = None,
     on_left_click: Callable[[], None] | None = None,
 ) -> HoverWatcher:
-    """只启轮询点击，不挂钩子、不改 _on_notify（避免卡死托盘消息泵）。悬停不弹窗。"""
+    """Windows：轮询点击。macOS：空操作（左键走 pystray 默认项，右键走原生菜单）。"""
     watcher = HoverWatcher(
         icon,
         on_open=on_open,
@@ -200,9 +179,44 @@ def enable_hover_flyout(
 
 
 def get_tray_icon_rect(icon) -> tuple[int, int, int, int] | None:
+    if IS_MAC:
+        return _get_status_item_rect(icon)
+    if not IS_WIN:
+        return None
+    return _get_notify_icon_rect(icon)
+
+
+def _get_notify_icon_rect(icon) -> tuple[int, int, int, int] | None:
+    import ctypes
+    from ctypes import wintypes
+
     hwnd = getattr(icon, "_hwnd", None)
     if not hwnd:
         return None
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", wintypes.BYTE * 8),
+        ]
+
+    class NOTIFYICONIDENTIFIER(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("hWnd", wintypes.HWND),
+            ("uID", wintypes.UINT),
+            ("guidItem", GUID),
+        ]
+
+    Shell_NotifyIconGetRect = ctypes.windll.shell32.Shell_NotifyIconGetRect
+    Shell_NotifyIconGetRect.argtypes = [
+        ctypes.POINTER(NOTIFYICONIDENTIFIER),
+        ctypes.POINTER(wintypes.RECT),
+    ]
+    Shell_NotifyIconGetRect.restype = ctypes.HRESULT
+
     for uid in (icon_uid(icon), 0):
         ident = NOTIFYICONIDENTIFIER()
         ident.cbSize = ctypes.sizeof(NOTIFYICONIDENTIFIER)
@@ -215,30 +229,75 @@ def get_tray_icon_rect(icon) -> tuple[int, int, int, int] | None:
     return None
 
 
+def _get_status_item_rect(icon) -> tuple[int, int, int, int] | None:
+    try:
+        from AppKit import NSScreen
+
+        item = getattr(icon, "_status_item", None)
+        if item is None:
+            return None
+        button = item.button()
+        if button is None:
+            return None
+        window = button.window()
+        if window is None:
+            return None
+        rect = window.convertRectToScreen_(button.convertRect_toView_(button.bounds(), None))
+        screens = list(NSScreen.screens() or [])
+        if not screens:
+            return None
+        primary_h = float(screens[0].frame().size.height)
+        x = float(rect.origin.x)
+        y = float(rect.origin.y)
+        w = float(rect.size.width)
+        h = float(rect.size.height)
+        left = int(x)
+        top = int(round(primary_h - y - h))
+        right = int(round(x + w))
+        bottom = int(round(primary_h - y))
+        return left, top, right, bottom
+    except Exception:
+        return None
+
+
 def cursor_over_hwnd(hwnd: int) -> bool:
     if not hwnd:
         return False
-    try:
-        x, y = _cursor_pos()
-        rect = wintypes.RECT()
-        if not ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+    if IS_WIN:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            x, y = cursor_pos()
+            rect = wintypes.RECT()
+            if not ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+                return False
+            return rect.left <= x <= rect.right and rect.top <= y <= rect.bottom
+        except Exception:
             return False
-        return rect.left <= x <= rect.right and rect.top <= y <= rect.bottom
+    return False
+
+
+def cursor_over_widget(win) -> bool:
+    if win is None:
+        return False
+    try:
+        x, y = cursor_pos()
+        left = int(win.winfo_rootx())
+        top = int(win.winfo_rooty())
+        right = left + int(win.winfo_width())
+        bottom = top + int(win.winfo_height())
+        return left <= x <= right and top <= y <= bottom
     except Exception:
         return False
 
 
-def _cursor_pos() -> tuple[int, int]:
-    class POINT(ctypes.Structure):
-        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-    pt = POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-    return int(pt.x), int(pt.y)
-
-
 def _button_down(vk: int) -> bool:
+    if not IS_WIN:
+        return False
     try:
+        import ctypes
+
         return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
     except Exception:
         return False

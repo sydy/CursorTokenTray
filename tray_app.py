@@ -21,6 +21,7 @@ from cursor_api import (
 )
 from icon_renderer import create_idle_icon, create_progress_icon
 from popup_ui import MenuAction, PopupManager, StatusActions, format_summary_text
+from platform_util import IS_MAC
 from settings_ui import SettingsWindow
 import usage_history
 
@@ -41,19 +42,32 @@ class TrayApp:
         self._suppress_status_closed_resume = False
         self._status_opening = False
 
-        # 仅保留不可见的 default，供左键；右键走自定义矢量菜单（避免双菜单）
-        self.icon = pystray.Icon(
-            APP_NAME,
-            create_idle_icon(mode=self._display_mode()),
-            "",
-            menu=pystray.Menu(
+        # Windows：隐藏 default 供左键，右键走自定义矢量菜单。
+        # macOS：原生菜单栏菜单；左键 default 打开状态飞出层。
+        if IS_MAC:
+            menu = pystray.Menu(
+                pystray.MenuItem("显示状态", self._action_open_status, default=True),
+                pystray.MenuItem("立即刷新", self._action_refresh),
+                pystray.MenuItem("打开用量账单", self._action_open_spending),
+                pystray.MenuItem("导入 Token…", self._action_open_settings_focus),
+                pystray.MenuItem("设置…", self._action_open_settings),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("退出", self._action_quit),
+            )
+        else:
+            menu = pystray.Menu(
                 pystray.MenuItem(
                     "显示状态",
                     self._action_open_status,
                     default=True,
                     visible=False,
                 )
-            ),
+            )
+        self.icon = pystray.Icon(
+            APP_NAME,
+            create_idle_icon(mode=self._display_mode()),
+            "",
+            menu=menu,
         )
         self.popups.bind_tray_icon(self.icon)
 
@@ -73,6 +87,18 @@ class TrayApp:
         self.icon.run(setup=self._on_icon_ready)
 
     def _on_icon_ready(self, icon: pystray.Icon) -> None:
+        if IS_MAC:
+            try:
+                self.popups.attach_main_thread()
+            except Exception:
+                pass
+            icon.visible = True
+            try:
+                icon.title = ""
+            except Exception:
+                pass
+            return
+
         from tray_hover import enable_hover_flyout, patch_pystray_uid
 
         patch_pystray_uid(icon)
@@ -208,6 +234,11 @@ class TrayApp:
         except Exception:
             try:
                 self.popups.close()
+            except Exception:
+                pass
+        if IS_MAC:
+            try:
+                self.popups.stop_macos_pump()
             except Exception:
                 pass
 
@@ -474,8 +505,28 @@ class TrayApp:
     def _notify(self, title: str, message: str) -> None:
         try:
             self.icon.notify(message, title)
+            return
         except Exception:
             pass
+        if IS_MAC:
+            try:
+                import subprocess
+
+                def _as_quote(text: str) -> str:
+                    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        f"display notification {_as_quote(message)} with title {_as_quote(title)}",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass
 
     def _display_mode(self) -> str:
         with self._lock:

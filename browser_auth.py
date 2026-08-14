@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from cursor_api import CursorApiError, fetch_usage_summary, normalize_workos_token
+from platform_util import IS_MAC
 
 LOGIN_URL = "https://cursor.com/dashboard"
 COOKIE_NAME = "WorkosCursorSessionToken"
@@ -89,6 +90,16 @@ def open_login_page() -> None:
                 return
             except OSError:
                 continue
+        if IS_MAC:
+            try:
+                subprocess.Popen(
+                    ["open", LOGIN_URL],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except OSError:
+                pass
         if os.name == "nt":
             try:
                 import ctypes
@@ -118,6 +129,8 @@ def find_session_candidates() -> list[CookieCandidate]:
     found: list[CookieCandidate] = []
     found.extend(_find_chromium_candidates())
     found.extend(_find_firefox_candidates())
+    if IS_MAC:
+        found.extend(_find_safari_candidates())
     # 新 → 旧
     found.sort(key=lambda c: c.last_update, reverse=True)
     # 同 token 去重，保留最新
@@ -133,27 +146,29 @@ def find_session_candidates() -> list[CookieCandidate]:
 
 def import_and_validate(
     *,
-    prefer_browsers: tuple[str, ...] = ("firefox", "edge", "chrome"),
+    prefer_browsers: tuple[str, ...] | None = None,
     validate_timeout: float = _VALIDATE_TIMEOUT_SEC,
     skip_tokens: set[str] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> ImportResult:
     """读取本机 Cookie，按新旧尝试校验，返回第一个可用的。"""
+    if prefer_browsers is None:
+        prefer_browsers = (
+            ("safari", "firefox", "edge", "chrome", "brave", "arc")
+            if IS_MAC
+            else ("firefox", "edge", "chrome")
+        )
     if should_cancel and should_cancel():
         return ImportResult(ok=False, message="已取消")
 
-    if on_progress:
-        on_progress("正在从 Firefox / Chrome / Edge 读取 Cookie…")
+        if on_progress:
+            on_progress(_import_progress_label())
     candidates = find_session_candidates()
     if not candidates:
         return ImportResult(
             ok=False,
-            message=(
-                "未在 Firefox / Chrome / Edge 中找到 WorkosCursorSessionToken。\n"
-                "请先在浏览器打开并登录 cursor.com，然后再试。\n"
-                "若刚升级过 Chrome，也可能因 Cookie 加密策略无法读取，可改用 Firefox / Edge，或手动粘贴。"
-            ),
+            message=_no_cookie_message(),
         )
 
     skip = skip_tokens if skip_tokens is not None else set()
@@ -241,7 +256,7 @@ def poll_until_valid(
         ok=False,
         message=(
             "等待超时：仍未检测到可用的登录 Cookie。\n"
-            "请确认已在 Firefox / Chrome / Edge 登录 cursor.com，然后点「仅导入 Cookie」重试。"
+            "请确认已在浏览器登录 cursor.com，然后点「仅导入 Cookie」重试。"
         ),
     )
 
@@ -283,23 +298,54 @@ def _interruptible_sleep(
     return not (should_cancel and should_cancel())
 
 
+def _import_progress_label() -> str:
+    if IS_MAC:
+        return "正在从 Safari / Chrome / Edge / Firefox 读取 Cookie…"
+    return "正在从 Firefox / Chrome / Edge 读取 Cookie…"
+
+
+def _no_cookie_message() -> str:
+    if IS_MAC:
+        return (
+            "未在 Safari / Chrome / Edge / Firefox 中找到 WorkosCursorSessionToken。\n"
+            "请先在浏览器打开并登录 cursor.com，然后再试。\n"
+            "Chrome 系读取 Cookie 可能弹出钥匙串授权；Safari 需在「系统设置 → 隐私与安全性」"
+            "给予本工具完全磁盘访问权限。也可改用手动粘贴。"
+        )
+    return (
+        "未在 Firefox / Chrome / Edge 中找到 WorkosCursorSessionToken。\n"
+        "请先在浏览器打开并登录 cursor.com，然后再试。\n"
+        "若刚升级过 Chrome，也可能因 Cookie 加密策略无法读取，可改用 Firefox / Edge，或手动粘贴。"
+    )
+
+
 # ---------- 浏览器路径 ----------
 
 
 def _browser_executables() -> list[Path]:
     """本机常见浏览器可执行文件（优先 Chromium 系，其次 Firefox）。"""
-    pf = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-    pf86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
-    local = Path(os.environ.get("LOCALAPPDATA", ""))
-    candidates = [
-        pf86 / "Microsoft" / "Edge" / "Application" / "msedge.exe",
-        pf / "Microsoft" / "Edge" / "Application" / "msedge.exe",
-        pf / "Google" / "Chrome" / "Application" / "chrome.exe",
-        pf86 / "Google" / "Chrome" / "Application" / "chrome.exe",
-        local / "Google" / "Chrome" / "Application" / "chrome.exe",
-        pf / "Mozilla Firefox" / "firefox.exe",
-        pf86 / "Mozilla Firefox" / "firefox.exe",
-    ]
+    if IS_MAC:
+        candidates = [
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+            Path("/Applications/Arc.app/Contents/MacOS/Arc"),
+            Path("/Applications/Firefox.app/Contents/MacOS/firefox"),
+            Path("/Applications/Safari.app/Contents/MacOS/Safari"),
+        ]
+    else:
+        pf = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        pf86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        local = Path(os.environ.get("LOCALAPPDATA", ""))
+        candidates = [
+            pf86 / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            pf / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            pf / "Google" / "Chrome" / "Application" / "chrome.exe",
+            pf86 / "Google" / "Chrome" / "Application" / "chrome.exe",
+            local / "Google" / "Chrome" / "Application" / "chrome.exe",
+            pf / "Mozilla Firefox" / "firefox.exe",
+            pf86 / "Mozilla Firefox" / "firefox.exe",
+        ]
     seen: set[str] = set()
     out: list[Path] = []
     for path in candidates:
@@ -312,6 +358,19 @@ def _browser_executables() -> list[Path]:
 
 
 def _browser_user_data_roots() -> list[tuple[str, Path]]:
+    if IS_MAC:
+        support = Path.home() / "Library" / "Application Support"
+        roots = [
+            ("chrome", support / "Google" / "Chrome"),
+            ("chrome-beta", support / "Google" / "Chrome Beta"),
+            ("chrome-canary", support / "Google" / "Chrome Canary"),
+            ("edge", support / "Microsoft Edge"),
+            ("brave", support / "BraveSoftware" / "Brave-Browser"),
+            ("arc", support / "Arc" / "User Data"),
+            ("vivaldi", support / "Vivaldi"),
+            ("chromium", support / "Chromium"),
+        ]
+        return [(name, path) for name, path in roots if path.is_dir()]
     local = Path(os.environ.get("LOCALAPPDATA", ""))
     roots = [
         ("edge", local / "Microsoft" / "Edge" / "User Data"),
@@ -350,7 +409,7 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
     for browser, root in _browser_user_data_roots():
         if not root.is_dir():
             continue
-        key = _load_aes_key(root / "Local State")
+        key = _load_browser_key(browser, root)
         if key is None:
             continue
         for profile_dir in _iter_profiles(root):
@@ -367,7 +426,7 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
                     if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
                         continue
                     try:
-                        raw = _decrypt_chrome_value(enc, key)
+                        raw = _decrypt_chrome_value(enc, key, macos=IS_MAC)
                     except Exception:
                         continue
                     token = normalize_workos_token(raw)
@@ -384,17 +443,24 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
     return found
 
 
+def _firefox_support_root() -> Path:
+    if IS_MAC:
+        return Path.home() / "Library" / "Application Support" / "Firefox"
+    return Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox"
+
+
 def _firefox_profiles_root() -> Path:
-    return Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox" / "Profiles"
+    return _firefox_support_root() / "Profiles"
 
 
 def _iter_firefox_profiles() -> list[Path]:
     """返回含 cookies.sqlite 的 Firefox 配置目录。"""
     profiles: list[Path] = []
     seen: set[str] = set()
+    support = _firefox_support_root()
 
     # profiles.ini 更准确（含相对/绝对路径）
-    ini = Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox" / "profiles.ini"
+    ini = support / "profiles.ini"
     if ini.is_file():
         try:
             cp = configparser.ConfigParser()
@@ -406,11 +472,7 @@ def _iter_firefox_profiles() -> list[Path]:
                 if not rel:
                     continue
                 is_rel = cp.get(section, "IsRelative", fallback="1").strip() == "1"
-                path = (
-                    Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox" / rel
-                    if is_rel
-                    else Path(rel)
-                )
+                path = support / rel if is_rel else Path(rel)
                 key = str(path.resolve()) if path.exists() else str(path)
                 if key in seen:
                     continue
@@ -493,6 +555,48 @@ def _read_firefox_cookie_rows(db_path: Path) -> list[tuple[str, str, int]]:
 
 # ---------- 解密 ----------
 
+_MAC_KEYCHAIN = {
+    "chrome": ("Chrome Safe Storage", "Chrome"),
+    "chrome-beta": ("Chrome Safe Storage", "Chrome"),
+    "chrome-canary": ("Chrome Safe Storage", "Chrome"),
+    "chromium": ("Chromium Safe Storage", "Chromium"),
+    "edge": ("Microsoft Edge Safe Storage", "Microsoft Edge"),
+    "brave": ("Brave Safe Storage", "Brave"),
+    "arc": ("Arc Safe Storage", "Arc"),
+    "vivaldi": ("Vivaldi Safe Storage", "Vivaldi"),
+}
+
+
+def _load_browser_key(browser: str, root: Path) -> bytes | None:
+    if IS_MAC:
+        return _load_macos_chrome_key(browser)
+    return _load_aes_key(root / "Local State")
+
+
+def _load_macos_chrome_key(browser: str) -> bytes | None:
+    """Keychain 密码 + PBKDF2-SHA1（1003 次，16 字节 AES-128）。失败则尝试 peanuts。"""
+    import hashlib
+
+    service, account = _MAC_KEYCHAIN.get(browser, ("Chrome Safe Storage", "Chrome"))
+    password = _keychain_password(service, account) or "peanuts"
+    return hashlib.pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, dklen=16)
+
+
+def _keychain_password(service: str, account: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-w", "-s", service, "-a", account],
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    secret = (result.stdout or "").strip()
+    return secret or None
+
 
 def _load_aes_key(local_state_path: Path) -> bytes | None:
     if not local_state_path.is_file():
@@ -511,6 +615,8 @@ def _load_aes_key(local_state_path: Path) -> bytes | None:
 
 
 def _dpapi_decrypt(data: bytes) -> bytes:
+    if not IS_WIN:
+        raise OSError("DPAPI 仅在 Windows 可用")
     import ctypes
     from ctypes import wintypes
 
@@ -541,9 +647,11 @@ def _dpapi_decrypt(data: bytes) -> bytes:
         kernel32.LocalFree(blob_out.pbData)
 
 
-def _decrypt_chrome_value(encrypted: bytes, key: bytes) -> str:
+def _decrypt_chrome_value(encrypted: bytes, key: bytes, *, macos: bool = False) -> str:
     if not encrypted:
         return ""
+    if macos:
+        return _decrypt_chrome_macos(encrypted, key)
     # 极老版本可能是直接 DPAPI
     if encrypted.startswith(b"\x01\x00\x00\x00"):
         return _dpapi_decrypt(encrypted).decode("utf-8", errors="replace")
@@ -560,7 +668,7 @@ def _decrypt_chrome_value(encrypted: bytes, key: bytes) -> str:
     if prefix == b"v20":
         raise ValueError(
             "Cookie 使用 App-Bound 加密（v20），当前进程无法直接解密。"
-            "可改用 Edge，或暂时手动粘贴 Token。"
+            "可改用 Edge / Firefox，或暂时手动粘贴 Token。"
         )
 
     # 未知格式：尝试 DPAPI
@@ -568,6 +676,163 @@ def _decrypt_chrome_value(encrypted: bytes, key: bytes) -> str:
         return _dpapi_decrypt(encrypted).decode("utf-8", errors="replace")
     except Exception as err:
         raise ValueError(f"无法解密 Cookie（前缀 {prefix!r}）") from err
+
+
+def _decrypt_chrome_macos(encrypted: bytes, key: bytes) -> str:
+    """macOS Chromium：v10/v11 先试 AES-GCM，再试 AES-128-CBC（IV 为 16 个空格）。"""
+    if encrypted.startswith(b"v20"):
+        raise ValueError(
+            "Cookie 使用 App-Bound 加密（v20），当前进程无法直接解密。"
+            "可改用 Safari / Firefox / Edge，或手动粘贴 Token。"
+        )
+    payload = encrypted[3:] if encrypted[:3] in (b"v10", b"v11") else encrypted
+    if len(payload) < 16:
+        raise ValueError("Cookie 密文过短")
+
+    # 新版 Chrome：与其它平台相同的 AES-GCM（12 字节 nonce）
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        plain = AESGCM(key).decrypt(payload[:12], payload[12:], None)
+        return plain.decode("utf-8", errors="replace")
+    except Exception:
+        pass
+
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    iv = b" " * 16
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    plain = decryptor.update(payload) + decryptor.finalize()
+    if not plain:
+        raise ValueError("Cookie 解密结果为空")
+    pad = plain[-1]
+    if 1 <= pad <= 16 and plain.endswith(bytes([pad]) * pad):
+        plain = plain[:-pad]
+    return plain.decode("utf-8", errors="replace")
+
+
+def _find_safari_candidates() -> list[CookieCandidate]:
+    """读取 Safari binarycookies（可能需要完全磁盘访问权限）。"""
+    found: list[CookieCandidate] = []
+    candidates = [
+        Path.home() / "Library" / "Cookies" / "Cookies.binarycookies",
+        Path.home()
+        / "Library"
+        / "Containers"
+        / "com.apple.Safari"
+        / "Data"
+        / "Library"
+        / "Cookies"
+        / "Cookies.binarycookies",
+    ]
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        try:
+            rows = parse_safari_binarycookies(path)
+        except Exception:
+            continue
+        for host, name, value, last_access in rows:
+            if name != COOKIE_NAME:
+                continue
+            if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
+                continue
+            token = normalize_workos_token(value)
+            if not token:
+                continue
+            found.append(
+                CookieCandidate(
+                    browser="safari",
+                    profile="Default",
+                    token=token,
+                    last_update=_firefox_to_unix_us(int(last_access or 0)),
+                )
+            )
+    return found
+
+
+def parse_safari_binarycookies(path: Path) -> list[tuple[str, str, str, int]]:
+    """解析 Safari Cookies.binarycookies，返回 (host, name, value, last_access_us)。"""
+    import struct
+
+    data = path.read_bytes()
+    if len(data) < 8 or data[:4] != b"cook":
+        return []
+    page_count = struct.unpack(">i", data[4:8])[0]
+    if page_count <= 0 or page_count > 4096:
+        return []
+    header_end = 8 + 4 * page_count
+    if len(data) < header_end:
+        return []
+    offsets = struct.unpack(f">{page_count}i", data[8:header_end])
+    pages: list[bytes] = []
+    cursor = header_end
+    for size in offsets:
+        if size <= 0 or cursor + size > len(data):
+            break
+        pages.append(data[cursor : cursor + size])
+        cursor += size
+
+    rows: list[tuple[str, str, str, int]] = []
+    for page in pages:
+        if len(page) < 16:
+            continue
+        try:
+            n_cookies = struct.unpack("<i", page[4:8])[0]
+        except struct.error:
+            continue
+        if n_cookies <= 0 or n_cookies > 4096:
+            continue
+        table_end = 8 + 4 * n_cookies
+        if len(page) < table_end:
+            continue
+        cookie_offsets = struct.unpack(f"<{n_cookies}i", page[8:table_end])
+        for off in cookie_offsets:
+            rec = _parse_safari_cookie_record(page, off)
+            if rec is not None:
+                rows.append(rec)
+    return rows
+
+
+def _parse_safari_cookie_record(page: bytes, offset: int) -> tuple[str, str, str, int] | None:
+    import struct
+
+    if offset < 0 or offset + 56 > len(page):
+        return None
+    try:
+        size = struct.unpack_from("<i", page, offset)[0]
+        url_off = struct.unpack_from("<i", page, offset + 16)[0]
+        name_off = struct.unpack_from("<i", page, offset + 20)[0]
+        path_off = struct.unpack_from("<i", page, offset + 24)[0]
+        value_off = struct.unpack_from("<i", page, offset + 28)[0]
+        # 32: flags, 36: unused, 40: expires (double), 48: lastAccess (double) — Mac epoch
+        last_access_mac = struct.unpack_from("<d", page, offset + 48)[0]
+    except struct.error:
+        return None
+    if size <= 0 or offset + size > len(page):
+        return None
+
+    def _cstr(rel: int) -> str:
+        start = offset + rel
+        if start < offset or start >= offset + size:
+            return ""
+        end = page.find(b"\x00", start, offset + size)
+        if end < 0:
+            end = offset + size
+        return page[start:end].decode("utf-8", errors="replace")
+
+    host = _cstr(url_off)
+    name = _cstr(name_off)
+    _ = path_off
+    value = _cstr(value_off)
+    if not name:
+        return None
+    # Mac absolute time（2001-01-01）→ Unix 微秒
+    unix_us = int((float(last_access_mac) + 978307200.0) * 1_000_000)
+    return host, name, value, unix_us
 
 
 def _copy_with_timeout(src: Path, dst: Path, timeout: float = _COPY_TIMEOUT_SEC) -> None:

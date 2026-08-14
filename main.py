@@ -1,31 +1,30 @@
-"""Cursor Token 剩余进度 — 系统托盘入口。"""
+"""Cursor Token 剩余进度 — 系统托盘 / 菜单栏入口。"""
 
 from __future__ import annotations
 
 import atexit
 import sys
 
+from platform_util import IS_MAC, IS_WIN, show_already_running
+
 
 def main() -> int:
-    if sys.platform != "win32":
-        print("本工具仅支持 Windows。")
+    if not IS_WIN and not IS_MAC:
+        print("本工具支持 Windows 与 macOS。")
         return 1
+
+    if IS_MAC:
+        try:
+            import AppKit  # noqa: F401
+        except ImportError:
+            print("macOS 需要先安装依赖：python3 -m pip install -r requirements.txt")
+            print("（含 pyobjc-framework-Cocoa / pyobjc-framework-Quartz）")
+            return 1
 
     from instance_lock import acquire, release
 
     if not acquire():
-        # 已在运行：提示用户去托盘找，避免误以为「启动不了」
-        try:
-            import ctypes
-
-            ctypes.windll.user32.MessageBoxW(
-                0,
-                "CursorToken 已在后台运行。\n请查看右下角系统托盘（或点 ^ 展开隐藏图标）。",
-                "CursorToken 剩余进度",
-                0x40,
-            )
-        except Exception:
-            print("CursorToken 已在运行，请查看系统托盘。")
+        show_already_running()
         return 0
     atexit.register(release)
 

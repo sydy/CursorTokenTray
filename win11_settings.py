@@ -28,7 +28,7 @@ def fluent_font(size: int = 11) -> tuple:
         import tkinter.font as tkfont
 
         families = set(tkfont.families())
-        for name in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
+        for name in ("Segoe Fluent Icons", "Segoe MDL2 Assets", "PingFang SC"):
             if name in families:
                 return (name, size)
     except Exception:
