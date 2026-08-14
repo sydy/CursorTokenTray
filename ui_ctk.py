@@ -26,11 +26,14 @@ _initialized = False
 
 
 def init_ctk() -> None:
-    """进程内只初始化一次。关闭 CTk 自带 DPI，沿用项目 dpi_util。"""
+    """进程内只初始化一次。Windows 关闭 CTk 自带 DPI，沿用项目 dpi_util。"""
     global _initialized
     if _initialized:
         return
-    ctk.deactivate_automatic_dpi_awareness()
+    import sys
+
+    if sys.platform == "win32":
+        ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode("dark")
     if THEME_PATH.is_file():
         ctk.set_default_color_theme(str(THEME_PATH))
@@ -68,6 +71,10 @@ def apply_native_window_chrome(win) -> None:
 
 
 def fluent_icon_font(size: int = 16) -> ctk.CTkFont:
+    import sys
+
+    if sys.platform == "darwin":
+        return ctk.CTkFont(family="PingFang SC", size=size)
     family = "Segoe Fluent Icons"
     try:
         import tkinter.font as tkfont

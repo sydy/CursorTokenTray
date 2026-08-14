@@ -1,35 +1,15 @@
-"""Windows 11 飞出层样式（圆角 + Acrylic/Mica）。"""
+"""Windows 11 飞出层样式（圆角 + Acrylic/Mica）。其它平台为空操作。"""
 
 from __future__ import annotations
 
-import ctypes
-from ctypes import wintypes
-
-
-# DWM attributes
-DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-DWMWA_WINDOW_CORNER_PREFERENCE = 33
-DWMWA_BORDER_COLOR = 34
-DWMWA_SYSTEMBACKDROP_TYPE = 38
-
-DWMWCP_DEFAULT = 0
-DWMWCP_DONOTROUND = 1
-DWMWCP_ROUND = 2
-DWMWCP_ROUNDSMALL = 3
-
-DWMSBT_AUTO = 0
-DWMSBT_NONE = 1
-DWMSBT_MAINWINDOW = 2  # Mica
-DWMSBT_TRANSIENTWINDOW = 3  # Acrylic（临时窗口/飞出层）
-DWMSBT_TABBEDWINDOW = 4
-
-# 不画边框
-DWMWA_COLOR_NONE = 0xFFFFFFFE
+import sys
 
 
 def apply_win11_flyout(hwnd: int) -> None:
     """给无边框窗口套上 Win11 飞出层观感。"""
-    _apply_win11_chrome(hwnd, backdrop=DWMSBT_NONE)
+    if sys.platform != "win32":
+        return
+    _apply_win11_chrome(hwnd, backdrop=1)  # DWMSBT_NONE
 
 
 def apply_win11_menu_popup(
@@ -40,14 +20,18 @@ def apply_win11_menu_popup(
     corner_radius: int = 8,
 ) -> None:
     """右键菜单：圆角窗口 + 圆角投影区域。"""
-    _apply_win11_chrome(hwnd, backdrop=DWMSBT_NONE)
+    if sys.platform != "win32":
+        return
+    _apply_win11_chrome(hwnd, backdrop=1)
     _apply_rounded_region(hwnd, width, height, corner_radius)
 
 
 def _apply_rounded_region(hwnd: int, width: int, height: int, radius: int) -> None:
-    if not hwnd or width <= 0 or height <= 0:
+    if sys.platform != "win32" or not hwnd or width <= 0 or height <= 0:
         return
     try:
+        import ctypes
+
         r = max(1, min(radius, min(width, height) // 2))
         rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
             0,
@@ -65,16 +49,26 @@ def _apply_rounded_region(hwnd: int, width: int, height: int, radius: int) -> No
 
 def apply_win11_window(hwnd: int, *, mica: bool = True) -> None:
     """标准设置窗口：深色标题栏 + 圆角 + Mica。"""
+    if sys.platform != "win32":
+        return
     _apply_win11_chrome(
         hwnd,
-        backdrop=DWMSBT_MAINWINDOW if mica else DWMSBT_AUTO,
+        backdrop=2 if mica else 0,
     )
 
 
 def _apply_win11_chrome(hwnd: int, *, backdrop: int) -> None:
-    if not hwnd:
+    if sys.platform != "win32" or not hwnd:
         return
+    import ctypes
+    from ctypes import wintypes
+
     dwmapi = ctypes.windll.dwmapi
+    dwmwa_use_immersive_dark_mode = 20
+    dwmwa_window_corner_preference = 33
+    dwmwa_border_color = 34
+    dwmwa_systembackdrop_type = 38
+    dwmwcp_round = 2
 
     def _set(attr: int, value: int) -> None:
         v = ctypes.c_int(value)
@@ -86,23 +80,22 @@ def _apply_win11_chrome(hwnd: int, *, backdrop: int) -> None:
         )
 
     try:
-        _set(DWMWA_USE_IMMERSIVE_DARK_MODE, 1)
+        _set(dwmwa_use_immersive_dark_mode, 1)
     except Exception:
         pass
     try:
-        _set(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)
+        _set(dwmwa_window_corner_preference, dwmwcp_round)
     except Exception:
         pass
     try:
-        _set(DWMWA_SYSTEMBACKDROP_TYPE, backdrop)
+        _set(dwmwa_systembackdrop_type, backdrop)
     except Exception:
         pass
     try:
-        # 细边框贴近系统色
-        color = ctypes.c_uint(0x00666666)  # BGR 灰
+        color = ctypes.c_uint(0x00666666)
         dwmapi.DwmSetWindowAttribute(
             wintypes.HWND(hwnd),
-            DWMWA_BORDER_COLOR,
+            dwmwa_border_color,
             ctypes.byref(color),
             ctypes.sizeof(color),
         )
@@ -111,11 +104,14 @@ def _apply_win11_chrome(hwnd: int, *, backdrop: int) -> None:
 
 
 def toplevel_hwnd(win) -> int:
-    """tk Toplevel -> HWND。"""
+    """tk Toplevel -> HWND / 原生窗口 id。"""
     try:
         win.update_idletasks()
         hwnd = int(win.winfo_id())
-        # 部分环境下需取父窗口
+        if sys.platform != "win32":
+            return hwnd
+        import ctypes
+
         parent = ctypes.windll.user32.GetParent(hwnd)
         return int(parent) if parent else hwnd
     except Exception:

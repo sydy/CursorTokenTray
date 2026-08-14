@@ -19,6 +19,7 @@ from config import APP_NAME
 from cursor_api import UsageSnapshot, format_token_count, is_auth_error_message
 from dpi_util import enable_dpi_awareness
 from icon_renderer import create_progress_icon, create_sparkline, remaining_color
+from platform_util import IS_MAC, cursor_pos, mouse_left_down, place_tray_popup, ui_font_family
 from ui_ctk import init_ctk
 
 DPI_SCALE = enable_dpi_awareness()
@@ -63,12 +64,65 @@ class PopupManager:
         self._popup_menu: _VectorMenu | None = None
         self._host_menu: _VectorMenu | None = None
         self._host_closed = threading.Event()
-        self._start_ui_thread()
+        self._status_win = None
+        if not IS_MAC:
+            self._start_ui_thread()
 
     def bind_tray_icon(self, icon) -> None:
         self._tray_icon = icon
 
+    def attach_main_thread(self) -> None:
+        """macOS：在 pystray setup（主线程）创建隐藏 Tk 根窗口，并用 AppKit 定时泵送。"""
+        if self._root is not None:
+            return
+        init_ctk()
+        root = ctk.CTk()
+        root.withdraw()
+        _apply_tk_scaling(root)
+        with self._lock:
+            self._root = root
+            self._ui_thread = threading.current_thread()
+            root._tray_popup_gen = self._generation  # type: ignore[attr-defined]
+        self._start_macos_pump(root)
+        self._ui_ready.set()
+
+    def _start_macos_pump(self, root: tk.Tk) -> None:
+        def pump() -> None:
+            if getattr(self, "_mac_pump_stopped", False):
+                return
+            self._drain_commands()
+            try:
+                if root.winfo_exists():
+                    root.update()
+            except tk.TclError:
+                return
+            try:
+                from PyObjCTools import AppHelper
+
+                AppHelper.callLater(0.02, pump)
+            except Exception:
+                try:
+                    root.after(20, pump)
+                except tk.TclError:
+                    pass
+
+        self._mac_pump_stopped = False
+        try:
+            from PyObjCTools import AppHelper
+
+            AppHelper.callLater(0.02, pump)
+        except Exception:
+            try:
+                root.after(20, pump)
+            except tk.TclError:
+                pass
+
+    def stop_macos_pump(self) -> None:
+        self._mac_pump_stopped = True
+
     def _start_ui_thread(self) -> None:
+        if IS_MAC:
+            return
         if self._ui_thread is not None and self._ui_thread.is_alive():
             return
         self._ui_ready.clear()
@@ -117,6 +171,7 @@ class PopupManager:
                     self._popup_menu = None
                     self._kind = None
                     self._status_hwnd = 0
+                    self._status_win = None
 
     def _drain_commands(self) -> None:
         while True:
@@ -141,7 +196,9 @@ class PopupManager:
         timeout: float = 3.0,
     ) -> bool:
         self._start_ui_thread()
-        if threading.current_thread() is self._ui_thread:
+        if IS_MAC and not self._ui_ready.wait(timeout=max(timeout, 5.0)):
+            return False
+        if self._ui_thread is not None and threading.current_thread() is self._ui_thread:
             fn()
             return True
         done = threading.Event() if wait else None
@@ -384,6 +441,7 @@ class PopupManager:
             if self._status_card is card:
                 self._status_card = None
                 self._status_hwnd = 0
+                self._status_win = None
             if self._status_card is None and self._host_menu is None and self._popup_menu is None:
                 self._kind = None
 
@@ -420,9 +478,9 @@ class PopupManager:
                 return
             if not self.status_visible:
                 return
-            from tray_hover import cursor_over_hwnd
+            from tray_hover import cursor_over_hwnd, cursor_over_widget
 
-            if cursor_over_hwnd(self._status_hwnd):
+            if cursor_over_hwnd(self._status_hwnd) or cursor_over_widget(self._status_win):
                 return
             if self.cursor_over_tray():
                 return
@@ -449,6 +507,7 @@ class PopupManager:
             if self._host_menu is None:
                 self._kind = None
             self._status_hwnd = 0
+            self._status_win = None
         if root is not None:
             try:
                 root._tray_popup_gen = gen  # type: ignore[attr-defined]
@@ -511,9 +570,10 @@ class PopupManager:
         except Exception:
             return False
 
-    def _set_status_hwnd(self, hwnd: int) -> None:
+    def _set_status_hwnd(self, hwnd: int, win=None) -> None:
         with self._lock:
             self._status_hwnd = int(hwnd or 0)
+            self._status_win = win
 
 
 def build_status_lines(
@@ -607,6 +667,8 @@ def _format_date(iso_value: str) -> str:
 
 
 def _apply_tk_scaling(root: tk.Misc) -> None:
+    if IS_MAC:
+        return
     try:
         import ctypes
 
@@ -620,65 +682,21 @@ def _apply_tk_scaling(root: tk.Misc) -> None:
 
 
 def _cursor_pos() -> tuple[int, int]:
-    try:
-        import ctypes
-
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-        pt = POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        return int(pt.x), int(pt.y)
-    except Exception:
-        return 100, 100
+    return cursor_pos()
 
 
 def _work_area() -> tuple[int, int, int, int]:
-    """当前光标所在显示器的工作区（排除任务栏），支持多屏。"""
-    try:
-        import ctypes
-        from ctypes import wintypes
+    from platform_util import work_area
 
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.DWORD),
-                ("rcMonitor", wintypes.RECT),
-                ("rcWork", wintypes.RECT),
-                ("dwFlags", wintypes.DWORD),
-            ]
-
-        user32 = ctypes.windll.user32
-        pt = wintypes.POINT()
-        user32.GetCursorPos(ctypes.byref(pt))
-        monitor = user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST
-        info = MONITORINFO()
-        info.cbSize = ctypes.sizeof(MONITORINFO)
-        if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-            r = info.rcWork
-            return int(r.left), int(r.top), int(r.right), int(r.bottom)
-
-        rect = wintypes.RECT()
-        user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
-        return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
-    except Exception:
-        return 0, 0, 1920, 1040
+    return work_area()
 
 
 def _place_above_taskbar(win: tk.Toplevel, width: int, height: int, gap: int = 10) -> None:
-    cx, _cy = _cursor_pos()
-    left, top, right, bottom = _work_area()
-
-    px = cx - width // 2
-    px = max(left + 8, min(px, right - width - 8))
-    py = bottom - height - gap
-    if py < top + 8:
-        py = top + 8
-
-    win.geometry(f"{width}x{height}+{px}+{py}")
+    place_tray_popup(win, width, height, gap)
 
 
 def _ui_font(size: int, bold: bool = False) -> tuple:
-    family = "Microsoft YaHei UI"
+    family = ui_font_family()
     return (family, size, "bold") if bold else (family, size)
 
 
@@ -739,6 +757,17 @@ class _StatusCard:
         win.title(APP_NAME)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
+        if IS_MAC:
+            try:
+                win.tk.call(
+                    "::tk::unsupported::MacWindowStyle",
+                    "style",
+                    win._w,
+                    "help",
+                    "noTitleBar",
+                )
+            except tk.TclError:
+                pass
         win.configure(fg_color=self.BG)
 
         self._body_host = ctk.CTkFrame(win, fg_color=self.BG, corner_radius=0)
@@ -755,11 +784,20 @@ class _StatusCard:
         hwnd = toplevel_hwnd(win)
         apply_win11_flyout(hwnd)
         if self._on_hwnd:
-            self._on_hwnd(hwnd)
+            try:
+                self._on_hwnd(hwnd, win)  # type: ignore[misc]
+            except TypeError:
+                self._on_hwnd(hwnd)
         try:
             win.deiconify()
         except tk.TclError:
             pass
+        if IS_MAC:
+            try:
+                win.lift()
+                win.focus_force()
+            except tk.TclError:
+                pass
 
         win.bind("<Escape>", lambda _e: self._request_close())
         win.bind("<Enter>", self._on_enter)
@@ -862,14 +900,14 @@ class _StatusCard:
                 pct_row,
                 text=f"{remaining:.1f}",
                 text_color=accent,
-                font=ctk.CTkFont(family="Segoe UI", size=28, weight="bold"),
+                font=ctk.CTkFont(family=ui_font_family(), size=28, weight="bold"),
                 anchor="w",
             ).pack(side="left")
             ctk.CTkLabel(
                 pct_row,
                 text="%",
                 text_color=accent,
-                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+                font=ctk.CTkFont(family=ui_font_family(), size=13, weight="bold"),
                 anchor="sw",
             ).pack(side="left", padx=(2, 0), pady=(0, 4))
 
@@ -1058,19 +1096,14 @@ class _StatusCard:
     def _should_close_on_outside_click(self) -> bool:
         if time.monotonic() - getattr(self, "_opened_at", 0) < 0.45:
             return False
-        try:
-            import ctypes
-
-            down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
-        except Exception:
-            return False
+        down = mouse_left_down()
         just_pressed = down and not self._lbtn_was_down
         self._lbtn_was_down = down
         if not just_pressed:
             return False
-        from tray_hover import cursor_over_hwnd
+        from tray_hover import cursor_over_hwnd, cursor_over_widget
 
-        if cursor_over_hwnd(getattr(self, "_hwnd", 0)):
+        if cursor_over_hwnd(getattr(self, "_hwnd", 0)) or cursor_over_widget(self.win):
             return False
         if self._manager is not None and self._manager.cursor_over_tray():
             return False
@@ -1401,6 +1434,17 @@ class _VectorMenu:
         self.win = win
         win.overrideredirect(True)
         win.attributes("-topmost", True)
+        if IS_MAC:
+            try:
+                win.tk.call(
+                    "::tk::unsupported::MacWindowStyle",
+                    "style",
+                    win._w,
+                    "help",
+                    "noTitleBar",
+                )
+            except tk.TclError:
+                pass
         win.configure(bg=MENU_BG)
 
         row_h, font_size, icon_size, item_radius, min_width = _menu_layout(root)

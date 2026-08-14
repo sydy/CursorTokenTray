@@ -6,6 +6,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable
 
+from platform_util import ui_font_candidates
+
 # 贴近 Win11 系统设置深色主题（Settings / Fluent）
 BG = "#202020"
 SURFACE = "#2B2B2B"
@@ -46,14 +48,14 @@ def font(size: int, bold: bool = False) -> tuple:
             import tkinter.font as tkfont
 
             families = set(tkfont.families())
-            for family in ("Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"):
+            for family in ui_font_candidates():
                 if family in families:
                     _FONT_FAMILY = family
                     break
         except Exception:
             pass
         if _FONT_FAMILY is None:
-            _FONT_FAMILY = "Microsoft YaHei UI"
+            _FONT_FAMILY = ui_font_candidates()[0]
     return (_FONT_FAMILY, size, weight)
 
 

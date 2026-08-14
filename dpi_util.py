@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+import sys
+
 
 def enable_dpi_awareness() -> float:
-    """返回系统 DPI 缩放（96dpi = 1.0）。"""
+    """返回系统 DPI 缩放（96dpi = 1.0；macOS 为 backingScaleFactor）。"""
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSScreen
+
+            screen = NSScreen.mainScreen()
+            if screen is not None:
+                return max(1.0, float(screen.backingScaleFactor()))
+        except Exception:
+            pass
+        return 2.0
+
+    if sys.platform != "win32":
+        return 1.0
+
     try:
         import ctypes
 
