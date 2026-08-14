@@ -1,0 +1,244 @@
+"""托盘图标点击检测：仅轮询图标矩形，绝不占用托盘消息线程。悬停不弹窗。"""
+
+from __future__ import annotations
+
+import ctypes
+import logging
+import threading
+from collections.abc import Callable
+from ctypes import wintypes
+
+from pystray._util import win32 as win32util
+
+log = logging.getLogger("tray_hover")
+
+HIT_PAD = 8
+VK_RBUTTON = 0x02
+VK_LBUTTON = 0x01
+
+
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", wintypes.DWORD),
+        ("Data2", wintypes.WORD),
+        ("Data3", wintypes.WORD),
+        ("Data4", wintypes.BYTE * 8),
+    ]
+
+
+class NOTIFYICONIDENTIFIER(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("hWnd", wintypes.HWND),
+        ("uID", wintypes.UINT),
+        ("guidItem", GUID),
+    ]
+
+
+Shell_NotifyIconGetRect = ctypes.windll.shell32.Shell_NotifyIconGetRect
+Shell_NotifyIconGetRect.argtypes = [
+    ctypes.POINTER(NOTIFYICONIDENTIFIER),
+    ctypes.POINTER(wintypes.RECT),
+]
+Shell_NotifyIconGetRect.restype = ctypes.HRESULT
+
+
+def icon_uid(icon) -> int:
+    return id(icon) & 0xFFFFFFFF
+
+
+def patch_pystray_uid(icon) -> None:
+    """修复 pystray 误写 hID、实际 uID=0 的问题（须在 NIM_ADD 前调用）。"""
+
+    def _message(code, flags, **kwargs):
+        nid = win32util.NOTIFYICONDATAW(
+            cbSize=ctypes.sizeof(win32util.NOTIFYICONDATAW),
+            hWnd=icon._hwnd,
+            uID=icon_uid(icon),
+            uFlags=flags,
+            **kwargs,
+        )
+        win32util.Shell_NotifyIcon(code, nid)
+
+    icon._message = _message  # type: ignore[method-assign]
+
+
+class HoverWatcher:
+    """后台轮询托盘图标上的点击；回调只在后台线程触发。不根据悬停弹出。"""
+
+    def __init__(
+        self,
+        icon,
+        *,
+        on_open: Callable[[], None] | None = None,
+        on_close: Callable[[], None] | None = None,
+        on_right_click: Callable[[], None] | None = None,
+        on_left_click: Callable[[], None] | None = None,
+        poll_sec: float = 0.12,
+        open_delay_sec: float = 0.22,
+    ) -> None:
+        self.icon = icon
+        self.on_open = on_open
+        self.on_close = on_close
+        self.on_right_click = on_right_click
+        self.on_left_click = on_left_click
+        self.poll_sec = poll_sec
+        self.open_delay_sec = open_delay_sec
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._opened = False
+        self._enter_since: float | None = None
+        self._suppress_until_leave = False
+        self._lock = threading.Lock()
+        self._busy = False
+        self.enabled = True
+        self._rbtn_was_down = False
+        self._lbtn_was_down = False
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="tray-hover", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.enabled = False
+        self._stop.set()
+
+    def pause(self) -> None:
+        self.enabled = False
+        with self._lock:
+            self._enter_since = None
+
+    def resume(self) -> None:
+        self.enabled = True
+
+    def notify_opened(self) -> None:
+        with self._lock:
+            self._opened = True
+            self._suppress_until_leave = False
+
+    def notify_closed(self) -> None:
+        """点击关闭后：需移出图标再移入，才会再次悬停打开。"""
+        with self._lock:
+            self._opened = False
+            self._enter_since = None
+            self._suppress_until_leave = True
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.poll_sec):
+            try:
+                over = self._cursor_over_icon()
+            except Exception:
+                over = False
+
+            r_down = _button_down(VK_RBUTTON)
+            l_down = _button_down(VK_LBUTTON)
+            just_r_up = self._rbtn_was_down and not r_down
+            just_l_up = self._lbtn_was_down and not l_down
+            self._rbtn_was_down = r_down
+            self._lbtn_was_down = l_down
+
+            # 右键抬起：即使 pause 也要能开菜单（菜单打开期间 enabled=False）
+            if just_r_up and over and self.on_right_click is not None:
+                threading.Thread(target=self._run_right_click, daemon=True).start()
+                continue
+
+            if not self.enabled:
+                continue
+
+            if just_l_up and over and self.on_left_click is not None:
+                threading.Thread(target=self._run_left_click, daemon=True).start()
+
+    def _run_right_click(self) -> None:
+        try:
+            if self.on_right_click:
+                self.on_right_click()
+        except Exception:
+            log.exception("right click failed")
+
+    def _run_left_click(self) -> None:
+        try:
+            if self.on_left_click:
+                self.on_left_click()
+        except Exception:
+            log.exception("left click failed")
+
+    def _cursor_over_icon(self) -> bool:
+        rect = get_tray_icon_rect(self.icon)
+        if rect is None:
+            return False
+        left, top, right, bottom = rect
+        left -= HIT_PAD
+        top -= HIT_PAD
+        right += HIT_PAD
+        bottom += HIT_PAD
+        x, y = _cursor_pos()
+        return left <= x <= right and top <= y <= bottom
+
+
+def enable_hover_flyout(
+    icon,
+    *,
+    on_open: Callable[[], None] | None = None,
+    on_close: Callable[[], None] | None = None,
+    on_right_click: Callable[[], None] | None = None,
+    on_left_click: Callable[[], None] | None = None,
+) -> HoverWatcher:
+    """只启轮询点击，不挂钩子、不改 _on_notify（避免卡死托盘消息泵）。悬停不弹窗。"""
+    watcher = HoverWatcher(
+        icon,
+        on_open=on_open,
+        on_close=on_close,
+        on_right_click=on_right_click,
+        on_left_click=on_left_click,
+    )
+    watcher.start()
+    icon._hover_watcher = watcher  # type: ignore[attr-defined]
+    return watcher
+
+
+def get_tray_icon_rect(icon) -> tuple[int, int, int, int] | None:
+    hwnd = getattr(icon, "_hwnd", None)
+    if not hwnd:
+        return None
+    for uid in (icon_uid(icon), 0):
+        ident = NOTIFYICONIDENTIFIER()
+        ident.cbSize = ctypes.sizeof(NOTIFYICONIDENTIFIER)
+        ident.hWnd = hwnd
+        ident.uID = uid
+        rect = wintypes.RECT()
+        hr = Shell_NotifyIconGetRect(ctypes.byref(ident), ctypes.byref(rect))
+        if hr >= 0 and rect.right > rect.left and rect.bottom > rect.top:
+            return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+    return None
+
+
+def cursor_over_hwnd(hwnd: int) -> bool:
+    if not hwnd:
+        return False
+    try:
+        x, y = _cursor_pos()
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return False
+        return rect.left <= x <= rect.right and rect.top <= y <= rect.bottom
+    except Exception:
+        return False
+
+
+def _cursor_pos() -> tuple[int, int]:
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    pt = POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return int(pt.x), int(pt.y)
+
+
+def _button_down(vk: int) -> bool:
+    try:
+        return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+    except Exception:
+        return False

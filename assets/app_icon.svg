@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+  <!-- 圆角深底 + 加粗白图形，小尺寸任务栏可读 -->
+  <rect x="0" y="0" width="32" height="32" rx="7" ry="7" fill="#1C1C1C"/>
+  <!-- 等轴测立方体（加粗面 + 中心圆洞） -->
+  <path fill="#FFFFFF" fill-rule="evenodd" d="
+    M16 4.2 L26.5 10.1 V21.9 L16 27.8 L5.5 21.9 V10.1 Z
+    M16 6.6 L8.2 11.0 V20.8 L16 25.2 L23.8 20.8 V11.0 Z
+    M16 11.2
+      a4.8 4.8 0 1 0 0.01 0
+      a2.35 2.35 0 1 1 -0.01 0
+      Z
+  "/>
+</svg>
