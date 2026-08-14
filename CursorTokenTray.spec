@@ -15,6 +15,7 @@ a = Analysis(
         ('assets/app_icon_48.png', 'assets'),
         ('assets/app_icon_64.png', 'assets'),
         ('assets/app_icon.svg', 'assets'),
+        ('assets/ctk_theme.json', 'assets'),
     ],
     hiddenimports=[
         'pystray._win32',

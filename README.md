@@ -67,6 +67,18 @@ python3 main.py
 2. 将 `.app` 拖到「应用程序」
 3. 开机自启会指向该 app 内的可执行文件
 
+## GitHub Actions 自动编译
+
+仓库使用 **GitHub Actions**（`.github/workflows/build.yml`）在每次推送 / PR 时：
+
+1. 在 Ubuntu 跑单元测试
+2. 在 `windows-latest` 打出 `CursorTokenTray-windows.zip`（onedir + exe）
+3. 在 `macos-latest` 打出 `CursorTokenTray-macos.zip`（`.app`）
+
+产物在对应 run 的 **Artifacts** 里下载。打 `v*` 标签（例如 `v1.0.0`）还会自动创建 GitHub Release 并挂上这两个 zip。
+
+也可在仓库 **Actions** 页点 **Run workflow** 手动触发。
+
 ## 获取 Token
 
 ### 方式一：浏览器登录并导入（推荐）
