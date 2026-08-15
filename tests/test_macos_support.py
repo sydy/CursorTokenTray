@@ -269,6 +269,29 @@ class NativeSettingsGuardTests(unittest.TestCase):
         self.assertNotIn("customtkinter", text)
         self.assertNotIn("import tk", text)
 
+    def test_show_settings_importable(self) -> None:
+        import macos_settings
+
+        self.assertTrue(callable(macos_settings.show_settings))
+        self.assertTrue(callable(macos_settings.run_macos_settings))
+        self.assertTrue(callable(macos_settings._on_main))
+        seen: list[int] = []
+        macos_settings._on_main(lambda: seen.append(1))
+        self.assertEqual(seen, [1])
+
+    def test_tray_opens_settings_in_process(self) -> None:
+        text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
+        self.assertIn("from macos_settings import show_settings", text)
+        self.assertNotIn("open_settings_async", text)
+
+    def test_settings_uses_main_thread_modal(self) -> None:
+        text = (ROOT / "macos_settings.py").read_text(encoding="utf-8")
+        self.assertIn("isMainThread", text)
+        self.assertIn("performSelectorOnMainThread", text)
+        self.assertIn("runModalForWindow_", text)
+        self.assertNotIn("subprocess", text)
+        self.assertNotIn("Popen", text)
+
 
 class StatusTextTests(unittest.TestCase):
     def test_waiting_and_error(self) -> None:

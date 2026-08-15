@@ -130,10 +130,10 @@ def show_already_running() -> None:
 
 
 def become_foreground_app() -> None:
-    """仅用于独立设置进程：变成普通 GUI，窗口才能到前台。
+    """把当前进程临时变成普通 GUI（会出 Dock 图标）。
 
-    禁止在菜单栏托盘进程里调用：改 ActivationPolicy 并遍历 NSWindow
-    会和 pystray 抢主线程，表现为点设置后卡死或崩溃。
+    不要遍历已有 NSWindow / 不要和 Tk 一起用。菜单栏设置窗走 macos_settings，
+    只改 ActivationPolicy 并前置自己那一扇窗。
     """
     if not IS_MAC:
         return
@@ -277,6 +277,16 @@ def show_native_status(title: str, body: str) -> None:
             app_log(f"NSAlert failed: {exc}")
         show_error_alert(title, body)
 
+    try:
+        from Foundation import NSOperationQueue, NSThread
+
+        if bool(NSThread.isMainThread()):
+            _show()
+            return
+        NSOperationQueue.mainQueue().addOperationWithBlock_(_show)
+        return
+    except Exception:
+        pass
     try:
         from PyObjCTools import AppHelper
 

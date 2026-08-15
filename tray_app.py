@@ -25,7 +25,7 @@ from status_text import format_summary_text
 import usage_history
 
 if IS_MAC:
-    from settings_launch import open_settings_async
+    from macos_settings import show_settings
 else:
     from popup_ui import MenuAction, PopupManager, StatusActions
     from settings_ui import SettingsWindow
@@ -315,23 +315,30 @@ class TrayApp:
 
     def _open_settings(self, *, focus_token: bool = False, start_import: bool = False) -> None:
         if IS_MAC:
-            open_settings_async(
-                on_saved=self._on_config_saved,
+            show_settings(
                 focus_token=focus_token,
                 start_import=start_import,
+                on_saved=self._on_config_saved,
             )
             return
         assert self.settings is not None
         self.settings.open(focus_token=focus_token, start_import=start_import)
 
     def _action_open_settings(self, _icon=None, _item=None) -> None:
+        if IS_MAC:
+            # pystray 菜单回调已在 AppKit 主线程，不要再丢到后台线程。
+            self._open_settings(focus_token=False)
+            return
         self._open_settings_bg(focus_token=False)
 
     def _action_open_settings_focus(self, _icon=None, _item=None) -> None:
+        if IS_MAC:
+            self._open_settings(focus_token=True, start_import=True)
+            return
         self._open_settings_bg(focus_token=True, start_import=True)
 
     def _open_settings_bg(self, *, focus_token: bool = False, start_import: bool = False) -> None:
-        """先收起飞出层/菜单，再打开设置。macOS 会另起进程，不碰本进程 Tk。"""
+        """Windows：先收起飞出层/菜单，再打开设置。"""
 
         def worker() -> None:
             watcher = getattr(self.icon, "_hover_watcher", None)
