@@ -21,6 +21,19 @@ def main() -> int:
         print("本工具支持 Windows 与 macOS。")
         return 1
 
+    # 设置进程必须在 import settings_ui / Tk 之前返回。
+    # macOS 26 + 打包的 Tk 8.6 会在 Tcl_AppInit 里对 NSApplication 发不存在的
+    # selector，子进程启动 200ms 内 SIGABRT。
+    if is_settings_process():
+        app_log("enter settings process")
+        if IS_MAC:
+            from macos_settings import run_macos_settings
+
+            return run_macos_settings()
+        from settings_ui import run_settings_main
+
+        return run_settings_main()
+
     if IS_MAC:
         try:
             import AppKit  # noqa: F401
@@ -29,13 +42,6 @@ def main() -> int:
             print("macOS 需要先安装依赖：python3 -m pip install -r requirements.txt")
             print("（含 pyobjc-framework-Cocoa / pyobjc-framework-Quartz）")
             return 1
-
-    # 设置窗走独立进程，必须在单实例锁之前返回，否则会误报「已在运行」。
-    if is_settings_process():
-        from settings_ui import run_settings_main
-
-        app_log("enter settings process")
-        return run_settings_main()
 
     from instance_lock import acquire, release
 
@@ -46,7 +52,6 @@ def main() -> int:
     atexit.register(release)
     app_log("instance lock acquired, starting tray")
 
-    # 必须在创建任何窗口 / tk / pystray 之前启用 DPI 感知与 AppID
     from app_icon import set_app_user_model_id
     from dpi_util import enable_dpi_awareness
 

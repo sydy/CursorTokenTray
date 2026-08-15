@@ -262,6 +262,14 @@ class ConfigLockTests(unittest.TestCase):
                 config.CONFIG_PATH = old_path
 
 
+class NativeSettingsGuardTests(unittest.TestCase):
+    def test_macos_settings_module_has_no_tk(self) -> None:
+        text = (ROOT / "macos_settings.py").read_text(encoding="utf-8")
+        self.assertNotIn("tkinter", text)
+        self.assertNotIn("customtkinter", text)
+        self.assertNotIn("import tk", text)
+
+
 class StatusTextTests(unittest.TestCase):
     def test_waiting_and_error(self) -> None:
         from status_text import format_summary_text
