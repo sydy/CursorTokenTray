@@ -571,6 +571,33 @@ class StatusTextTests(unittest.TestCase):
         self.assertEqual(build_status_lines(None, "Token 过期"), [("状态", "Token 过期")])
         self.assertEqual(build_status_lines(None, None), [("状态", "等待刷新…")])
 
+    def test_combo4_copy(self) -> None:
+        from cursor_api import UsageSnapshot
+        from status_text import format_estimate_caption, format_plan_caption, status_pill_text
+
+        self.assertEqual(status_pill_text(63.1), "状态良好")
+        self.assertEqual(status_pill_text(40), "略偏低")
+        self.assertEqual(status_pill_text(10), "额度紧张")
+        self.assertEqual(status_pill_text(0), "已耗尽")
+        self.assertEqual(status_pill_text(None, error=True), "异常")
+        self.assertEqual(format_plan_caption("pro"), "pro 套餐")
+        self.assertEqual(format_plan_caption("Pro 套餐"), "Pro 套餐")
+        snap = UsageSnapshot(
+            used_percent=36.0,
+            remaining_percent=64.0,
+            auto_percent_used=10.0,
+            api_percent_used=2.0,
+            total_percent_used=12.0,
+            membership_type="Pro",
+            billing_cycle_start=None,
+            billing_cycle_end="2026-09-01T00:00:00Z",
+            days_remaining=17,
+            days_elapsed=13.0,
+            estimated_usable_days=20.0,
+            raw={},
+        )
+        self.assertEqual(format_estimate_caption(snap), "预计可撑过本周期")
+
 
 class NativeMenubarGuardTests(unittest.TestCase):
     def test_macos_menubar_module_has_no_tk(self) -> None:
@@ -581,6 +608,11 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertIn("imageWithSize_flipped_drawingHandler_", text)
         self.assertIn("menubar_icon_rep_sizes", text)
         self.assertIn("_update_icon", text)
+        self.assertIn("setTemplate_(True)", text)
+        self.assertIn("查看用量账单", text)
+        self.assertIn("status_pill_text", text)
+        self.assertIn("format_estimate_caption", text)
+        self.assertNotIn("remaining_color", text)
 
     def test_menubar_api_importable(self) -> None:
         import macos_menubar

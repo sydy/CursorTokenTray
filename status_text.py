@@ -53,6 +53,42 @@ def format_estimated_days(usage: UsageSnapshot) -> str:
     return text
 
 
+def status_pill_text(remaining: float | None, *, error: bool = False) -> str:
+    """组合 4 左侧状态胶囊。"""
+    if error:
+        return "异常"
+    if remaining is None:
+        return "等待刷新"
+    pct = float(remaining)
+    if pct <= 0:
+        return "已耗尽"
+    if pct < 20:
+        return "额度紧张"
+    if pct < 50:
+        return "略偏低"
+    return "状态良好"
+
+
+def format_plan_caption(membership: str | None) -> str:
+    name = (membership or "").strip() or "—"
+    if name == "—":
+        return "—"
+    if "套餐" in name:
+        return name
+    return f"{name} 套餐"
+
+
+def format_estimate_caption(usage: UsageSnapshot) -> str:
+    text = format_estimated_days(usage)
+    if "可撑过本周期" in text:
+        return "预计可撑过本周期"
+    if "提前耗尽" in text:
+        return "预计可能提前耗尽"
+    if text == "已耗尽":
+        return "额度已耗尽"
+    return text
+
+
 def format_reset_date(iso_value: str) -> str:
     try:
         text = iso_value.replace("Z", "+00:00")

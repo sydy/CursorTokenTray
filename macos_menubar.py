@@ -19,7 +19,12 @@ import time
 from typing import Any, Callable
 
 from platform_util import app_log
-from status_text import build_status_lines
+from status_text import (
+    format_estimate_caption,
+    format_plan_caption,
+    format_reset_date,
+    status_pill_text,
+)
 
 try:
     from AppKit import (  # type: ignore[import-not-found]
@@ -34,12 +39,14 @@ try:
         NSFont,
         NSBitmapImageRep,
         NSImage,
-        NSImageView,
         NSObject,
         NSTextField,
+        NSView,
+        NSVisualEffectView,
         NSWindow,
         NSWindowCollectionBehaviorCanJoinAllSpaces,
         NSWindowCollectionBehaviorMoveToActiveSpace,
+        NSWindowStyleMaskBorderless,
         NSWindowStyleMaskClosable,
         NSWindowStyleMaskTitled,
     )
@@ -77,8 +84,8 @@ _NS_MASK_RIGHT_UP = 1 << 4
 _NS_MASK_LEFT_DOWN = 1 << 1
 _NS_CONTROL = 1 << 18
 
-PANEL_W = 380.0
-PANEL_H = 392.0
+PANEL_W = 456.0
+PANEL_H = 236.0
 
 
 def install(icon, *, on_left_click: Callable[[], None] | None = None) -> None:
@@ -293,7 +300,7 @@ def _apply_icon_now(icon) -> None:
     if ns is None:
         return
     try:
-        ns.setTemplate_(False)
+        ns.setTemplate_(True)
     except Exception:
         pass
     try:
@@ -357,7 +364,7 @@ def _make_status_nsimage(
 
         img = NSImage.imageWithSize_flipped_drawingHandler_(size, False, handler)
         if img is not None:
-            img.setTemplate_(False)
+            img.setTemplate_(True)
             return img
     except Exception as exc:
         app_log(f"vector menubar icon failed, using bitmap reps: {exc}")
@@ -365,69 +372,63 @@ def _make_status_nsimage(
 
 
 def _draw_status_icon(rect, remaining: float | None, error: bool, mode: str) -> None:
+    """方案 A：细环 + 数字，黑白模板，由系统按菜单栏深浅着色。"""
     from AppKit import NSBezierPath
-    from icon_renderer import remaining_color
 
     w = float(rect.size.width)
     h = float(rect.size.height)
     cx = float(rect.origin.x) + w / 2.0
     cy = float(rect.origin.y) + h / 2.0
     box = min(w, h)
-    inset = max(1.0, box * 0.08)
-    outer = box / 2.0 - inset
+    ink = (0, 0, 0)
     if mode == "dot":
-        r = box * 0.38
-        if error:
-            rgb = (231, 76, 60)
-        elif remaining is None:
-            rgb = (100, 116, 139)
-        else:
-            rgb = remaining_color(remaining)
-        _ns_color(*rgb).setFill()
+        r = box * 0.22
+        _ns_color(*ink, 0.35 if remaining is None and not error else 1.0).setFill()
         NSBezierPath.bezierPathWithOvalInRect_(
             NSMakeRect(cx - r, cy - r, r * 2.0, r * 2.0)
         ).fill()
-        if error:
-            _draw_centered_text("!", cx, cy, box * 0.42, (255, 255, 255))
         return
 
-    ring_w = outer * (0.12 if mode == "number" else 0.28)
-    mid_r = outer - ring_w / 2.0
+    if mode == "number":
+        if error:
+            label = "!"
+        elif remaining is None:
+            label = "–"
+        else:
+            pct = min(100.0, max(0.0, float(remaining)))
+            label = "100" if pct >= 99.5 else str(int(round(pct)))
+        font_box = box * (0.42 if label == "100" else 0.56 if len(label) >= 2 else 0.64)
+        _draw_centered_text(label, cx, cy, font_box, ink, template=True)
+        return
 
-    disc_r = outer - ring_w * 0.08
-    _ns_color(255, 255, 255, 0.16).setFill()
-    NSBezierPath.bezierPathWithOvalInRect_(
-        NSMakeRect(cx - disc_r, cy - disc_r, disc_r * 2.0, disc_r * 2.0)
-    ).fill()
+    inset = max(1.1, box * 0.10)
+    outer = box / 2.0 - inset
+    ring_w = max(1.2, outer * 0.13)
+    mid_r = outer - ring_w / 2.0
 
     track = NSBezierPath.bezierPathWithOvalInRect_(
         NSMakeRect(cx - mid_r, cy - mid_r, mid_r * 2.0, mid_r * 2.0)
     )
     track.setLineWidth_(ring_w)
-    _ns_color(236, 236, 240).setStroke()
+    _ns_color(*ink, 0.28).setStroke()
     track.stroke()
 
     label = "–"
-    rgb = (148, 163, 184)
     if error:
-        rgb = (248, 113, 113)
         label = "!"
-        _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, rgb)
+        _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, ink)
     elif remaining is None:
-        _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, rgb)
+        pass
     else:
         pct = min(100.0, max(0.0, float(remaining)))
-        rgb = remaining_color(pct)
         if pct >= 99.95:
-            _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, rgb)
+            _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, ink)
         elif pct > 0.05:
-            _stroke_arc(cx, cy, mid_r, ring_w, 90.0, 90.0 - pct / 100.0 * 360.0, rgb)
+            _stroke_arc(cx, cy, mid_r, ring_w, 90.0, 90.0 - pct / 100.0 * 360.0, ink)
         label = "100" if pct >= 99.5 else str(int(round(pct)))
 
-    if mode == "dot":
-        return
-    font_box = box * (0.40 if label == "100" else 0.50 if len(label) >= 2 else 0.58)
-    _draw_centered_text(label, cx, cy, font_box, rgb)
+    font_box = box * (0.36 if label == "100" else 0.46 if len(label) >= 2 else 0.54)
+    _draw_centered_text(label, cx, cy, font_box, ink, template=True)
 
 
 def _stroke_arc(
@@ -471,30 +472,27 @@ def _draw_centered_text(
     cy: float,
     size: float,
     rgb: tuple[int, int, int],
+    *,
+    template: bool = False,
 ) -> None:
     from AppKit import (
-        NSColor,
         NSFont,
         NSFontAttributeName,
         NSForegroundColorAttributeName,
-        NSStrokeColorAttributeName,
-        NSStrokeWidthAttributeName,
     )
     from Foundation import NSAttributedString
 
     try:
-        font = NSFont.monospacedDigitSystemFontOfSize_weight_(size, 0.5)
+        font = NSFont.monospacedDigitSystemFontOfSize_weight_(size, 0.4)
     except Exception:
         font = NSFont.boldSystemFontOfSize_(size)
     attrs = {
         NSFontAttributeName: font,
-        NSForegroundColorAttributeName: _ns_color(*rgb),
-        NSStrokeColorAttributeName: NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.92),
-        NSStrokeWidthAttributeName: -10.0,
+        NSForegroundColorAttributeName: _ns_color(*rgb, 1.0 if not template else 1.0),
     }
     s = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
     ts = s.size()
-    s.drawAtPoint_((cx - float(ts.width) / 2.0, cy - float(ts.height) / 2.0))
+    s.drawAtPoint_((cx - float(ts.width) / 2.0, cy - float(ts.height) / 2.0 - size * 0.04))
 
 
 def _bitmap_status_nsimage(
@@ -506,7 +504,7 @@ def _bitmap_status_nsimage(
     from icon_renderer import create_progress_icon, menubar_icon_rep_sizes
 
     img = NSImage.alloc().initWithSize_(NSMakeSize(float(point), float(point)))
-    img.setTemplate_(False)
+    img.setTemplate_(True)
     for px in menubar_icon_rep_sizes(point):
         pil = create_progress_icon(remaining, error=error, size=int(px), mode=mode)
         buf = io.BytesIO()
@@ -827,20 +825,62 @@ class StatusController(NSObject):
         if not hasattr(self, "_icon"):
             self._icon = None
 
-        style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, PANEL_W, PANEL_H),
-            style,
-            NSBackingStoreBuffered,
-            False,
-        )
-        self.window.setTitle_("套餐剩余")
+        try:
+            from AppKit import NSPanel, NSWindowStyleMaskNonactivatingPanel
+
+            style = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+            self.window = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                NSMakeRect(0, 0, PANEL_W, PANEL_H),
+                style,
+                NSBackingStoreBuffered,
+                False,
+            )
+            try:
+                self.window.setFloatingPanel_(True)
+            except Exception:
+                pass
+        except Exception:
+            style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+            self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+                NSMakeRect(0, 0, PANEL_W, PANEL_H),
+                style,
+                NSBackingStoreBuffered,
+                False,
+            )
+            self.window.setTitle_("套餐剩余")
+
         self.window.setReleasedWhenClosed_(False)
         self.window.setHidesOnDeactivate_(False)
         self.window.setDelegate_(self)
-        self._host = self.window.contentView()
+        try:
+            self.window.setOpaque_(False)
+            self.window.setBackgroundColor_(NSColor.clearColor())
+            self.window.setHasShadow_(True)
+        except Exception:
+            pass
+
+        host = self.window.contentView()
+        try:
+            fx = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, PANEL_W, PANEL_H))
+            fx.setMaterial_(6)  # NSVisualEffectMaterialPopover
+            fx.setBlendingMode_(0)
+            fx.setState_(1)
+            fx.setWantsLayer_(True)
+            fx.layer().setCornerRadius_(14.0)
+            fx.layer().setMasksToBounds_(True)
+            self.window.setContentView_(fx)
+            host = fx
+        except Exception:
+            try:
+                host.setWantsLayer_(True)
+                host.layer().setCornerRadius_(14.0)
+            except Exception:
+                pass
+        self._host = host
 
     def apply_data(self, usage, error_message: str | None, updated_at: str | None) -> None:
+        from cursor_api import format_token_count
+
         view = self._host
         for sub in list(view.subviews()):
             try:
@@ -848,52 +888,93 @@ class StatusController(NSObject):
             except Exception:
                 pass
 
-        rows = build_status_lines(usage, error_message, updated_at)
         remaining = None if usage is None else getattr(usage, "remaining_percent", None)
-        plan = "" if usage is None else str(getattr(usage, "membership_type", "") or "")
         is_error = bool(error_message) and usage is None
+        pill = status_pill_text(remaining, error=is_error or bool(error_message and usage is None))
 
-        from icon_renderer import create_progress_icon, remaining_color
-
-        icon_img = create_progress_icon(
-            remaining,
-            error=is_error,
-            size=96,
-        )
-        ns_icon = _pil_to_nsimage(icon_img, 56.0)
-        if ns_icon is not None:
-            iv = NSImageView.alloc().initWithFrame_(NSMakeRect(20, _y(16, 56), 56, 56))
-            iv.setImage_(ns_icon)
-            view.addSubview_(iv)
-
-        _label(view, "套餐剩余", 92, _y(18, 18), 260, 18, 12, secondary=True)
+        _label(view, "剩余", 24, _y(20, 16), 180, 16, 12, secondary=True)
         if remaining is not None and not is_error:
-            rgb = remaining_color(remaining)
+            _label(view, f"{remaining:.1f}", 22, _y(38, 44), 150, 44, 34, bold=True)
+            _label(view, "%", 168, _y(54, 20), 28, 20, 14, secondary=True)
             _label(
                 view,
-                f"{remaining:.1f}%",
-                92,
-                _y(38, 28),
-                260,
-                28,
-                22,
-                bold=True,
-                rgb=rgb,
+                format_plan_caption(getattr(usage, "membership_type", "")),
+                24,
+                _y(88, 18),
+                180,
+                18,
+                13,
+                secondary=True,
             )
-            _label(view, plan or "—", 92, _y(68, 18), 260, 18, 12, secondary=True)
+            _pill(view, pill, 24, _y(114, 22), 88, 22, remaining)
         else:
-            msg = error_message or "等待刷新…"
-            _label(view, msg, 92, _y(40, 40), 260, 40, 13)
+            _label(view, error_message or "等待刷新…", 24, _y(44, 48), 180, 48, 13)
+            _pill(view, pill, 24, _y(100, 22), 88, 22, None, error=True)
 
-        top = 100.0
-        for title, value in rows:
-            _label(view, title, 20, _y(top, 18), 88, 18, 12, secondary=True)
-            _label(view, value, 112, _y(top, 18), 248, 18, 12)
-            top += 24.0
+        try:
+            div = NSView.alloc().initWithFrame_(NSMakeRect(214, 52, 1, PANEL_H - 88))
+            div.setWantsLayer_(True)
+            div.layer().setBackgroundColor_(NSColor.separatorColor().CGColor())
+            view.addSubview_(div)
+        except Exception:
+            pass
 
-        _button(view, "刷新", b"refresh:", self, 20, 16, 88)
-        _button(view, "打开账单", b"spending:", self, 118, 16, 100)
-        _button(view, "设置…", b"settings:", self, 228, 16, 88)
+        rx, rw = 230.0, 202.0
+        top = 20.0
+        if usage is not None and not is_error:
+            auto = getattr(usage, "auto_percent_used", None)
+            api = getattr(usage, "api_percent_used", None)
+            if auto is not None or api is not None:
+                if auto is not None:
+                    _label(view, "First-party", rx, _y(top, 16), 120, 16, 11, secondary=True)
+                    _label(view, f"{auto:.1f}%", rx + 120, _y(top, 16), 82, 16, 11)
+                    _bar(view, rx, _y(top + 18, 5), rw, 5, auto / 100.0, (92, 163, 152))
+                    top += 36.0
+                if api is not None:
+                    _label(view, "API", rx, _y(top, 16), 120, 16, 11, secondary=True)
+                    _label(view, f"{api:.1f}%", rx + 120, _y(top, 16), 82, 16, 11)
+                    _bar(view, rx, _y(top + 18, 5), rw, 5, api / 100.0, (142, 142, 147))
+                    top += 36.0
+            if getattr(usage, "total_tokens", None):
+                _label(
+                    view,
+                    f"Token  {format_token_count(usage.total_tokens)}",
+                    rx,
+                    _y(top, 16),
+                    rw,
+                    16,
+                    12,
+                    secondary=True,
+                )
+                top += 22.0
+            if getattr(usage, "billing_cycle_end", None):
+                _label(
+                    view,
+                    f"重置  {format_reset_date(usage.billing_cycle_end)}",
+                    rx,
+                    _y(top, 16),
+                    rw,
+                    16,
+                    12,
+                    secondary=True,
+                )
+                top += 22.0
+            _label(
+                view,
+                format_estimate_caption(usage),
+                rx,
+                _y(top, 16),
+                rw,
+                16,
+                12,
+                secondary=True,
+            )
+        elif updated_at:
+            _label(view, f"更新  {updated_at}", rx, _y(20, 16), rw, 16, 12, secondary=True)
+
+        _link(view, "查看用量账单 →", b"spending:", self, 20, 16, 140)
+        _link(view, "刷新", b"refresh:", self, 320, 16, 44)
+        _link(view, "设置", b"settings:", self, 372, 16, 44)
 
     def windowWillClose_(self, _notification) -> None:
         app_log("status panel closing")
@@ -970,3 +1051,88 @@ def _button(parent, title: str, action, target, x: float, y: float, w: float, h:
     btn.setAction_(action)
     parent.addSubview_(btn)
     return btn
+
+
+def _link(parent, title: str, action, target, x: float, y: float, w: float, h: float = 22):
+    btn = NSButton.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
+    btn.setTitle_(title)
+    btn.setBordered_(False)
+    btn.setTarget_(target)
+    btn.setAction_(action)
+    try:
+        btn.setFont_(NSFont.systemFontOfSize_(12))
+    except Exception:
+        pass
+    try:
+        btn.setContentTintColor_(NSColor.linkColor())
+    except Exception:
+        pass
+    parent.addSubview_(btn)
+    return btn
+
+
+def _pill(
+    parent,
+    text: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    remaining: float | None,
+    *,
+    error: bool = False,
+):
+    wrap = NSView.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
+    wrap.setWantsLayer_(True)
+    try:
+        wrap.layer().setCornerRadius_(h / 2.0)
+        if error or remaining is None:
+            bg = (229, 229, 234, 1.0)
+            fg = (72, 72, 74)
+        elif remaining < 20:
+            bg = (255, 214, 214, 1.0)
+            fg = (166, 32, 32)
+        elif remaining < 50:
+            bg = (255, 236, 181, 1.0)
+            fg = (140, 98, 8)
+        else:
+            bg = (198, 240, 214, 1.0)
+            fg = (26, 107, 58)
+        wrap.layer().setBackgroundColor_(_ns_color(int(bg[0]), int(bg[1]), int(bg[2]), bg[3]).CGColor())
+    except Exception:
+        fg = (72, 72, 74)
+    parent.addSubview_(wrap)
+    _label(wrap, text, 8, 2, max(40, w - 16), h - 4, 11, rgb=fg)
+    return wrap
+
+
+def _bar(
+    parent,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    fraction: float,
+    rgb: tuple[int, int, int],
+):
+    track = NSView.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
+    track.setWantsLayer_(True)
+    try:
+        track.layer().setCornerRadius_(h / 2.0)
+        track.layer().setBackgroundColor_(NSColor.separatorColor().CGColor())
+    except Exception:
+        pass
+    parent.addSubview_(track)
+    frac = min(1.0, max(0.0, float(fraction)))
+    fill_w = 0.0 if frac < 0.01 else max(h, w * frac)
+    if fill_w <= 0:
+        return track
+    fill = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, fill_w, h))
+    fill.setWantsLayer_(True)
+    try:
+        fill.layer().setCornerRadius_(h / 2.0)
+        fill.layer().setBackgroundColor_(_ns_color(*rgb).CGColor())
+    except Exception:
+        pass
+    track.addSubview_(fill)
+    return track
