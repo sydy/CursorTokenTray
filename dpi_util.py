@@ -13,7 +13,8 @@ def enable_dpi_awareness() -> float:
 
             screen = NSScreen.mainScreen()
             if screen is not None:
-                return max(1.0, float(screen.backingScaleFactor()))
+                # 菜单栏按 1x 出图会在 Retina 上被放大发糊，macOS 至少按 2x。
+                return max(2.0, float(screen.backingScaleFactor()))
         except Exception:
             pass
         return 2.0

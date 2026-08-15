@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 IS_WIN = sys.platform == "win32"
@@ -126,24 +129,170 @@ def show_already_running() -> None:
     print("CursorToken 已在运行，请查看系统托盘或菜单栏。")
 
 
-def set_dock_visible(visible: bool) -> None:
-    """macOS：设置窗出现时显示 Dock 图标，关闭后回到纯菜单栏。"""
+def become_foreground_app() -> None:
+    """把当前进程临时变成普通 GUI（会出 Dock 图标）。
+
+    不要遍历已有 NSWindow / 不要和 Tk 一起用。菜单栏设置窗走 macos_settings，
+    只改 ActivationPolicy 并前置自己那一扇窗。
+    """
     if not IS_MAC:
         return
     try:
-        from AppKit import (
-            NSApp,
-            NSApplicationActivationPolicyAccessory,
-            NSApplicationActivationPolicyRegular,
-        )
+        from AppKit import NSApplication, NSApplicationActivationPolicyRegular
 
-        if visible:
-            NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
-            NSApp.activateIgnoringOtherApps_(True)
-        else:
-            NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        app = NSApplication.sharedApplication()
+        app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        app.activateIgnoringOtherApps_(True)
     except Exception:
         pass
+
+
+def set_dock_visible(visible: bool) -> None:
+    """仅用于独立设置进程：显示或隐藏 Dock 图标。"""
+    if not IS_MAC:
+        return
+    if visible:
+        become_foreground_app()
+        return
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        NSApplication.sharedApplication().setActivationPolicy_(
+            NSApplicationActivationPolicyAccessory
+        )
+    except Exception:
+        pass
+
+
+def show_error_alert(title: str, message: str) -> None:
+    if IS_MAC:
+        try:
+            import subprocess
+
+            def _q(text: str) -> str:
+                return text.replace("\\", "\\\\").replace('"', '\\"')
+
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    f'display alert "{_q(title)}" message "{_q(message)}" as critical',
+                ],
+                check=False,
+                capture_output=True,
+                timeout=8,
+            )
+            return
+        except Exception:
+            pass
+    print(f"{title}: {message}")
+
+
+def window_center_pos(screen_w: int, screen_h: int, win_w: int, win_h: int) -> tuple[int, int]:
+    x = max(40, (int(screen_w) - int(win_w)) // 2)
+    y = max(48, (int(screen_h) - int(win_h)) // 3)
+    return x, y
+
+
+def log_path() -> Path:
+    if IS_MAC:
+        return Path.home() / "Library" / "Logs" / "CursorTokenTray.log"
+    return app_config_dir() / "app.log"
+
+
+def app_log(message: str) -> None:
+    line = f"{datetime.now().isoformat(timespec='seconds')} [{os.getpid()}] {message}"
+    try:
+        path = log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def install_crash_logging() -> None:
+    """把未捕获异常写进日志。本地 `快速启动.command` 以前把 stderr 丢进 /dev/null。"""
+
+    def _hook(exc_type, exc, tb) -> None:
+        app_log(f"UNCAUGHT {getattr(exc_type, '__name__', exc_type)}: {exc}")
+        app_log("".join(traceback.format_exception(exc_type, exc, tb)).rstrip())
+
+    sys.excepthook = _hook
+
+    def _thread_hook(args) -> None:
+        name = args.thread.name if args.thread is not None else "?"
+        app_log(f"THREAD {name} {getattr(args.exc_type, '__name__', args.exc_type)}: {args.exc_value}")
+        if args.exc_type is not None:
+            app_log(
+                "".join(
+                    traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
+                ).rstrip()
+            )
+
+    threading.excepthook = _thread_hook
+
+
+def copy_text(text: str) -> bool:
+    """复制到剪贴板。macOS 用 pbcopy，避免托盘进程再碰 Tk。"""
+    if IS_MAC:
+        try:
+            import subprocess
+
+            subprocess.run(
+                ["pbcopy"],
+                input=text.encode("utf-8"),
+                check=False,
+                timeout=3,
+            )
+            return True
+        except Exception as exc:
+            app_log(f"pbcopy failed: {exc}")
+            return False
+    return False
+
+
+def show_native_status(title: str, body: str) -> None:
+    """macOS 状态用系统对话框，菜单栏进程里禁止创建 Tk。"""
+    if not IS_MAC:
+        return
+
+    def _show() -> None:
+        app_log("native status dialog")
+        try:
+            from AppKit import NSAlert, NSInformationalAlertStyle
+
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(body)
+            alert.setAlertStyle_(NSInformationalAlertStyle)
+            alert.addButtonWithTitle_("好")
+            alert.runModal()
+            return
+        except Exception as exc:
+            app_log(f"NSAlert failed: {exc}")
+        show_error_alert(title, body)
+
+    try:
+        from Foundation import NSOperationQueue, NSThread
+
+        if bool(NSThread.isMainThread()):
+            _show()
+            return
+        NSOperationQueue.mainQueue().addOperationWithBlock_(_show)
+        return
+    except Exception:
+        pass
+    try:
+        from PyObjCTools import AppHelper
+
+        AppHelper.callLater(0.15, _show)
+    except Exception:
+        threading.Thread(target=_show, daemon=True, name="native-status").start()
 
 
 def _cursor_pos_win() -> tuple[int, int]:

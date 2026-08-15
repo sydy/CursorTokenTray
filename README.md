@@ -53,6 +53,8 @@ python3 main.py
 
 图标会出现在屏幕右上角菜单栏。首次从 Chrome 导入 Cookie 时，系统可能弹出钥匙串授权，请点「允许」。
 
+本地运行日志：`~/Library/Logs/CursorTokenTray.log`（`快速启动.command` 也会把 stdout/stderr 追加进去）。出问题请先看这份日志。
+
 ## 使用已打包版本
 
 ### Windows
@@ -84,15 +86,15 @@ python3 main.py
 ### 方式一：浏览器登录并导入（推荐）
 
 1. 托盘 / 菜单栏右键 → **设置…**
-2. 点击 **浏览器登录并导入**
-3. 在打开的浏览器中登录 [cursor.com](https://cursor.com/dashboard)
-4. 工具会自动读取本机浏览器的 `WorkosCursorSessionToken`，并立即校验用量
+2. 优先点 **从 Cursor 导入**（读取本机已登录的 Cursor 应用，不依赖浏览器 Cookie）
+3. 若未登录 Cursor 应用，再点 **Safari 登录** / **Firefox 登录**，在对应浏览器登录 [cursor.com](https://cursor.com/dashboard)
+4. 工具会校验用量并写入 Token
 
 若浏览器里已经登录，可直接点 **仅导入 Cookie**。
 
-**Windows**：Firefox / Chrome / Edge。部分新版 Chrome 可能启用 App-Bound Cookie 加密导致无法读取；可改用 Firefox / Edge。
+**Windows**：优先 Firefox；Chrome / Edge 部分新版可能启用 App-Bound Cookie 加密导致无法读取。
 
-**macOS**：Safari / Chrome / Edge / Firefox / Brave / Arc。Chrome 系走钥匙串解密；Safari 可能需要在「系统设置 → 隐私与安全性」中授予**完全磁盘访问权限**。
+**macOS**：优先 Safari / Firefox。Safari 若读不到，到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。Chrome 系仍会尝试钥匙串解密，失败时请改用 Safari / Firefox。
 
 ### 方式二：手动粘贴
 
@@ -114,4 +116,6 @@ macOS：`~/Library/Application Support/CursorTokenTray/config.json`
 - 这是 **macOS 菜单栏**应用，不是 iOS；没有 Dock 图标，圆环在屏幕**最上方**菜单栏右侧（Wi‑Fi / 控制中心旁边），并带剩余百分比文字
 - macOS：若看不到图标，点菜单栏「•••」或「控制中心」展开隐藏项；也可在「活动监视器」结束 CursorTokenTray 后重新打开
 - 首次打开若立刻提示「已在后台运行」，多半是旧进程还在，先在活动监视器里退出再启动
+- macOS 点「设置…」会在**当前菜单栏进程**弹出系统原生设置窗（不用 Tk，也不另起子进程）。打开时 Dock 可能短暂出现图标，关掉后消失；菜单栏圆环应还在
+- 升级后请先在「活动监视器」结束旧的 CursorTokenTray，再打开新下载的 `.app`，不要两个版本叠着跑
 - Token 过期后请重新导入或粘贴；飞出层会提示并可一键打开设置

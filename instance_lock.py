@@ -140,7 +140,7 @@ def _acquire_unix() -> bool:
     try:
         fp = LOCK_PATH.open("a+", encoding="utf-8")
     except OSError:
-        return True
+        return False
     try:
         fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -148,7 +148,7 @@ def _acquire_unix() -> bool:
         return False
     except OSError:
         fp.close()
-        return True
+        return False
 
     old_pid = _read_stored_pid()
     if old_pid and old_pid != os.getpid() and _pid_alive_unix(old_pid):

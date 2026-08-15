@@ -1,4 +1,8 @@
-"""设置窗口：CustomTkinter 内容 + Windows 原生标题栏外壳。"""
+"""设置窗口：CustomTkinter 内容 + Windows 原生标题栏外壳。
+
+macOS：设置必须在独立进程里跑（`--settings`）。菜单栏进程里的
+AppKit + Tk 同线程一旦改 ActivationPolicy / 遍历 NSWindow 就会卡死崩溃。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,15 @@ import customtkinter as ctk
 from app_icon import apply_window_icon
 from config import load_config, save_config
 from dpi_util import enable_dpi_awareness
-from platform_util import IS_MAC, set_dock_visible
+from platform_util import (
+    IS_MAC,
+    app_log,
+    become_foreground_app,
+    set_dock_visible,
+    show_error_alert,
+    window_center_pos,
+)
+from settings_launch import open_settings_async, settings_flags, settings_process_running
 from ui_ctk import (
     ACCENT,
     BG,
@@ -29,6 +41,73 @@ from ui_ctk import (
     make_ghost_button,
     make_switch,
 )
+
+
+def run_settings_main() -> int:
+    """`python main.py --settings` / 打包后 `CursorTokenTray --settings` 的入口。"""
+    focus_token, start_import = settings_flags()
+    app_log(f"settings ui start focus={focus_token} import={start_import}")
+    become_foreground_app()
+    enable_dpi_awareness()
+    try:
+        from app_icon import set_app_user_model_id
+
+        set_app_user_model_id()
+    except Exception:
+        pass
+    win = SettingsWindow(on_saved=None, ui=None)
+    win._focus_token = focus_token
+    win._start_import = start_import
+    try:
+        win._build_ui(host=None, owns_loop=True)
+    except Exception as exc:  # noqa: BLE001
+        app_log(f"settings standalone failed: {exc}")
+        show_error_alert("设置", f"无法打开设置窗口：{exc}")
+        return 1
+    return 0
+
+
+def _present_settings_window(win: tk.Misc, win_w: int = 760, win_h: int = 560) -> None:
+    """居中并前置设置窗。不碰托盘进程的 NSWindow 列表。"""
+    try:
+        win.deiconify()
+    except tk.TclError:
+        pass
+    try:
+        win.update_idletasks()
+    except tk.TclError:
+        pass
+    try:
+        sw = int(win.winfo_screenwidth() or 1440)
+        sh = int(win.winfo_screenheight() or 900)
+        px, py = window_center_pos(sw, sh, win_w, win_h)
+        win.geometry(f"{win_w}x{win_h}+{px}+{py}")
+    except tk.TclError:
+        try:
+            win.geometry(f"{win_w}x{win_h}")
+        except tk.TclError:
+            pass
+    try:
+        win.minsize(640, 420)
+    except tk.TclError:
+        pass
+    try:
+        win.lift()
+        win.focus_force()
+        win.attributes("-topmost", True)
+        win.after(1200, lambda: _relax_topmost(win))
+    except tk.TclError:
+        pass
+
+
+def _relax_topmost(win: tk.Misc) -> None:
+    try:
+        if win.winfo_exists():
+            win.attributes("-topmost", False)
+            win.lift()
+    except tk.TclError:
+        pass
+
 
 _DISPLAY_MODE_LABELS = (
     ("ring", "圆环百分比"),
@@ -59,11 +138,16 @@ class SettingsWindow:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._focus_token = False
+        self._start_import = False
         self._root: tk.Misc | None = None
         self._owns_loop = False
 
     @property
     def is_open(self) -> bool:
+        if IS_MAC:
+            with self._lock:
+                waiting = bool(self._thread and self._thread.is_alive())
+            return waiting or settings_process_running()
         with self._lock:
             win = self._root
         if win is None:
@@ -78,8 +162,12 @@ class SettingsWindow:
         with self._lock:
             return self._root
 
-    def open(self, *, focus_token: bool = False) -> None:
+    def open(self, *, focus_token: bool = False, start_import: bool = False) -> None:
         self._focus_token = bool(focus_token)
+        self._start_import = bool(start_import)
+        if IS_MAC:
+            self._open_via_subprocess()
+            return
         if self._ui is not None:
             self._ui.run_on_ui(self._show_on_ui_thread, wait=False)
             return
@@ -89,15 +177,20 @@ class SettingsWindow:
             self._thread = threading.Thread(target=self._run_standalone, daemon=True, name="settings-ui")
             self._thread.start()
 
+    def _open_via_subprocess(self) -> None:
+        open_settings_async(
+            on_saved=self.on_saved,
+            focus_token=self._focus_token,
+            start_import=self._start_import,
+        )
+
     def _show_on_ui_thread(self) -> None:
         try:
             win = self._root
             if win is not None and win.winfo_exists():
                 if self._focus_token:
                     self._focus_token_field()
-                win.deiconify()
-                win.lift()
-                win.focus_force()
+                _present_settings_window(win, 760, 560)
                 return
         except tk.TclError:
             with self._lock:
@@ -105,14 +198,17 @@ class SettingsWindow:
 
         host = getattr(self._ui, "tk_root", None) if self._ui is not None else None
         if host is None:
+            app_log("settings: no tk host")
+            show_error_alert("设置", "界面尚未就绪，请再点一次菜单栏图标后的「设置…」。")
             return
         try:
             self._build_ui(host=host, owns_loop=False)
         except Exception as exc:  # noqa: BLE001
+            app_log(f"settings build failed: {exc}")
             try:
                 messagebox.showerror("设置", f"无法打开设置窗口：{exc}")
             except Exception:
-                pass
+                show_error_alert("设置", f"无法打开设置窗口：{exc}")
 
     def _focus_token_field(self) -> None:
         entry = getattr(self, "_token_entry", None)
@@ -126,8 +222,7 @@ class SettingsWindow:
                 entry.select_range(0, "end")
             except Exception:
                 pass
-            win.lift()
-            win.focus_force()
+            _present_settings_window(win)
         except tk.TclError:
             pass
 
@@ -159,14 +254,14 @@ class SettingsWindow:
             root: tk.Misc = ctk.CTk()
         else:
             root = ctk.CTkToplevel(host)
-            try:
-                root.withdraw()
-            except tk.TclError:
-                pass
+            if not IS_MAC:
+                try:
+                    root.withdraw()
+                except tk.TclError:
+                    pass
 
         with self._lock:
             self._root = root
-        set_dock_visible(True)
         root.title("设置")
         root.resizable(True, True)
 
@@ -326,9 +421,9 @@ class SettingsWindow:
             account_body,
             title="从浏览器导入",
             description=(
-                "读取 Safari / Chrome / Edge / Firefox，或打开网站登录。"
+                "优先 Safari / Firefox（Chrome 常因 Cookie 加密读不到）。"
                 if IS_MAC
-                else "读取本机已登录浏览器，或打开网站登录。"
+                else "优先 Firefox；部分新版 Chrome 因 App-Bound 加密无法读取。"
             ),
             glyph=_G_GLOBE,
         )
@@ -402,6 +497,7 @@ class SettingsWindow:
             st_off = "disabled" if idle else "normal"
             try:
                 btn_login.configure(state=st_on)
+                btn_firefox.configure(state=st_on)
                 btn_import.configure(state=st_on)
                 btn_cancel_import.configure(state=st_off)
             except tk.TclError:
@@ -439,13 +535,16 @@ class SettingsWindow:
         btn_block = ctk.CTkFrame(import_exp.body_host, fg_color="transparent")
         btn_block.pack(fill="x", pady=(0, 4))
 
-        def run_import(*, open_browser: bool) -> None:
+        def run_import(*, open_browser: bool, prefer: str | None = None) -> None:
             if importing["value"]:
                 return
             importing["value"] = True
             cancel_flag["value"] = False
             _set_import_btns(idle=False)
-            set_auth_status_ui("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
+            if open_browser and prefer == "firefox":
+                set_auth_status_ui("正在打开 Firefox…")
+            else:
+                set_auth_status_ui("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
             root.after(50, _drain_import_events)
 
             def worker() -> None:
@@ -461,6 +560,7 @@ class SettingsWindow:
                     if open_browser:
                         result = start_browser_login_and_import(
                             timeout_sec=180.0,
+                            prefer=prefer,
                             should_cancel=cancel_cb,
                             on_progress=on_progress,
                         )
@@ -485,9 +585,16 @@ class SettingsWindow:
             set_auth_status_ui("正在取消…")
 
         btn_login = ctk.CTkButton(
-            btn_block, text="浏览器登录并导入", command=lambda: run_import(open_browser=True), height=32
+            btn_block,
+            text="Safari 登录导入" if IS_MAC else "浏览器登录并导入",
+            command=lambda: run_import(open_browser=True, prefer="safari" if IS_MAC else None),
+            height=32,
         )
         btn_login.pack(side="left", padx=(0, 8))
+        btn_firefox = make_ghost_button(
+            btn_block, "Firefox 登录导入", lambda: run_import(open_browser=True, prefer="firefox")
+        )
+        btn_firefox.pack(side="left", padx=(0, 8))
         btn_import = make_ghost_button(btn_block, "仅导入 Cookie", lambda: run_import(open_browser=False))
         btn_import.pack(side="left", padx=(0, 8))
         btn_cancel_import = ctk.CTkButton(
@@ -693,22 +800,20 @@ class SettingsWindow:
 
         try:
             root.bind("<Escape>", lambda _e: _close_window())
-            root.update_idletasks()
-            root.geometry(f"{win_w}x{win_h}")
-            root.minsize(640, 420)
-            root.deiconify()
-            root.lift()
-            root.focus_force()
-            root.attributes("-topmost", True)
-            root.after(280, lambda: root.attributes("-topmost", False))
         except tk.TclError:
             pass
+        _present_settings_window(root, win_w, win_h)
 
         apply_window_icon(root)
         apply_native_window_chrome(root)
 
         if focus_token:
             self._focus_token_field()
+        if getattr(self, "_start_import", False):
+            try:
+                root.after(400, lambda: run_import(open_browser=True))
+            except tk.TclError:
+                run_import(open_browser=True)
 
         if owns_loop:
             try:

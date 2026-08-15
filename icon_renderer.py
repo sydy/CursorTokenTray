@@ -39,6 +39,17 @@ def _track_color() -> tuple[int, int, int, int]:
     return (72, 76, 84, 255)
 
 
+def menubar_icon_pixels(point_size: float = 22.0, scale: float = 2.0) -> int:
+    """菜单栏约 22pt。macOS 至少按 2x 出像素，禁止 22×22 的 1x 位图。"""
+    return max(44, int(round(float(point_size) * max(2.0, float(scale)))))
+
+
+def menubar_icon_rep_sizes(point_size: float = 22.0) -> tuple[int, int]:
+    """嵌入 2x / 3x 两套像素，让 2x 和 3x 屏都不用放大 1x 图。"""
+    pt = float(point_size)
+    return (int(round(pt * 2.0)), int(round(pt * 3.0)))
+
+
 @lru_cache(maxsize=1)
 def tray_icon_size() -> int:
     """尽量用大图，系统缩放到托盘 / 菜单栏时更清晰。"""
@@ -46,10 +57,7 @@ def tray_icon_size() -> int:
         import sys
 
         if sys.platform == "darwin":
-            from dpi_util import enable_dpi_awareness
-
-            scale = enable_dpi_awareness()
-            return max(44, min(128, int(22 * scale * 2)))
+            return menubar_icon_rep_sizes(22.0)[1]
         import ctypes
 
         sm = int(ctypes.windll.user32.GetSystemMetrics(49))  # SM_CXSMICON

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
+from contextlib import contextmanager
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from platform_util import app_config_dir
 
@@ -30,17 +33,97 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 _VALID_DISPLAY_MODES = frozenset({"ring", "number", "dot"})
+_THREAD_LOCK = threading.RLock()
 
 
 def ensure_config_dir() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+@contextmanager
+def _interprocess_lock() -> Iterator[None]:
+    """托盘进程和设置进程可能同时写 config.json。"""
+    ensure_config_dir()
+    fp = (CONFIG_DIR / "config.lock").open("a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fp.seek(0)
+            if fp.read(1) == b"":
+                fp.write(b"0")
+                fp.flush()
+            fp.seek(0)
+            msvcrt.locking(fp.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                fp.seek(0)
+                msvcrt.locking(fp.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        fp.close()
+
+
 def load_config() -> dict[str, Any]:
+    with _THREAD_LOCK, _interprocess_lock():
+        return _load_unlocked()
+
+
+def save_config(cfg: dict[str, Any]) -> None:
+    with _THREAD_LOCK, _interprocess_lock():
+        _save_unlocked(cfg)
+
+
+def config_mtime() -> float:
+    try:
+        return float(CONFIG_PATH.stat().st_mtime)
+    except OSError:
+        return 0.0
+
+
+def poll_config_changes(
+    is_running: Callable[[], bool],
+    *,
+    on_change: Callable[[dict[str, Any]], None] | None = None,
+    interval: float = 0.35,
+    last_mtime: float | None = None,
+) -> None:
+    """设置进程还在时轮询 config.json，点「应用」就能立刻刷新托盘。"""
+    last = config_mtime() if last_mtime is None else last_mtime
+    while is_running():
+        time.sleep(interval)
+        current = config_mtime()
+        if on_change is not None and current != last:
+            last = current
+            on_change(load_config())
+
+
+def update_config(**kwargs: Any) -> dict[str, Any]:
+    cfg = load_config()
+    for key, value in kwargs.items():
+        if key in DEFAULT_CONFIG:
+            cfg[key] = value
+    save_config(cfg)
+    return cfg
+
+
+def _load_unlocked() -> dict[str, Any]:
     ensure_config_dir()
     if not CONFIG_PATH.exists():
         cfg = deepcopy(DEFAULT_CONFIG)
-        save_config(cfg)
+        _save_unlocked(cfg)
         return cfg
 
     try:
@@ -51,31 +134,20 @@ def load_config() -> dict[str, Any]:
 
     cfg = deepcopy(DEFAULT_CONFIG)
     cfg.update({k: v for k, v in data.items() if k in DEFAULT_CONFIG})
-    cfg = _normalize_config(cfg, raw=data)
-    return cfg
+    return _normalize_config(cfg, raw=data)
 
 
-def save_config(cfg: dict[str, Any]) -> None:
+def _save_unlocked(cfg: dict[str, Any]) -> None:
     ensure_config_dir()
     normalized = _normalize_config({**deepcopy(DEFAULT_CONFIG), **cfg}, raw=cfg)
     to_save = deepcopy(DEFAULT_CONFIG)
     to_save.update({k: v for k, v in normalized.items() if k in DEFAULT_CONFIG})
-    # 原子写入，避免断电/崩溃截断 config.json
     tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(to_save, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_path, CONFIG_PATH)
-
-
-def update_config(**kwargs: Any) -> dict[str, Any]:
-    cfg = load_config()
-    for key, value in kwargs.items():
-        if key in DEFAULT_CONFIG:
-            cfg[key] = value
-    save_config(cfg)
-    return cfg
 
 
 def _normalize_config(cfg: dict[str, Any], *, raw: dict[str, Any]) -> dict[str, Any]:
@@ -88,7 +160,6 @@ def _normalize_config(cfg: dict[str, Any], *, raw: dict[str, Any]) -> dict[str, 
     cfg["auth_error_notified"] = bool(cfg.get("auth_error_notified", False))
     cfg["exhaustion_notified"] = bool(cfg.get("exhaustion_notified", False))
 
-    # 只保留规范化后的 WorkosCursorSessionToken（避免整段 Cookie 入库）
     raw_token = str(cfg.get("session_token") or "").strip()
     try:
         from cursor_api import normalize_workos_token
@@ -100,7 +171,6 @@ def _normalize_config(cfg: dict[str, Any], *, raw: dict[str, Any]) -> dict[str, 
     mode = str(cfg.get("tray_display_mode") or "ring").strip().lower()
     cfg["tray_display_mode"] = mode if mode in _VALID_DISPLAY_MODES else "ring"
 
-    # 旧版仅有 low_quota_threshold、且未写过 alert_thresholds → 迁移为单档
     if "alert_thresholds" not in raw and "low_quota_threshold" in raw:
         cfg["alert_thresholds"] = [int(cfg["low_quota_threshold"])]
     else:
