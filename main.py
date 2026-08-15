@@ -21,6 +21,12 @@ def main() -> int:
             print("（含 pyobjc-framework-Cocoa / pyobjc-framework-Quartz）")
             return 1
 
+    # 设置窗走独立进程，必须在单实例锁之前返回，否则会误报「已在运行」。
+    if "--settings" in sys.argv[1:]:
+        from settings_ui import run_settings_main
+
+        return run_settings_main()
+
     from instance_lock import acquire, release
 
     if not acquire():

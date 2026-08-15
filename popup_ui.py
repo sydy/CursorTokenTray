@@ -679,30 +679,16 @@ def _format_date(iso_value: str) -> str:
 
 
 def _prepare_hidden_root(root: tk.Misc) -> None:
-    """macOS：withdraw 的根窗口会导致 CTkToplevel 建出来却不显示。改为映射到屏外。"""
+    """托盘进程里的 Tk 根窗口只给飞出层用，必须保持隐藏。
+
+    不要在这里改 NSApplicationActivationPolicy，也不要把根窗口做成
+    overrideredirect 透明窗——那会和 pystray 的菜单栏 extra 抢主线程。
+    """
     _apply_tk_scaling(root)
-    if not IS_MAC:
-        try:
-            root.withdraw()
-        except tk.TclError:
-            pass
-        return
     try:
-        root.overrideredirect(True)
+        root.withdraw()
     except tk.TclError:
         pass
-    try:
-        root.attributes("-alpha", 0.0)
-    except tk.TclError:
-        pass
-    try:
-        root.geometry("1x1+-32000+-32000")
-        root.deiconify()
-    except tk.TclError:
-        try:
-            root.withdraw()
-        except tk.TclError:
-            pass
 
 
 def _apply_tk_scaling(root: tk.Misc) -> None:

@@ -36,8 +36,12 @@ class TrayApp:
         self._refresh_event = threading.Event()
         self._lock = threading.Lock()
         self.popups = PopupManager()
-        # 设置窗挂到唯一 popup-ui Tk 线程，禁止再开第二个 Tk（Windows 上极易未响应）
-        self.settings = SettingsWindow(on_saved=self._on_config_saved, ui=self.popups)
+        # Windows：设置窗挂到唯一 popup-ui Tk 线程。
+        # macOS：设置走独立进程，绝不能在菜单栏进程里再建 CTk 设置窗。
+        self.settings = SettingsWindow(
+            on_saved=self._on_config_saved,
+            ui=None if IS_MAC else self.popups,
+        )
         self._worker: threading.Thread | None = None
         self._suppress_status_closed_resume = False
         self._status_opening = False
@@ -293,7 +297,7 @@ class TrayApp:
         self._open_settings_bg(focus_token=True, start_import=True)
 
     def _open_settings_bg(self, *, focus_token: bool = False, start_import: bool = False) -> None:
-        """先收起飞出层/菜单，再在同一 Tk 线程打开设置（避免闪一下的空窗）。"""
+        """先收起飞出层/菜单，再打开设置。macOS 会另起进程，不碰本进程 Tk。"""
 
         def worker() -> None:
             watcher = getattr(self.icon, "_hover_watcher", None)
@@ -305,9 +309,6 @@ class TrayApp:
                 pass
             if watcher is not None:
                 watcher.notify_closed()
-            if IS_MAC:
-                # 等 NSMenu 收起后再建窗，否则窗口常被系统丢掉
-                time.sleep(0.2)
             try:
                 self.settings.open(focus_token=focus_token, start_import=start_import)
             except Exception as exc:  # noqa: BLE001

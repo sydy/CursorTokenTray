@@ -127,38 +127,37 @@ def show_already_running() -> None:
     print("CursorToken 已在运行，请查看系统托盘或菜单栏。")
 
 
-def set_dock_visible(visible: bool) -> None:
-    """macOS：设置窗出现时显示 Dock 图标，关闭后回到纯菜单栏。"""
+def become_foreground_app() -> None:
+    """仅用于独立设置进程：变成普通 GUI，窗口才能到前台。
+
+    禁止在菜单栏托盘进程里调用：改 ActivationPolicy 并遍历 NSWindow
+    会和 pystray 抢主线程，表现为点设置后卡死或崩溃。
+    """
     if not IS_MAC:
         return
     try:
-        from AppKit import (
-            NSApp,
-            NSApplicationActivationPolicyAccessory,
-            NSApplicationActivationPolicyRegular,
-        )
+        from AppKit import NSApplication, NSApplicationActivationPolicyRegular
 
-        if visible:
-            NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
-            NSApp.activateIgnoringOtherApps_(True)
-        else:
-            NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        app = NSApplication.sharedApplication()
+        app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        app.activateIgnoringOtherApps_(True)
     except Exception:
         pass
 
 
-def reveal_app_windows() -> None:
-    """把 LSUIElement 应用切到前台，否则 Toplevel 经常建出来却看不见。"""
-    set_dock_visible(True)
+def set_dock_visible(visible: bool) -> None:
+    """仅用于独立设置进程：显示或隐藏 Dock 图标。"""
+    if not IS_MAC:
+        return
+    if visible:
+        become_foreground_app()
+        return
     try:
-        from AppKit import NSApp
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 
-        NSApp.activateIgnoringOtherApps_(True)
-        for nsw in list(NSApp.windows() or []):
-            try:
-                nsw.makeKeyAndOrderFront_(None)
-            except Exception:
-                pass
+        NSApplication.sharedApplication().setActivationPolicy_(
+            NSApplicationActivationPolicyAccessory
+        )
     except Exception:
         pass
 

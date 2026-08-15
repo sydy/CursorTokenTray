@@ -177,6 +177,41 @@ class MenuBarIconTests(unittest.TestCase):
             sys.platform = original
 
 
+class SettingsProcessTests(unittest.TestCase):
+    def test_settings_command_dev(self) -> None:
+        from settings_launch import settings_command
+
+        cmd = settings_command(
+            focus_token=True,
+            start_import=True,
+            executable="/usr/bin/python3",
+            script="/tmp/main.py",
+            frozen=False,
+        )
+        self.assertEqual(cmd, ["/usr/bin/python3", "/tmp/main.py", "--settings", "--focus-token", "--start-import"])
+
+    def test_settings_command_frozen(self) -> None:
+        from settings_launch import settings_command
+
+        exe = "/Applications/CursorTokenTray.app/Contents/MacOS/CursorTokenTray"
+        cmd = settings_command(executable=exe, frozen=True)
+        self.assertEqual(cmd, [exe, "--settings"])
+        cmd2 = settings_command(executable=exe, frozen=True, focus_token=True)
+        self.assertEqual(cmd2, [exe, "--settings", "--focus-token"])
+
+    def test_main_settings_flag_still_rejects_linux(self) -> None:
+        if sys.platform in ("win32", "darwin"):
+            self.skipTest("only on linux CI")
+        import main
+
+        old = sys.argv
+        try:
+            sys.argv = ["main.py", "--settings"]
+            self.assertEqual(main.main(), 1)
+        finally:
+            sys.argv = old
+
+
 class MainGuardTests(unittest.TestCase):
     def test_main_rejects_linux(self) -> None:
         if sys.platform in ("win32", "darwin"):

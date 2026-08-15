@@ -1,10 +1,18 @@
-"""设置窗口：CustomTkinter 内容 + Windows 原生标题栏外壳。"""
+"""设置窗口：CustomTkinter 内容 + Windows 原生标题栏外壳。
+
+macOS：设置必须在独立进程里跑（`--settings`）。菜单栏进程里的
+AppKit + Tk 同线程一旦改 ActivationPolicy / 遍历 NSWindow 就会卡死崩溃。
+"""
 
 from __future__ import annotations
 
+import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox
 from typing import Any, Callable
 
@@ -16,11 +24,12 @@ from dpi_util import enable_dpi_awareness
 from platform_util import (
     IS_MAC,
     app_log,
-    reveal_app_windows,
+    become_foreground_app,
     set_dock_visible,
     show_error_alert,
     window_center_pos,
 )
+from settings_launch import settings_command
 from ui_ctk import (
     ACCENT,
     BG,
@@ -38,9 +47,60 @@ from ui_ctk import (
 )
 
 
+_spawn_lock = threading.Lock()
+_settings_proc: subprocess.Popen[bytes] | None = None
+
+
+def settings_process_running() -> bool:
+    proc = _settings_proc
+    return proc is not None and proc.poll() is None
+
+
+def spawn_settings_process(*, focus_token: bool = False, start_import: bool = False) -> int | None:
+    """启动独立设置进程并等待退出。已在运行则返回 None（不重复打开）。"""
+    global _settings_proc
+    with _spawn_lock:
+        if _settings_proc is not None and _settings_proc.poll() is None:
+            app_log("settings process already running")
+            return None
+        cmd = settings_command(focus_token=focus_token, start_import=start_import)
+        app_log(f"spawn settings: {cmd}")
+        _settings_proc = subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            close_fds=True,
+            cwd=str(Path(cmd[0]).resolve().parent) if os.path.isabs(cmd[0]) else None,
+        )
+        proc = _settings_proc
+    return int(proc.wait())
+
+
+def run_settings_main() -> int:
+    """`python main.py --settings` / 打包后 `CursorTokenTray --settings` 的入口。"""
+    focus_token = "--focus-token" in sys.argv[1:]
+    start_import = "--start-import" in sys.argv[1:]
+    become_foreground_app()
+    enable_dpi_awareness()
+    try:
+        from app_icon import set_app_user_model_id
+
+        set_app_user_model_id()
+    except Exception:
+        pass
+    win = SettingsWindow(on_saved=None, ui=None)
+    win._focus_token = focus_token
+    win._start_import = start_import
+    try:
+        win._build_ui(host=None, owns_loop=True)
+    except Exception as exc:  # noqa: BLE001
+        app_log(f"settings standalone failed: {exc}")
+        show_error_alert("设置", f"无法打开设置窗口：{exc}")
+        return 1
+    return 0
+
+
 def _present_settings_window(win: tk.Misc, win_w: int = 760, win_h: int = 560) -> None:
-    """确保设置窗真正映射到屏幕前台（macOS LSUIElement 下 withdraw/几何失败很常见）。"""
-    reveal_app_windows()
+    """居中并前置设置窗。不碰托盘进程的 NSWindow 列表。"""
     try:
         win.deiconify()
     except tk.TclError:
@@ -70,7 +130,6 @@ def _present_settings_window(win: tk.Misc, win_w: int = 760, win_h: int = 560) -
         win.after(1200, lambda: _relax_topmost(win))
     except tk.TclError:
         pass
-    reveal_app_windows()
 
 
 def _relax_topmost(win: tk.Misc) -> None:
@@ -117,6 +176,10 @@ class SettingsWindow:
 
     @property
     def is_open(self) -> bool:
+        if IS_MAC:
+            with self._lock:
+                waiting = bool(self._thread and self._thread.is_alive())
+            return waiting or settings_process_running()
         with self._lock:
             win = self._root
         if win is None:
@@ -134,6 +197,9 @@ class SettingsWindow:
     def open(self, *, focus_token: bool = False, start_import: bool = False) -> None:
         self._focus_token = bool(focus_token)
         self._start_import = bool(start_import)
+        if IS_MAC:
+            self._open_via_subprocess()
+            return
         if self._ui is not None:
             self._ui.run_on_ui(self._show_on_ui_thread, wait=False)
             return
@@ -141,6 +207,33 @@ class SettingsWindow:
             if self._thread and self._thread.is_alive():
                 return
             self._thread = threading.Thread(target=self._run_standalone, daemon=True, name="settings-ui")
+            self._thread.start()
+
+    def _open_via_subprocess(self) -> None:
+        """macOS：另起进程跑 Tk，避免和菜单栏 extra 同生共死。"""
+
+        def worker() -> None:
+            try:
+                rc = spawn_settings_process(
+                    focus_token=self._focus_token,
+                    start_import=self._start_import,
+                )
+            except Exception as exc:  # noqa: BLE001
+                app_log(f"spawn settings failed: {exc}")
+                show_error_alert("设置", f"无法打开设置：{exc}")
+                return
+            if rc is None:
+                return
+            if self.on_saved:
+                try:
+                    self.on_saved(load_config())
+                except Exception:
+                    pass
+
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=worker, daemon=True, name="settings-proc")
             self._thread.start()
 
     def _show_on_ui_thread(self) -> None:
@@ -229,7 +322,6 @@ class SettingsWindow:
 
         with self._lock:
             self._root = root
-        reveal_app_windows()
         root.title("设置")
         root.resizable(True, True)
 
