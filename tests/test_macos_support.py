@@ -230,6 +230,46 @@ class SettingsProcessTests(unittest.TestCase):
             sys.argv = old
 
 
+class ConfigLockTests(unittest.TestCase):
+    def test_roundtrip_and_poll(self) -> None:
+        import config
+
+        old_dir = config.CONFIG_DIR
+        old_path = config.CONFIG_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            config.CONFIG_DIR = Path(tmp)
+            config.CONFIG_PATH = Path(tmp) / "config.json"
+            try:
+                config.save_config({**config.DEFAULT_CONFIG, "refresh_interval_minutes": 7})
+                self.assertEqual(config.load_config()["refresh_interval_minutes"], 7)
+                seen: list[int] = []
+                state = {"i": 0}
+
+                def running() -> bool:
+                    state["i"] += 1
+                    if state["i"] == 2:
+                        config.save_config({**config.DEFAULT_CONFIG, "refresh_interval_minutes": 3})
+                    return state["i"] < 5
+
+                config.poll_config_changes(
+                    running,
+                    on_change=lambda cfg: seen.append(int(cfg["refresh_interval_minutes"])),
+                    interval=0.01,
+                )
+                self.assertIn(3, seen)
+            finally:
+                config.CONFIG_DIR = old_dir
+                config.CONFIG_PATH = old_path
+
+
+class StatusTextTests(unittest.TestCase):
+    def test_waiting_and_error(self) -> None:
+        from status_text import format_summary_text
+
+        self.assertIn("等待刷新", format_summary_text(None, None, None))
+        self.assertIn("过期", format_summary_text(None, "Token 过期", "12:00"))
+
+
 class MainGuardTests(unittest.TestCase):
     def test_main_rejects_linux(self) -> None:
         if sys.platform in ("win32", "darwin"):

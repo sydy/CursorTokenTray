@@ -161,9 +161,8 @@ def import_and_validate(
         )
     if should_cancel and should_cancel():
         return ImportResult(ok=False, message="已取消")
-
-        if on_progress:
-            on_progress(_import_progress_label())
+    if on_progress:
+        on_progress(_import_progress_label())
     candidates = find_session_candidates()
     if not candidates:
         return ImportResult(

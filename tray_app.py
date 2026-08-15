@@ -20,10 +20,15 @@ from cursor_api import (
     is_auth_error_message,
 )
 from icon_renderer import create_idle_icon, create_progress_icon
-from popup_ui import MenuAction, PopupManager, StatusActions, format_summary_text
 from platform_util import IS_MAC, app_log, copy_text, show_native_status
-from settings_ui import SettingsWindow
+from status_text import format_summary_text
 import usage_history
+
+if IS_MAC:
+    from settings_launch import open_settings_async
+else:
+    from popup_ui import MenuAction, PopupManager, StatusActions
+    from settings_ui import SettingsWindow
 
 
 class TrayApp:
@@ -35,12 +40,12 @@ class TrayApp:
         self._stop = threading.Event()
         self._refresh_event = threading.Event()
         self._lock = threading.Lock()
-        self.popups = PopupManager()
         # Windows：设置窗挂到唯一 popup-ui Tk 线程。
-        # macOS：设置走独立进程，绝不能在菜单栏进程里再建 CTk 设置窗。
-        self.settings = SettingsWindow(
+        # macOS：托盘进程不导入 settings_ui / Tk。
+        self.popups = None if IS_MAC else PopupManager()
+        self.settings = None if IS_MAC else SettingsWindow(
             on_saved=self._on_config_saved,
-            ui=None if IS_MAC else self.popups,
+            ui=self.popups,
         )
         self._worker: threading.Thread | None = None
         self._suppress_status_closed_resume = False
@@ -73,14 +78,10 @@ class TrayApp:
             "",
             menu=menu,
         )
-        self.popups.bind_tray_icon(self.icon)
+        if self.popups is not None:
+            self.popups.bind_tray_icon(self.icon)
 
     def run(self) -> None:
-        if not self.config.get("session_token"):
-            delay = 1.2 if IS_MAC else 0.8
-            app_log(f"no session token, open settings in {delay}s")
-            threading.Timer(delay, lambda: self.settings.open(focus_token=True)).start()
-
         try:
             from autostart import set_autostart
 
@@ -101,8 +102,8 @@ class TrayApp:
                 NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
             except Exception as exc:
                 app_log(f"set accessory policy failed: {exc}")
-            # 菜单栏进程禁止创建 Tk：和 pystray 同线程 50Hz update() 会卡死崩溃。
-            app_log("menubar icon ready; skip Tk in tray process")
+            app_log("menubar icon ready; no Tk in tray process")
+            self._maybe_open_first_run_settings()
             return
 
         from tray_hover import enable_hover_flyout, patch_pystray_uid
@@ -122,8 +123,16 @@ class TrayApp:
             )
         except Exception:
             pass
+        self._maybe_open_first_run_settings()
 
-    def _status_actions(self) -> StatusActions:
+    def _maybe_open_first_run_settings(self) -> None:
+        if self.config.get("session_token"):
+            return
+        delay = 0.3 if IS_MAC else 0.2
+        app_log(f"icon ready, open settings in {delay}s (no token)")
+        threading.Timer(delay, lambda: self._open_settings(focus_token=True)).start()
+
+    def _status_actions(self):
         return StatusActions(
             on_open_settings=self._action_open_settings_focus,
             on_refresh=self._action_refresh,
@@ -138,6 +147,8 @@ class TrayApp:
         return values, burn
 
     def _on_tray_right_click(self) -> None:
+        if self.popups is None:
+            return
         if self.popups.menu_visible or getattr(self, "_menu_opening", False):
             return
         self._menu_opening = True
@@ -197,6 +208,8 @@ class TrayApp:
             show_native_status("Cursor Token 剩余进度", text)
             return
         self.popups.cancel_hover_close()
+        if self.popups is None:
+            return
         if self._status_opening or self.popups.status_visible or self.popups.busy:
             return
         if self.popups.menu_visible:
@@ -227,10 +240,11 @@ class TrayApp:
             raise
 
     def stop(self) -> None:
-        """可靠退出：先停刷新/悬停/弹窗，再停托盘；兜底强制结束进程。"""
+        """先请求 pystray 退出；只有消息循环不返回时才 os._exit。"""
         if getattr(self, "_stopping", False):
             return
         self._stopping = True
+        app_log("stop requested")
         self._stop.set()
         self._refresh_event.set()
 
@@ -241,18 +255,14 @@ class TrayApp:
             except Exception:
                 pass
 
-        try:
-            self.popups.close_and_wait(1.5)
-        except Exception:
+        if self.popups is not None:
             try:
-                self.popups.close()
+                self.popups.close_and_wait(1.5)
             except Exception:
-                pass
-        if IS_MAC:
-            try:
-                self.popups.stop_macos_pump()
-            except Exception:
-                pass
+                try:
+                    self.popups.close()
+                except Exception:
+                    pass
 
         def _stop_icon() -> None:
             try:
@@ -261,21 +271,38 @@ class TrayApp:
                 pass
             try:
                 self.icon.stop()
+            except Exception as exc:
+                app_log(f"icon.stop failed: {exc}")
+            if IS_MAC:
+                try:
+                    from PyObjCTools import AppHelper
+
+                    AppHelper.stopEventLoop()
+                except Exception:
+                    pass
+
+        if IS_MAC:
+            try:
+                from PyObjCTools import AppHelper
+
+                AppHelper.callLater(0.05, _stop_icon)
+            except Exception:
+                _stop_icon()
+        else:
+            threading.Thread(target=_stop_icon, daemon=True, name="stop-icon").start()
+
+        def _watchdog() -> None:
+            time.sleep(5.0)
+            app_log("stop watchdog: icon.run did not return, forcing exit")
+            try:
+                from instance_lock import release
+
+                release()
             except Exception:
                 pass
+            os._exit(0)
 
-        # pystray 在部分环境下从非消息线程 stop 会挂起，超时则强杀本进程
-        t = threading.Thread(target=_stop_icon, daemon=True)
-        t.start()
-        t.join(timeout=2.0)
-        try:
-            from instance_lock import release
-
-            release()
-        except Exception:
-            pass
-        # 托盘 icon.stop 后消息循环常不退出，必须强退，否则单实例锁占住无法再启动
-        os._exit(0)
+        threading.Thread(target=_watchdog, daemon=True, name="stop-watchdog").start()
 
     def _action_open_status(self, _icon=None, _item=None) -> None:
         threading.Thread(target=self._open_status_bg, daemon=True).start()
@@ -285,6 +312,17 @@ class TrayApp:
 
     def _action_open_spending(self, _icon=None, _item=None) -> None:
         webbrowser.open(BILLING_URL)
+
+    def _open_settings(self, *, focus_token: bool = False, start_import: bool = False) -> None:
+        if IS_MAC:
+            open_settings_async(
+                on_saved=self._on_config_saved,
+                focus_token=focus_token,
+                start_import=start_import,
+            )
+            return
+        assert self.settings is not None
+        self.settings.open(focus_token=focus_token, start_import=start_import)
 
     def _action_open_settings(self, _icon=None, _item=None) -> None:
         self._open_settings_bg(focus_token=False)
@@ -299,15 +337,16 @@ class TrayApp:
             watcher = getattr(self.icon, "_hover_watcher", None)
             if watcher is not None:
                 watcher.pause()
-            try:
-                self.popups.close()
-            except Exception:
-                pass
+            if self.popups is not None:
+                try:
+                    self.popups.close()
+                except Exception:
+                    pass
             if watcher is not None:
                 watcher.notify_closed()
             try:
                 app_log(f"open settings focus={focus_token} import={start_import}")
-                self.settings.open(focus_token=focus_token, start_import=start_import)
+                self._open_settings(focus_token=focus_token, start_import=start_import)
             except Exception as exc:  # noqa: BLE001
                 app_log(f"open settings failed: {exc}")
                 try:
@@ -581,11 +620,12 @@ class TrayApp:
         else:
             self.icon.title = ""
 
-        hist, burn = self._history_payload()
-        self.popups.update_status(
-            usage=usage,
-            error_message=err,
-            updated_at=updated,
-            history_values=hist,
-            daily_burn=burn,
-        )
+        if self.popups is not None:
+            hist, burn = self._history_payload()
+            self.popups.update_status(
+                usage=usage,
+                error_message=err,
+                updated_at=updated,
+                history_values=hist,
+                daily_burn=burn,
+            )

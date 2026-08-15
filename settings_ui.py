@@ -6,12 +6,9 @@ AppKit + Tk 同线程一旦改 ActivationPolicy / 遍历 NSWindow 就会卡死�
 
 from __future__ import annotations
 
-import os
 import queue
-import subprocess
 import threading
 import tkinter as tk
-from pathlib import Path
 from tkinter import messagebox
 from typing import Any, Callable
 
@@ -28,7 +25,7 @@ from platform_util import (
     show_error_alert,
     window_center_pos,
 )
-from settings_launch import settings_command, settings_env, settings_flags
+from settings_launch import open_settings_async, settings_flags, settings_process_running
 from ui_ctk import (
     ACCENT,
     BG,
@@ -44,38 +41,6 @@ from ui_ctk import (
     make_ghost_button,
     make_switch,
 )
-
-
-_spawn_lock = threading.Lock()
-_settings_proc: subprocess.Popen[bytes] | None = None
-
-
-def settings_process_running() -> bool:
-    proc = _settings_proc
-    return proc is not None and proc.poll() is None
-
-
-def spawn_settings_process(*, focus_token: bool = False, start_import: bool = False) -> int | None:
-    """启动独立设置进程并等待退出。已在运行则返回 None（不重复打开）。"""
-    global _settings_proc
-    with _spawn_lock:
-        if _settings_proc is not None and _settings_proc.poll() is None:
-            app_log("settings process already running")
-            return None
-        cmd = settings_command(focus_token=focus_token, start_import=start_import)
-        env = settings_env(focus_token=focus_token, start_import=start_import)
-        app_log(f"spawn settings: {cmd}")
-        _settings_proc = subprocess.Popen(
-            cmd,
-            env=env,
-            start_new_session=True,
-            close_fds=True,
-            cwd=str(Path(cmd[0]).resolve().parent) if os.path.isabs(cmd[0]) else None,
-        )
-        proc = _settings_proc
-    rc = int(proc.wait())
-    app_log(f"settings process exited rc={rc}")
-    return rc
 
 
 def run_settings_main() -> int:
@@ -213,31 +178,11 @@ class SettingsWindow:
             self._thread.start()
 
     def _open_via_subprocess(self) -> None:
-        """macOS：另起进程跑 Tk，避免和菜单栏 extra 同生共死。"""
-
-        def worker() -> None:
-            try:
-                rc = spawn_settings_process(
-                    focus_token=self._focus_token,
-                    start_import=self._start_import,
-                )
-            except Exception as exc:  # noqa: BLE001
-                app_log(f"spawn settings failed: {exc}")
-                show_error_alert("设置", f"无法打开设置：{exc}")
-                return
-            if rc is None:
-                return
-            if self.on_saved:
-                try:
-                    self.on_saved(load_config())
-                except Exception:
-                    pass
-
-        with self._lock:
-            if self._thread and self._thread.is_alive():
-                return
-            self._thread = threading.Thread(target=worker, daemon=True, name="settings-proc")
-            self._thread.start()
+        open_settings_async(
+            on_saved=self.on_saved,
+            focus_token=self._focus_token,
+            start_import=self._start_import,
+        )
 
     def _show_on_ui_thread(self) -> None:
         try:
@@ -252,14 +197,6 @@ class SettingsWindow:
                 self._root = None
 
         host = getattr(self._ui, "tk_root", None) if self._ui is not None else None
-        if host is None and self._ui is not None:
-            try:
-                attach = getattr(self._ui, "attach_main_thread", None)
-                if callable(attach):
-                    attach()
-                host = getattr(self._ui, "tk_root", None)
-            except Exception as exc:  # noqa: BLE001
-                app_log(f"settings attach failed: {exc}")
         if host is None:
             app_log("settings: no tk host")
             show_error_alert("设置", "界面尚未就绪，请再点一次菜单栏图标后的「设置…」。")

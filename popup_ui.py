@@ -20,6 +20,7 @@ from cursor_api import UsageSnapshot, format_token_count, is_auth_error_message
 from dpi_util import enable_dpi_awareness
 from icon_renderer import create_progress_icon, create_sparkline, remaining_color
 from platform_util import IS_MAC, app_log, cursor_pos, mouse_left_down, place_tray_popup, ui_font_family
+from status_text import format_estimated_days, format_reset_date, format_summary_text
 from ui_ctk import init_ctk
 
 DPI_SCALE = enable_dpi_awareness()
@@ -70,56 +71,6 @@ class PopupManager:
 
     def bind_tray_icon(self, icon) -> None:
         self._tray_icon = icon
-
-    def attach_main_thread(self) -> None:
-        """macOS：在 pystray setup（主线程）创建隐藏 Tk 根窗口，并用 AppKit 定时泵送。"""
-        if self._root is not None:
-            return
-        init_ctk()
-        root = ctk.CTk()
-        _prepare_hidden_root(root)
-        with self._lock:
-            self._root = root
-            self._ui_thread = threading.current_thread()
-            root._tray_popup_gen = self._generation  # type: ignore[attr-defined]
-        self._start_macos_pump(root)
-        self._ui_ready.set()
-
-    def _start_macos_pump(self, root: tk.Tk) -> None:
-        def pump() -> None:
-            if getattr(self, "_mac_pump_stopped", False):
-                return
-            self._drain_commands()
-            try:
-                if root.winfo_exists():
-                    root.update()
-            except tk.TclError as exc:
-                app_log(f"macos tk pump: {exc}")
-            except Exception as exc:  # noqa: BLE001
-                app_log(f"macos tk pump: {exc}")
-            try:
-                from PyObjCTools import AppHelper
-
-                AppHelper.callLater(0.02, pump)
-            except Exception:
-                try:
-                    root.after(20, pump)
-                except tk.TclError:
-                    pass
-
-        self._mac_pump_stopped = False
-        try:
-            from PyObjCTools import AppHelper
-
-            AppHelper.callLater(0.02, pump)
-        except Exception:
-            try:
-                root.after(20, pump)
-            except tk.TclError:
-                pass
-
-    def stop_macos_pump(self) -> None:
-        self._mac_pump_stopped = True
 
     def _start_ui_thread(self) -> None:
         if IS_MAC:
@@ -198,18 +149,10 @@ class PopupManager:
         wait: bool = True,
         timeout: float = 3.0,
     ) -> bool:
-        self._start_ui_thread()
         if IS_MAC:
-            if not self._ui_ready.wait(timeout=max(timeout, 5.0)):
-                app_log("run_on_ui: tk host not ready")
-                return False
-            # 菜单栏点击发生在 NSMenu 跟踪期间，同步建窗经常不显示，一律排队
-            done = threading.Event() if wait else None
-            err_box: list[BaseException | None] | None = [None] if wait else None
-            self._cmd_queue.put((fn, done, err_box))
-            if not wait:
-                return True
-            return done.wait(timeout=timeout)
+            app_log("run_on_ui skipped: macOS tray has no Tk")
+            return False
+        self._start_ui_thread()
         if self._ui_thread is not None and threading.current_thread() is self._ui_thread:
             fn()
             return True
@@ -610,7 +553,7 @@ def build_status_lines(
         rows.append(("明细", f"First-party {auto} · API {api}"))
 
     if usage.billing_cycle_end:
-        end_text = _format_date(usage.billing_cycle_end)
+        end_text = format_reset_date(usage.billing_cycle_end)
         if usage.days_remaining is not None:
             rows.append(("重置", f"{end_text}（还剩 {usage.days_remaining} 天）"))
         else:
@@ -623,59 +566,6 @@ def build_status_lines(
     return rows
 
 
-def format_summary_text(
-    usage: UsageSnapshot | None,
-    error_message: str | None,
-    updated_at: str | None,
-) -> str:
-    if error_message:
-        return f"状态: {error_message} | 更新 {updated_at or '—'}"
-    if usage is None:
-        return "状态: 等待刷新…"
-    auto = "—" if usage.auto_percent_used is None else f"{usage.auto_percent_used:.1f}%"
-    api = "—" if usage.api_percent_used is None else f"{usage.api_percent_used:.1f}%"
-    est = format_estimated_days(usage)
-    tokens = ""
-    if usage.total_tokens:
-        tokens = f"消耗 {format_token_count(usage.total_tokens)} Token | "
-    return (
-        f"剩余 {usage.remaining_percent:.1f}% | 计划 {usage.membership_type} | "
-        f"{tokens}First-party {auto} | API {api} | 预计可用 {est} | 更新 {updated_at or '—'}"
-    )
-
-
-def format_estimated_days(usage: UsageSnapshot) -> str:
-    est = usage.estimated_usable_days
-    if est is None:
-        if usage.used_percent < 0.2:
-            return "用量过低，暂无法估算"
-        if usage.days_elapsed is not None and usage.days_elapsed < 0.04:
-            return "周期刚开始，统计中"
-        return "暂无法估算"
-
-    if est <= 0:
-        text = "已耗尽"
-    elif est < 1:
-        text = f"约 {max(1, int(est * 24))} 小时"
-    else:
-        text = f"约 {est:.1f} 天".replace(".0 天", " 天")
-
-    reset_left = usage.days_remaining
-    if reset_left is not None and est > 0:
-        if est >= reset_left:
-            text += "  ·  可撑过本周期"
-        else:
-            text += "  ·  可能提前耗尽"
-    return text
-
-
-def _format_date(iso_value: str) -> str:
-    try:
-        text = iso_value.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(text)
-        return f"{dt.month}月{dt.day}日"
-    except ValueError:
-        return iso_value
 
 
 def _prepare_hidden_root(root: tk.Misc) -> None:
@@ -1142,7 +1032,7 @@ class _StatusCard:
             if usage.api_percent_used is not None:
                 rows.append(("API 用量", f"{usage.api_percent_used:.1f}%"))
         if usage.billing_cycle_end:
-            end_text = _format_date(usage.billing_cycle_end)
+            end_text = format_reset_date(usage.billing_cycle_end)
             if usage.days_remaining is not None:
                 rows.append(("重置", f"{end_text} · 剩 {usage.days_remaining} 天"))
             else:
