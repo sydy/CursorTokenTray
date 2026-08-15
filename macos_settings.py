@@ -29,6 +29,9 @@ try:
         NSObject,
         NSPopUpButton,
         NSTextField,
+        NSToolbar,
+        NSToolbarItem,
+        NSView,
         NSWindow,
         NSWindowCollectionBehaviorCanJoinAllSpaces,
         NSWindowCollectionBehaviorMoveToActiveSpace,
@@ -50,6 +53,20 @@ except ImportError:  # Linux CI
 
 _CONTROLLER = None
 _PENDING_MAIN: list[Any] = []
+_PAGE_H = 300.0
+_PANE_ACCOUNT = "account"
+_PANE_NOTIFY = "notify"
+_PANE_MENU = "menubar"
+_PANE_TITLES = {
+    _PANE_ACCOUNT: "账户",
+    _PANE_NOTIFY: "通知",
+    _PANE_MENU: "菜单栏",
+}
+_PANE_SYMBOLS = {
+    _PANE_ACCOUNT: "person.circle",
+    _PANE_NOTIFY: "bell",
+    _PANE_MENU: "menubar.rectangle",
+}
 
 
 class _MainCall(NSObject):
@@ -285,6 +302,10 @@ def _present(
             app_log("settings window created")
 
         if focus_token:
+            try:
+                ctrl.showPage_("account")
+            except Exception:
+                pass
             ctrl.focusTokenField()
         if start_import and not reused:
             AppHelper.callLater(0.4, ctrl.cursorImport_, None)
@@ -326,7 +347,11 @@ class SettingsController(NSObject):
         if not hasattr(self, "_in_modal"):
             self._in_modal = False
 
-        width, height = 640.0, 600.0
+        self._page = "account"
+        self._extras_open = False
+        self._modes = [("ring", "圆环百分比"), ("number", "纯数字"), ("dot", "仅色点")]
+
+        width, height = 520.0, 364.0
         style = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
@@ -344,50 +369,145 @@ class SettingsController(NSObject):
         self.window.setDelegate_(self)
         view = self.window.contentView()
 
-        _label(view, "账户与登录", 24, 560, 400, 22, 16)
-        _label(view, "会话 Token（请勿分享）", 24, 532, 300, 16, 12)
-        self.tokenField = _field(view, str(cfg.get("session_token") or ""), 24, 502, 592, 26)
-        _label(view, "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。", 24, 474, 592, 16, 11)
+        page_h = 300.0
+        self.pageAccount = NSView.alloc().initWithFrame_(NSMakeRect(0, 64, width, page_h))
+        self.pageNotify = NSView.alloc().initWithFrame_(NSMakeRect(0, 64, width, page_h))
+        self.pageMenu = NSView.alloc().initWithFrame_(NSMakeRect(0, 64, width, page_h))
+        view.addSubview_(self.pageAccount)
+        view.addSubview_(self.pageNotify)
+        view.addSubview_(self.pageMenu)
 
-        self.btnCursor = _button(view, "从 Cursor 导入", b"cursorImport:", self, 24, 438, 140)
-        self.btnSafari = _button(view, "Safari 登录", b"safariImport:", self, 174, 438, 110)
-        self.btnFirefox = _button(view, "Firefox 登录", b"firefoxImport:", self, 294, 438, 120)
-        self.btnCookie = _button(view, "仅扫描 Cookie", b"cookieImport:", self, 24, 404, 130)
-        self.btnCancelImp = _button(view, "取消等待", b"cancelImport:", self, 164, 404, 100)
+        acc = self.pageAccount
+        _label(acc, "会话 Token（请勿分享）", 28, _py(20, 18), 360, 18, 13)
+        self.tokenField = _field(acc, str(cfg.get("session_token") or ""), 28, _py(44, 28), 464, 28)
+        _label(acc, "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。", 28, _py(80, 16), 464, 16, 11)
+        self.btnCursor = _button(acc, "从 Cursor 导入", b"cursorImport:", self, 28, _py(112, 32), 160, 32)
+        self.btnMore = _link_button(acc, "其他导入方式 ▸", b"toggleExtras:", self, 28, _py(156, 22), 160)
+        self.extraBox = NSView.alloc().initWithFrame_(NSMakeRect(28, _py(184, 36), 464, 36))
+        acc.addSubview_(self.extraBox)
+        self.btnSafari = _button(self.extraBox, "Safari 登录", b"safariImport:", self, 0, 4, 110)
+        self.btnFirefox = _button(self.extraBox, "Firefox 登录", b"firefoxImport:", self, 118, 4, 120)
+        self.btnCookie = _button(self.extraBox, "仅扫描 Cookie", b"cookieImport:", self, 246, 4, 120)
+        self.btnCancelImp = _button(self.extraBox, "取消等待", b"cancelImport:", self, 374, 4, 90)
         self.btnCancelImp.setEnabled_(False)
-        self.status = _label(view, "", 24, 376, 592, 22, 12)
+        self.extraBox.setHidden_(True)
+        self.status = _label(acc, "", 28, _py(232, 36), 464, 36, 12)
 
-        _label(view, "刷新与通知", 24, 340, 400, 22, 16)
-        _label(view, "刷新间隔（分钟）", 24, 314, 160, 16, 12)
-        self.intervalField = _field(view, str(int(cfg.get("refresh_interval_minutes", 10))), 190, 310, 64, 24)
-        _label(view, "告警阈值，例如 50,20,5", 24, 282, 220, 16, 12)
+        ntf = self.pageNotify
+        _label(ntf, "刷新与通知", 28, _py(20, 22), 300, 22, 16)
+        _label(ntf, "刷新间隔（分钟）", 28, _py(60, 18), 160, 18, 13)
+        self.intervalField = _field(
+            ntf, str(int(cfg.get("refresh_interval_minutes", 10))), 220, _py(56, 26), 72, 26
+        )
+        _label(ntf, "告警阈值，例如 50,20,5", 28, _py(100, 18), 180, 18, 13)
         thresholds = cfg.get("alert_thresholds") or [50, 20, 5]
-        self.thresholdField = _field(view, ",".join(str(int(x)) for x in thresholds), 250, 278, 140, 24)
-        self.notifyBox = _checkbox(view, "启用用量通知", bool(cfg.get("notify_enabled", True)), 24, 246, 220)
+        self.thresholdField = _field(
+            ntf, ",".join(str(int(x)) for x in thresholds), 220, _py(96, 26), 160, 26
+        )
+        self.notifyBox = _checkbox(ntf, "启用用量通知", bool(cfg.get("notify_enabled", True)), 28, _py(148, 22), 240)
         self.exhaustBox = _checkbox(
-            view, "启用耗尽风险通知", bool(cfg.get("notify_exhaustion_risk", True)), 250, 246, 220
+            ntf, "启用耗尽风险通知", bool(cfg.get("notify_exhaustion_risk", True)), 28, _py(184, 22), 260
         )
 
-        _label(view, "菜单栏与启动", 24, 208, 400, 22, 16)
-        _label(view, "菜单栏图标", 24, 182, 120, 16, 12)
+        menu = self.pageMenu
+        _label(menu, "菜单栏与启动", 28, _py(20, 22), 300, 22, 16)
+        _label(menu, "菜单栏图标", 28, _py(64, 18), 120, 18, 13)
         self.modePopup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(150, 176, 160, 26), False
+            NSMakeRect(220, _py(60, 26), 180, 26), False
         )
-        self._modes = [("ring", "圆环百分比"), ("number", "纯数字"), ("dot", "仅色点")]
         for _key, title in self._modes:
             self.modePopup.addItemWithTitle_(title)
         cur = str(cfg.get("tray_display_mode") or "ring")
         idx = next((i for i, (k, _) in enumerate(self._modes) if k == cur), 0)
         self.modePopup.selectItemAtIndex_(idx)
-        view.addSubview_(self.modePopup)
+        menu.addSubview_(self.modePopup)
         self.autostartBox = _checkbox(
-            view, "开机自启（下次登录生效）", bool(cfg.get("autostart_enabled", True)), 24, 146, 280
+            menu, "开机自启（下次登录生效）", bool(cfg.get("autostart_enabled", True)), 28, _py(112, 22), 300
         )
 
-        self.hint = _label(view, "", 24, 90, 360, 18, 12)
-        _button(view, "取消", b"cancel:", self, 300, 28, 90)
-        _button(view, "应用", b"apply:", self, 400, 28, 90)
-        _button(view, "保存", b"save:", self, 500, 28, 90)
+        self.hint = _label(view, "", 28, 22, 200, 18, 12)
+        _button(view, "取消", b"cancel:", self, 218, 16, 84)
+        _button(view, "应用", b"apply:", self, 310, 16, 84)
+        _button(view, "保存", b"save:", self, 402, 16, 84)
+
+        self._install_toolbar()
+        self._show_page("account")
+
+    def _install_toolbar(self) -> None:
+        toolbar = NSToolbar.alloc().initWithIdentifier_("CursorTokenSettings")
+        toolbar.setDelegate_(self)
+        toolbar.setAllowsUserCustomization_(False)
+        try:
+            toolbar.setDisplayMode_(1)  # icon + label
+        except Exception:
+            pass
+        self.window.setToolbar_(toolbar)
+        self._toolbar = toolbar
+        try:
+            toolbar.setSelectedItemIdentifier_(_PANE_ACCOUNT)
+        except Exception:
+            pass
+
+    def toolbarAllowedItemIdentifiers_(self, _toolbar=None):
+        return [_PANE_ACCOUNT, _PANE_NOTIFY, _PANE_MENU]
+
+    def toolbarDefaultItemIdentifiers_(self, _toolbar=None):
+        return [_PANE_ACCOUNT, _PANE_NOTIFY, _PANE_MENU]
+
+    def toolbarSelectableItemIdentifiers_(self, _toolbar=None):
+        return [_PANE_ACCOUNT, _PANE_NOTIFY, _PANE_MENU]
+
+    def toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar_(
+        self, _toolbar=None, ident=None, _flag=None
+    ):
+        item = NSToolbarItem.alloc().initWithItemIdentifier_(ident)
+        title = _PANE_TITLES.get(ident, str(ident))
+        item.setLabel_(title)
+        item.setPaletteLabel_(title)
+        item.setTarget_(self)
+        item.setAction_(b"selectPane:")
+        try:
+            from AppKit import NSImage
+
+            symbol = _PANE_SYMBOLS.get(ident)
+            if symbol:
+                img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, None)
+                if img is not None:
+                    item.setImage_(img)
+        except Exception:
+            pass
+        return item
+
+    def selectPane_(self, sender=None) -> None:
+        ident = None
+        try:
+            ident = sender.itemIdentifier()
+        except Exception:
+            ident = getattr(sender, "itemIdentifier", lambda: None)()
+        self._show_page(str(ident or _PANE_ACCOUNT))
+
+    def showPage_(self, ident: str) -> None:
+        self._show_page(ident)
+
+    def _show_page(self, ident: str) -> None:
+        key = ident if ident in _PANE_TITLES else _PANE_ACCOUNT
+        self._page = key
+        self.pageAccount.setHidden_(key != _PANE_ACCOUNT)
+        self.pageNotify.setHidden_(key != _PANE_NOTIFY)
+        self.pageMenu.setHidden_(key != _PANE_MENU)
+        try:
+            self.window.toolbar().setSelectedItemIdentifier_(key)
+        except Exception:
+            pass
+        app_log(f"settings page {key}")
+
+    def toggleExtras_(self, _sender=None) -> None:
+        self._extras_open = not bool(getattr(self, "_extras_open", False))
+        self.extraBox.setHidden_(not self._extras_open)
+        try:
+            self.btnMore.setTitle_("其他导入方式 ▾" if self._extras_open else "其他导入方式 ▸")
+        except Exception:
+            pass
 
     def focusTokenField(self) -> None:
         try:
@@ -576,6 +696,24 @@ class SettingsController(NSObject):
             except Exception as exc:
                 app_log(f"on_saved failed: {exc}")
         return True
+
+
+def _py(from_top: float, height: float) -> float:
+    return _PAGE_H - from_top - height
+
+
+def _link_button(parent, title: str, action, target, x: float, y: float, w: float, h: float = 22):
+    btn = NSButton.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
+    btn.setTitle_(title)
+    btn.setBordered_(False)
+    btn.setTarget_(target)
+    btn.setAction_(action)
+    try:
+        btn.setFont_(NSFont.systemFontOfSize_(13))
+    except Exception:
+        pass
+    parent.addSubview_(btn)
+    return btn
 
 
 def _label(parent, text: str, x: float, y: float, w: float, h: float = 18, size: float = 13):
