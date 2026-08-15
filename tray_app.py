@@ -88,15 +88,26 @@ class TrayApp:
 
     def _on_icon_ready(self, icon: pystray.Icon) -> None:
         if IS_MAC:
-            try:
-                self.popups.attach_main_thread()
-            except Exception:
-                pass
             icon.visible = True
             try:
-                icon.title = ""
+                from AppKit import NSApp, NSApplicationActivationPolicyAccessory
+
+                NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
             except Exception:
                 pass
+            # 先让 NSStatusItem 出现，再创建 Tk，避免抢 NSApplication 导致图标不显示
+            def _attach_tk() -> None:
+                try:
+                    self.popups.attach_main_thread()
+                except Exception:
+                    pass
+
+            try:
+                from PyObjCTools import AppHelper
+
+                AppHelper.callLater(0.4, _attach_tk)
+            except Exception:
+                _attach_tk()
             return
 
         from tray_hover import enable_hover_flyout, patch_pystray_uid
@@ -546,7 +557,15 @@ class TrayApp:
             image = create_idle_icon(mode=mode)
 
         self.icon.icon = image
-        self.icon.title = ""
+        if IS_MAC:
+            if usage is not None:
+                self.icon.title = f"{usage.remaining_percent:.0f}%"
+            elif err and str(err).startswith("未配置"):
+                self.icon.title = "Token"
+            else:
+                self.icon.title = "Token"
+        else:
+            self.icon.title = ""
 
         hist, burn = self._history_payload()
         self.popups.update_status(

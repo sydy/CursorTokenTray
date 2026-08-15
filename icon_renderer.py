@@ -20,6 +20,25 @@ def remaining_color(remaining_percent: float) -> tuple[int, int, int]:
     return (231, 76, 60)
 
 
+def _macos_menubar() -> bool:
+    import sys
+
+    return sys.platform == "darwin"
+
+
+def _disc_fill() -> tuple[int, int, int, int] | None:
+    """Windows 托盘用深色底；macOS 菜单栏深色模式下深色底会隐形，改半透明浅底。"""
+    if _macos_menubar():
+        return (255, 255, 255, 42)
+    return (16, 18, 22, 230)
+
+
+def _track_color() -> tuple[int, int, int, int]:
+    if _macos_menubar():
+        return (236, 236, 240, 255)
+    return (72, 76, 84, 255)
+
+
 @lru_cache(maxsize=1)
 def tray_icon_size() -> int:
     """尽量用大图，系统缩放到托盘 / 菜单栏时更清晰。"""
@@ -119,12 +138,23 @@ def _create_ring_icon(
     inner_r = max(outer_r - ring_w, outer_r * 0.45)
 
     bg_r = outer_r - ring_w * 0.08
-    draw.ellipse(
-        (cx - bg_r, cy - bg_r, cx + bg_r, cy + bg_r),
-        fill=(16, 18, 22, 230),
-    )
+    disc = _disc_fill()
+    if disc is not None:
+        draw.ellipse((cx - bg_r, cy - bg_r, cx + bg_r, cy + bg_r), fill=disc)
+    if _macos_menubar():
+        halo = max(scale * 1.2, outer_r * 0.06)
+        _draw_ring(
+            draw,
+            cx,
+            cy,
+            inner_r - halo,
+            outer_r + halo,
+            0.0,
+            360.0,
+            (20, 20, 22, 90),
+        )
 
-    track = (72, 76, 84, 255)
+    track = _track_color()
     _draw_ring(draw, cx, cy, inner_r, outer_r, 0.0, 360.0, track)
 
     if error:
@@ -175,11 +205,13 @@ def _create_number_icon(
     ring_w = outer_r * 0.12
     inner_r = outer_r - ring_w
 
-    draw.ellipse(
-        (cx - outer_r * 0.92, cy - outer_r * 0.92, cx + outer_r * 0.92, cy + outer_r * 0.92),
-        fill=(16, 18, 22, 230),
-    )
-    track = (72, 76, 84, 255)
+    disc = _disc_fill()
+    if disc is not None:
+        draw.ellipse(
+            (cx - outer_r * 0.92, cy - outer_r * 0.92, cx + outer_r * 0.92, cy + outer_r * 0.92),
+            fill=disc,
+        )
+    track = _track_color()
     _draw_ring(draw, cx, cy, inner_r, outer_r, 0.0, 360.0, track)
 
     if error:
@@ -327,13 +359,15 @@ def _draw_center_glyph(
     y = cy - th / 2 - bbox[1] - inner_r * 0.02
 
     stroke = max(1, int(inner_r * 0.035))
+    # 菜单栏深色背景下，深色描边会把数字吃掉；改用浅色描边
+    stroke_fill = (255, 255, 255, 230) if _macos_menubar() else (8, 10, 14, 255)
     draw.text(
         (x, y),
         text,
         font=font,
         fill=rgb + (255,),
-        stroke_width=stroke,
-        stroke_fill=(8, 10, 14, 255),
+        stroke_width=stroke if not _macos_menubar() else max(stroke, int(inner_r * 0.06)),
+        stroke_fill=stroke_fill,
     )
 
 
