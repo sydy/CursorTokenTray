@@ -612,7 +612,52 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertIn("查看用量账单", text)
         self.assertIn("status_pill_text", text)
         self.assertIn("format_estimate_caption", text)
+        self.assertIn("popup_origin_for_anchor", text)
+        self.assertIn("watch_ring_metrics", text)
         self.assertNotIn("remaining_color", text)
+
+    def test_watch_ring_metrics_leave_digit_gap(self) -> None:
+        from macos_menubar import watch_ring_metrics
+
+        m = watch_ring_metrics(22.0)
+        self.assertGreaterEqual(m["ring_w"], 1.85)
+        self.assertLessEqual(m["ring_w"], 2.4)
+        self.assertAlmostEqual(m["track_alpha"], 0.30)
+        self.assertLess(m["digit_2"], m["inner_r"] * 1.25)
+        self.assertGreater(m["inner_r"] - m["digit_2"] / 2, 0.8)
+
+    def test_popup_origin_right_aligns_to_icon(self) -> None:
+        from macos_menubar import popup_origin_for_anchor
+
+        x, y = popup_origin_for_anchor(
+            icon=(1200, 878, 22, 22),
+            popup=(456, 236),
+            visible=(0, 0, 1440, 875),
+            gap=10,
+            margin=8,
+        )
+        self.assertAlmostEqual(x, 1200 + 22 - 456)
+        self.assertAlmostEqual(y, 875 - 10 - 236)
+
+    def test_popup_origin_stays_on_screen(self) -> None:
+        from macos_menubar import popup_origin_for_anchor
+
+        x, y = popup_origin_for_anchor(
+            icon=(80, 878, 22, 22),
+            popup=(456, 236),
+            visible=(0, 0, 1440, 875),
+        )
+        self.assertGreaterEqual(x, 8)
+        self.assertLessEqual(x + 456, 1440 - 8)
+        self.assertGreaterEqual(y, 8)
+
+        x2, _ = popup_origin_for_anchor(
+            icon=(1420, 878, 22, 22),
+            popup=(456, 236),
+            visible=(0, 0, 1440, 875),
+        )
+        self.assertLessEqual(x2 + 456, 1440 - 8)
+        self.assertGreaterEqual(x2, 8)
 
     def test_menubar_api_importable(self) -> None:
         import macos_menubar
