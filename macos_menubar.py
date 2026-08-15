@@ -86,6 +86,46 @@ _NS_CONTROL = 1 << 18
 
 PANEL_W = 456.0
 PANEL_H = 236.0
+POPUP_GAP = 10.0
+POPUP_MARGIN = 8.0
+
+
+def popup_origin_for_anchor(
+    *,
+    icon: tuple[float, float, float, float],
+    popup: tuple[float, float],
+    visible: tuple[float, float, float, float],
+    gap: float = POPUP_GAP,
+    margin: float = POPUP_MARGIN,
+) -> tuple[float, float]:
+    """把浮层挂到菜单栏图标下方（屏幕坐标，原点左下）。
+
+    右对齐图标，避免 456pt 宽的浮层被 clamp 到屏幕最左边。
+    垂直方向贴在菜单栏下方的 visibleFrame 里，不要和状态栏重叠。
+    """
+    ix, iy, iw, ih = (float(v) for v in icon)
+    pw, ph = (float(v) for v in popup)
+    sx, sy, sw, sh = (float(v) for v in visible)
+    left = sx + margin
+    right = sx + sw - margin
+    bottom = sy + margin
+    top = sy + sh  # visible 上沿就是菜单栏下沿
+
+    x = ix + iw - pw
+    if x < left:
+        x = left
+    if x + pw > right:
+        x = right - pw
+    if x < left:
+        x = left
+
+    y = top - gap - ph
+    icon_bottom = iy
+    if y + ph > icon_bottom - 2:
+        y = icon_bottom - gap - ph
+    if y < bottom:
+        y = bottom
+    return x, y
 
 
 def install(icon, *, on_left_click: Callable[[], None] | None = None) -> None:
@@ -655,32 +695,125 @@ def _present(
     ctrl.build()
     ctrl.apply_data(usage, error_message, updated_at)
     _STATUS = ctrl
-    _position_panel(ctrl.window, icon)
     _front_panel(ctrl.window)
+    _position_panel(ctrl.window, icon)
+    if AppHelper is not None:
+        AppHelper.callLater(0.05, lambda: _position_panel(ctrl.window, icon))
     _install_outside_monitor(ctrl)
     app_log("status panel shown")
 
 
-def _position_panel(window, icon) -> None:
+def _anchor_screen_rect(icon) -> tuple[float, float, float, float] | None:
+    """返回图标的屏幕矩形 (x, y, w, h)，原点左下。"""
+    candidates: list[tuple[float, float, float, float]] = []
     try:
         item = getattr(icon, "_status_item", None) if icon is not None else None
-        if item is None:
+        button = item.button() if item is not None else None
+        win = button.window() if button is not None else None
+        if win is not None:
+            fr = win.frame()
+            candidates.append(
+                (
+                    float(fr.origin.x),
+                    float(fr.origin.y),
+                    float(fr.size.width),
+                    float(fr.size.height),
+                )
+            )
+            local = button.convertRect_toView_(button.bounds(), None)
+            scr = win.convertRectToScreen_(local)
+            candidates.append(
+                (
+                    float(scr.origin.x),
+                    float(scr.origin.y),
+                    float(scr.size.width),
+                    float(scr.size.height),
+                )
+            )
+    except Exception as exc:
+        app_log(f"status item rect failed: {exc}")
+    try:
+        from AppKit import NSEvent
+
+        pt = NSEvent.mouseLocation()
+        candidates.append((float(pt.x) - 11.0, float(pt.y) - 11.0, 22.0, 22.0))
+    except Exception:
+        pass
+
+    def score(rect: tuple[float, float, float, float]) -> float:
+        x, y, w, h = rect
+        s = 0.0
+        if 10 <= w <= 64:
+            s += 8
+        if 10 <= h <= 40:
+            s += 4
+        if w > 200:
+            s -= 8
+        if x > 80:
+            s += 3
+        return s + min(x, 2000) / 4000.0
+
+    if not candidates:
+        return None
+    return max(candidates, key=score)
+
+
+def _visible_frame_for(rect: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    try:
+        from AppKit import NSScreen
+
+        cx = rect[0] + rect[2] / 2.0
+        cy = rect[1] + rect[3] / 2.0
+        chosen = None
+        for screen in list(NSScreen.screens() or []):
+            vis = screen.visibleFrame()
+            vx, vy = float(vis.origin.x), float(vis.origin.y)
+            vw, vh = float(vis.size.width), float(vis.size.height)
+            if vx <= cx <= vx + vw and vy <= cy <= vy + vh + 32:
+                chosen = (vx, vy, vw, vh)
+                break
+        if chosen is None:
+            main = NSScreen.mainScreen()
+            vis = main.visibleFrame() if main is not None else None
+            if vis is not None:
+                chosen = (
+                    float(vis.origin.x),
+                    float(vis.origin.y),
+                    float(vis.size.width),
+                    float(vis.size.height),
+                )
+        if chosen is not None:
+            return chosen
+    except Exception as exc:
+        app_log(f"visible frame failed: {exc}")
+    return (0.0, 0.0, 1440.0, 900.0)
+
+
+def _position_panel(window, icon) -> None:
+    try:
+        frame = window.frame()
+        pw, ph = float(frame.size.width), float(frame.size.height)
+        if pw < 8 or ph < 8:
+            pw, ph = PANEL_W, PANEL_H
+        anchor = _anchor_screen_rect(icon)
+        if anchor is None:
             window.center()
             return
-        button = item.button()
-        rect = button.window().convertRectToScreen_(
-            button.convertRect_toView_(button.bounds(), None)
+        visible = _visible_frame_for(anchor)
+        x, y = popup_origin_for_anchor(
+            icon=anchor,
+            popup=(pw, ph),
+            visible=visible,
         )
-        frame = window.frame()
-        w = float(frame.size.width)
-        h = float(frame.size.height)
-        x = float(rect.origin.x) + float(rect.size.width) - w
-        if x < 8:
-            x = 8.0
-        y = float(rect.origin.y) - h - 8.0
-        if y < 8:
-            y = 8.0
-        window.setFrameOrigin_((x, y))
+        window.setFrame_display_animate_(
+            NSMakeRect(x, y, pw, ph),
+            True,
+            False,
+        )
+        app_log(
+            f"status panel at ({x:.0f},{y:.0f}) anchor=({anchor[0]:.0f},{anchor[1]:.0f},"
+            f"{anchor[2]:.0f}x{anchor[3]:.0f})"
+        )
     except Exception as exc:
         app_log(f"position status panel failed: {exc}")
         try:
