@@ -1,4 +1,4 @@
-"""从本机 Chrome / Edge / Firefox 读取 Cursor Session Cookie，并校验用量。"""
+"""从本机 Safari / Firefox / Chrome / Edge 读取 Cursor Session Cookie，并校验用量。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from platform_util import IS_MAC, app_log
 
 LOGIN_URL = "https://cursor.com/dashboard"
 COOKIE_NAME = "WorkosCursorSessionToken"
-COOKIE_HOST_HINTS = ("cursor.com",)
+COOKIE_HOST_HINTS = ("cursor.com", "cursor.sh")
 
 # 拷贝/读库/单次校验的上限，避免浏览器锁文件或网络拖死导入线程
 _COPY_TIMEOUT_SEC = 3.0
@@ -43,6 +43,11 @@ class _ScanStats:
     v20: int = 0
     keychain_ok: bool = False
     keychain_error: str = ""
+    safari_files: int = 0
+    safari_denied: int = 0
+    safari_rows: int = 0
+    firefox_profiles: int = 0
+    firefox_rows: int = 0
 
 
 _SCAN = _ScanStats()
@@ -92,11 +97,63 @@ class ImportResult:
     message: str = ""
 
 
-def open_login_page() -> None:
-    """打开登录页（异步）。优先 Edge / Chrome / Firefox，便于随后读取 Cookie。"""
+def _default_prefer_browsers(prefer: str | None = None) -> tuple[str, ...]:
+    firefox_first = (
+        "firefox",
+        "firefox-dev",
+        "firefox-nightly",
+        "librewolf",
+        "waterfox",
+        "zen",
+    )
+    if prefer == "safari":
+        return ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
+    if prefer in firefox_first:
+        return firefox_first + ("safari", "edge", "chrome", "brave", "arc")
+    if IS_MAC:
+        return ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
+    return firefox_first + ("edge", "chrome")
+
+
+def preferred_mac_app_names(prefer: str | None = None) -> list[str]:
+    """`open -a` 用的应用名。macOS 默认先 Safari / Firefox，避开 Chrome 加密。"""
+    firefox = ["Firefox", "Firefox Developer Edition", "Firefox Nightly", "LibreWolf", "Zen"]
+    if prefer == "safari":
+        return ["Safari"]
+    if prefer in {"firefox", "firefox-dev", "firefox-nightly", "librewolf", "waterfox", "zen"}:
+        return firefox
+    if prefer == "chrome":
+        return ["Google Chrome"]
+    if prefer == "edge":
+        return ["Microsoft Edge"]
+    if IS_MAC:
+        return ["Safari", *firefox, "Google Chrome", "Microsoft Edge"]
+    return firefox
+
+
+def _open_with_mac_open(prefer: str | None) -> bool:
+    for name in preferred_mac_app_names(prefer):
+        try:
+            result = subprocess.run(
+                ["open", "-a", name, LOGIN_URL],
+                capture_output=True,
+                timeout=6,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            app_log(f"opened login in {name}")
+            return True
+    return False
+
+
+def open_login_page(prefer: str | None = None) -> None:
+    """打开登录页。macOS 默认 Safari，其次 Firefox。"""
 
     def _open() -> None:
-        for exe in _browser_executables():
+        if IS_MAC and _open_with_mac_open(prefer):
+            return
+        for exe in _browser_executables(prefer=prefer):
             try:
                 subprocess.Popen(
                     [str(exe), LOGIN_URL],
@@ -104,6 +161,7 @@ def open_login_page() -> None:
                     stderr=subprocess.DEVNULL,
                     close_fds=True,
                 )
+                app_log(f"opened login via {exe}")
                 return
             except OSError:
                 continue
@@ -186,8 +244,19 @@ def _scan_failure_note() -> str:
         else:
             parts.append(
                 "已找到 Chrome Cookie，但解密结果无效。"
-                "请再点一次导入并「始终允许」钥匙串，或改用 Safari / Firefox / 手动粘贴。"
+                "请改用 Safari / Firefox 登录后再导入，或手动粘贴。"
             )
+    if _SCAN.safari_denied:
+        parts.append(
+            "Safari Cookie 文件存在但读不到，需要完全磁盘访问权限："
+            "系统设置 → 隐私与安全性 → 完全磁盘访问权限，打开 CursorTokenTray 后重试。"
+        )
+    elif IS_MAC and _SCAN.safari_files == 0:
+        parts.append("未找到 Safari Cookie 文件。请先用 Safari 打开并登录 cursor.com。")
+    if _SCAN.firefox_profiles == 0:
+        parts.append("未找到 Firefox 配置目录。若已安装，请先打开过一次 Firefox。")
+    elif _SCAN.firefox_rows == 0:
+        parts.append("已找到 Firefox，但没有 cursor.com 的登录 Cookie。请用 Firefox 登录后再导入。")
     return "\n".join(parts)
 
 
@@ -223,11 +292,7 @@ def import_and_validate(
 ) -> ImportResult:
     """读取本机 Cookie，按新旧尝试校验，返回第一个可用的。"""
     if prefer_browsers is None:
-        prefer_browsers = (
-            ("safari", "firefox", "edge", "chrome", "brave", "arc")
-            if IS_MAC
-            else ("firefox", "edge", "chrome")
-        )
+        prefer_browsers = _default_prefer_browsers()
     if should_cancel and should_cancel():
         return ImportResult(ok=False, message="已取消")
     if on_progress:
@@ -293,6 +358,7 @@ def poll_until_valid(
     *,
     timeout_sec: float = 180.0,
     interval_sec: float = 2.0,
+    prefer_browsers: tuple[str, ...] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> ImportResult:
@@ -308,6 +374,7 @@ def poll_until_valid(
             left = max(0, int(deadline - time.monotonic()))
             on_progress(f"正在检测浏览器 Cookie…（第 {attempt} 次，剩余约 {left}s）")
         result = import_and_validate(
+            prefer_browsers=prefer_browsers,
             validate_timeout=_POLL_VALIDATE_TIMEOUT_SEC,
             skip_tokens=failed_tokens,
             should_cancel=should_cancel,
@@ -333,20 +400,33 @@ def poll_until_valid(
 def start_browser_login_and_import(
     *,
     timeout_sec: float = 180.0,
+    prefer: str | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> ImportResult:
+    opening = {
+        "safari": "正在打开 Safari…",
+        "firefox": "正在打开 Firefox…",
+        "firefox-dev": "正在打开 Firefox…",
+        "chrome": "正在打开 Chrome…",
+    }.get(prefer or "", "正在打开浏览器…")
     if on_progress:
-        on_progress("正在打开浏览器…")
-    open_login_page()
+        on_progress(opening)
+    open_login_page(prefer=prefer)
     if should_cancel and should_cancel():
         return ImportResult(ok=False, message="已取消")
     if on_progress:
-        on_progress("已打开浏览器，请登录 Cursor 账号…")
+        if prefer == "safari":
+            on_progress("已打开 Safari，请登录 Cursor 账号…")
+        elif prefer in {"firefox", "firefox-dev", "firefox-nightly"}:
+            on_progress("已打开 Firefox，请登录 Cursor 账号…")
+        else:
+            on_progress("已打开浏览器，请登录 Cursor 账号…")
     if not _interruptible_sleep(1.0, should_cancel):
         return ImportResult(ok=False, message="已取消")
     return poll_until_valid(
         timeout_sec=timeout_sec,
+        prefer_browsers=_default_prefer_browsers(prefer),
         should_cancel=should_cancel,
         on_progress=on_progress,
     )
@@ -376,11 +456,10 @@ def _import_progress_label() -> str:
 def _no_cookie_message() -> str:
     if IS_MAC:
         return (
-            "未在 Safari / Chrome / Edge / Firefox 中找到 WorkosCursorSessionToken。\n"
-            "请先在浏览器打开并登录 cursor.com，然后再试。\n"
-            "Chrome 系读取 Cookie 会弹出钥匙串授权，请选「始终允许」并输入 Mac 开机密码；"
-            "Safari 需在「系统设置 → 隐私与安全性」给予本工具完全磁盘访问权限。"
-            "也可在浏览器开发者工具里复制 WorkosCursorSessionToken 后手动粘贴。"
+            "未在 Safari / Firefox / Chrome / Edge 中找到 WorkosCursorSessionToken。\n"
+            "建议先点「Safari 登录导入」或「Firefox 登录导入」，在对应浏览器登录 cursor.com。\n"
+            "Safari 若读不到：系统设置 → 隐私与安全性 → 完全磁盘访问权限，打开 CursorTokenTray。\n"
+            "Chrome 仍可能因 Cookie 加密失败。也可手动粘贴 Token。"
         )
     return (
         "未在 Firefox / Chrome / Edge 中找到 WorkosCursorSessionToken。\n"
@@ -392,30 +471,46 @@ def _no_cookie_message() -> str:
 # ---------- 浏览器路径 ----------
 
 
-def _browser_executables() -> list[Path]:
-    """本机常见浏览器可执行文件（优先 Chromium 系，其次 Firefox）。"""
+def _browser_executables(prefer: str | None = None) -> list[Path]:
+    """本机常见浏览器可执行文件。macOS 默认 Safari / Firefox 优先。"""
     if IS_MAC:
-        candidates = [
+        safari = [Path("/Applications/Safari.app/Contents/MacOS/Safari")]
+        firefox = [
+            Path("/Applications/Firefox.app/Contents/MacOS/firefox"),
+            Path("/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox"),
+            Path("/Applications/Firefox Nightly.app/Contents/MacOS/firefox"),
+            Path("/Applications/LibreWolf.app/Contents/MacOS/librewolf"),
+            Path("/Applications/Zen.app/Contents/MacOS/zen"),
+        ]
+        chromium = [
             Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
             Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
             Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
             Path("/Applications/Arc.app/Contents/MacOS/Arc"),
-            Path("/Applications/Firefox.app/Contents/MacOS/firefox"),
-            Path("/Applications/Safari.app/Contents/MacOS/Safari"),
         ]
+        if prefer == "safari":
+            candidates = safari + firefox + chromium
+        elif prefer in {"firefox", "firefox-dev", "firefox-nightly", "librewolf", "zen"}:
+            candidates = firefox + safari + chromium
+        else:
+            candidates = safari + firefox + chromium
     else:
         pf = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
         pf86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
         local = Path(os.environ.get("LOCALAPPDATA", ""))
-        candidates = [
+        firefox = [
+            pf / "Mozilla Firefox" / "firefox.exe",
+            pf86 / "Mozilla Firefox" / "firefox.exe",
+            local / "Firefox Developer Edition" / "firefox.exe",
+        ]
+        chromium = [
             pf86 / "Microsoft" / "Edge" / "Application" / "msedge.exe",
             pf / "Microsoft" / "Edge" / "Application" / "msedge.exe",
             pf / "Google" / "Chrome" / "Application" / "chrome.exe",
             pf86 / "Google" / "Chrome" / "Application" / "chrome.exe",
             local / "Google" / "Chrome" / "Application" / "chrome.exe",
-            pf / "Mozilla Firefox" / "firefox.exe",
-            pf86 / "Mozilla Firefox" / "firefox.exe",
         ]
+        candidates = firefox + chromium if prefer in {"firefox", "firefox-dev"} else chromium + firefox
     seen: set[str] = set()
     out: list[Path] = []
     for path in candidates:
@@ -514,57 +609,74 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
     return found
 
 
-def _firefox_support_root() -> Path:
+def _firefox_product_roots() -> list[tuple[str, Path]]:
     if IS_MAC:
-        return Path.home() / "Library" / "Application Support" / "Firefox"
-    return Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox"
+        support = Path.home() / "Library" / "Application Support"
+        roots = [
+            ("firefox", support / "Firefox"),
+            ("firefox-dev", support / "Firefox Developer Edition"),
+            ("firefox-nightly", support / "Firefox Nightly"),
+            ("librewolf", support / "LibreWolf"),
+            ("waterfox", support / "Waterfox"),
+            ("zen", support / "zen"),
+        ]
+    else:
+        appdata = Path(os.environ.get("APPDATA", ""))
+        roots = [
+            ("firefox", appdata / "Mozilla" / "Firefox"),
+            ("firefox-dev", appdata / "Mozilla" / "Firefox Developer Edition"),
+            ("firefox-nightly", appdata / "Mozilla" / "Firefox Nightly"),
+            ("librewolf", appdata / "librewolf"),
+            ("waterfox", appdata / "Waterfox"),
+            ("zen", appdata / "zen"),
+        ]
+    return [(name, path) for name, path in roots if path.is_dir()]
 
 
-def _firefox_profiles_root() -> Path:
-    return _firefox_support_root() / "Profiles"
-
-
-def _iter_firefox_profiles() -> list[Path]:
-    """返回含 cookies.sqlite 的 Firefox 配置目录。"""
+def _iter_firefox_profiles(support: Path) -> list[Path]:
+    """返回某 Firefox 产品目录下含 cookies.sqlite 的配置。"""
     profiles: list[Path] = []
     seen: set[str] = set()
-    support = _firefox_support_root()
 
-    # profiles.ini 更准确（含相对/绝对路径）
-    ini = support / "profiles.ini"
-    if ini.is_file():
+    def _add(path: Path) -> None:
+        try:
+            key = str(path.resolve()) if path.exists() else str(path)
+        except OSError:
+            key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        if (path / "cookies.sqlite").is_file():
+            profiles.append(path)
+
+    for ini_name in ("profiles.ini", "installs.ini"):
+        ini = support / ini_name
+        if not ini.is_file():
+            continue
         try:
             cp = configparser.ConfigParser()
             cp.read(ini, encoding="utf-8")
             for section in cp.sections():
-                if not section.lower().startswith("profile"):
+                key = "Path" if section.lower().startswith("profile") else "Default"
+                if not section.lower().startswith("profile") and not section.lower().startswith(
+                    "install"
+                ):
                     continue
-                rel = cp.get(section, "Path", fallback="").strip()
+                rel = cp.get(section, key, fallback="").strip()
                 if not rel:
                     continue
-                is_rel = cp.get(section, "IsRelative", fallback="1").strip() == "1"
+                is_rel = cp.get(section, "IsRelative", fallback="1").strip() != "0"
                 path = support / rel if is_rel else Path(rel)
-                key = str(path.resolve()) if path.exists() else str(path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if (path / "cookies.sqlite").is_file():
-                    profiles.append(path)
+                _add(path)
         except Exception:
             pass
 
-    root = _firefox_profiles_root()
+    root = support / "Profiles"
     if root.is_dir():
         try:
             for child in sorted(root.iterdir()):
-                if not child.is_dir():
-                    continue
-                key = str(child.resolve())
-                if key in seen:
-                    continue
-                if (child / "cookies.sqlite").is_file():
-                    seen.add(key)
-                    profiles.append(child)
+                if child.is_dir():
+                    _add(child)
         except OSError:
             pass
     return profiles
@@ -572,26 +684,30 @@ def _iter_firefox_profiles() -> list[Path]:
 
 def _find_firefox_candidates() -> list[CookieCandidate]:
     found: list[CookieCandidate] = []
-    for profile_dir in _iter_firefox_profiles():
-        db_path = profile_dir / "cookies.sqlite"
-        try:
-            rows = _read_firefox_cookie_rows(db_path)
-        except Exception:
-            continue
-        for host, value, last_access in rows:
-            if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
+    for browser, support in _firefox_product_roots():
+        for profile_dir in _iter_firefox_profiles(support):
+            _SCAN.firefox_profiles += 1
+            db_path = profile_dir / "cookies.sqlite"
+            try:
+                rows = _read_firefox_cookie_rows(db_path)
+            except Exception as exc:
+                app_log(f"firefox cookies read failed {db_path}: {exc}")
                 continue
-            token = _safe_normalize(value)
-            if not token:
-                continue
-            found.append(
-                CookieCandidate(
-                    browser="firefox",
-                    profile=profile_dir.name,
-                    token=token,
-                    last_update=_firefox_to_unix_us(int(last_access or 0)),
+            for host, value, last_access in rows:
+                _SCAN.firefox_rows += 1
+                if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
+                    continue
+                token = _safe_normalize(value)
+                if not token:
+                    continue
+                found.append(
+                    CookieCandidate(
+                        browser=browser,
+                        profile=profile_dir.name,
+                        token=token,
+                        last_update=_firefox_to_unix_us(int(last_access or 0)),
+                    )
                 )
-            )
     return found
 
 
@@ -848,33 +964,101 @@ def _decrypt_chrome_macos(encrypted: bytes, key: bytes) -> str:
     return _decode_cookie_bytes(plain)
 
 
-def _find_safari_candidates() -> list[CookieCandidate]:
-    """读取 Safari binarycookies（可能需要完全磁盘访问权限）。"""
-    found: list[CookieCandidate] = []
-    candidates = [
-        Path.home() / "Library" / "Cookies" / "Cookies.binarycookies",
-        Path.home()
+def _safari_search_roots() -> list[Path]:
+    home = Path.home()
+    return [
+        home / "Library" / "Containers" / "com.apple.Safari" / "Data" / "Library" / "Cookies",
+        home
+        / "Library"
+        / "Containers"
+        / "com.apple.SafariTechnologyPreview"
+        / "Data"
+        / "Library"
+        / "Cookies",
+        home / "Library" / "Cookies",
+        home / "Library" / "WebKit" / "com.apple.Safari" / "WebsiteData",
+        home
         / "Library"
         / "Containers"
         / "com.apple.Safari"
         / "Data"
         / "Library"
-        / "Cookies"
-        / "Cookies.binarycookies",
+        / "WebKit"
+        / "WebsiteData",
     ]
+
+
+def _iter_named_files(root: Path, names: set[str], *, max_depth: int = 5) -> list[Path]:
+    found: list[Path] = []
+    if max_depth < 0:
+        return found
+    try:
+        if root.is_file() and root.name in names:
+            return [root]
+        if not root.is_dir():
+            return found
+        for child in root.iterdir():
+            try:
+                if child.is_file() and child.name in names:
+                    found.append(child)
+                elif child.is_dir() and max_depth > 0:
+                    found.extend(_iter_named_files(child, names, max_depth=max_depth - 1))
+            except PermissionError:
+                _SCAN.safari_denied += 1
+            except OSError:
+                continue
+    except PermissionError:
+        _SCAN.safari_denied += 1
+    except OSError:
+        pass
+    return found
+
+
+def _safari_cookie_files() -> list[Path]:
+    names = {"Cookies.binarycookies", "Cookies.db", "Cookies.sqlite"}
+    found: list[Path] = []
     seen: set[str] = set()
-    for path in candidates:
-        key = str(path)
-        if key in seen or not path.is_file():
+    for root in _safari_search_roots():
+        for path in _iter_named_files(root, names):
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(path)
+    return found
+
+
+def _file_readable(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            handle.read(8)
+        return True
+    except PermissionError:
+        _SCAN.safari_denied += 1
+        return False
+    except OSError:
+        return False
+
+
+def _find_safari_candidates() -> list[CookieCandidate]:
+    """读取 Safari binarycookies / sqlite（容器路径优先，可能需要完全磁盘访问权限）。"""
+    found: list[CookieCandidate] = []
+    for path in _safari_cookie_files():
+        _SCAN.safari_files += 1
+        if not _file_readable(path):
             continue
-        seen.add(key)
         try:
-            rows = parse_safari_binarycookies(path)
-        except Exception:
+            if path.suffix.lower() in {".db", ".sqlite"}:
+                rows = parse_safari_sqlite_cookies(path)
+            else:
+                rows = parse_safari_binarycookies(path)
+        except Exception as exc:
+            app_log(f"safari cookie parse failed {path}: {exc}")
             continue
         for host, name, value, last_access in rows:
             if name != COOKIE_NAME:
                 continue
+            _SCAN.safari_rows += 1
             if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
                 continue
             token = _safe_normalize(value)
@@ -883,12 +1067,83 @@ def _find_safari_candidates() -> list[CookieCandidate]:
             found.append(
                 CookieCandidate(
                     browser="safari",
-                    profile="Default",
+                    profile=path.parent.name,
                     token=token,
                     last_update=_firefox_to_unix_us(int(last_access or 0)),
                 )
             )
     return found
+
+
+def parse_safari_sqlite_cookies(path: Path) -> list[tuple[str, str, str, int]]:
+    """尽力读取 WebKit / Safari sqlite Cookie（表结构因版本而异）。"""
+    tmp_dir = tempfile.mkdtemp(prefix="cursor_tray_safaricookies_")
+    try:
+        dst = Path(tmp_dir) / path.name
+        _copy_with_timeout(path, dst)
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(path) + suffix)
+            if side.is_file():
+                try:
+                    _copy_with_timeout(side, Path(str(dst) + suffix), timeout=1.5)
+                except (OSError, TimeoutError):
+                    pass
+        conn = sqlite3.connect(str(dst), timeout=_SQLITE_TIMEOUT_SEC)
+        try:
+            tables = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            ]
+            rows: list[tuple[str, str, str, int]] = []
+            for table in tables:
+                cols = {
+                    str(info[1]).lower(): str(info[1])
+                    for info in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+                }
+                name_col = next((cols[c] for c in ("name", "cookie_name", "nshttpcookiename") if c in cols), None)
+                value_col = next((cols[c] for c in ("value", "cookie_value", "nshttpcookievalue") if c in cols), None)
+                host_col = next(
+                    (
+                        cols[c]
+                        for c in ("host", "domain", "host_key", "origin", "nshttpcookiedomain")
+                        if c in cols
+                    ),
+                    None,
+                )
+                time_col = next(
+                    (
+                        cols[c]
+                        for c in ("last_access", "lastaccessed", "last_update", "creation")
+                        if c in cols
+                    ),
+                    None,
+                )
+                if not name_col or not value_col:
+                    continue
+                select = [name_col, value_col]
+                if host_col:
+                    select.append(host_col)
+                if time_col:
+                    select.append(time_col)
+                quoted = ", ".join(f'"{c}"' for c in select)
+                try:
+                    cur = conn.execute(f'SELECT {quoted} FROM "{table}"')
+                except sqlite3.Error:
+                    continue
+                for rec in cur.fetchall():
+                    name = str(rec[0] or "")
+                    value = str(rec[1] or "")
+                    host = str(rec[2] or "") if host_col else ""
+                    last_access = int(rec[3] or 0) if time_col and len(rec) > 3 else 0
+                    if name:
+                        rows.append((host, name, value, last_access))
+            return rows
+        finally:
+            conn.close()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def parse_safari_binarycookies(path: Path) -> list[tuple[str, str, str, int]]:

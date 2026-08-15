@@ -86,15 +86,15 @@ python3 main.py
 ### 方式一：浏览器登录并导入（推荐）
 
 1. 托盘 / 菜单栏右键 → **设置…**
-2. 点击 **浏览器登录并导入**
+2. 点击 **Safari 登录导入** 或 **Firefox 登录导入**（macOS 推荐这两项；Chrome 常因 Cookie 加密读不到）
 3. 在打开的浏览器中登录 [cursor.com](https://cursor.com/dashboard)
-4. 工具会自动读取本机浏览器的 `WorkosCursorSessionToken`，并立即校验用量
+4. 工具会自动读取该浏览器的 `WorkosCursorSessionToken`，并立即校验用量
 
 若浏览器里已经登录，可直接点 **仅导入 Cookie**。
 
-**Windows**：Firefox / Chrome / Edge。部分新版 Chrome 可能启用 App-Bound Cookie 加密导致无法读取；可改用 Firefox / Edge。
+**Windows**：优先 Firefox；Chrome / Edge 部分新版可能启用 App-Bound Cookie 加密导致无法读取。
 
-**macOS**：Safari / Chrome / Edge / Firefox / Brave / Arc。Chrome 系走钥匙串解密；Safari 可能需要在「系统设置 → 隐私与安全性」中授予**完全磁盘访问权限**。
+**macOS**：优先 Safari / Firefox。Safari 若读不到，到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。Chrome 系仍会尝试钥匙串解密，失败时请改用 Safari / Firefox。
 
 ### 方式二：手动粘贴
 

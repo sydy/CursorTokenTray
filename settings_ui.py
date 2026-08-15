@@ -421,9 +421,9 @@ class SettingsWindow:
             account_body,
             title="从浏览器导入",
             description=(
-                "读取 Safari / Chrome / Edge / Firefox，或打开网站登录。"
+                "优先 Safari / Firefox（Chrome 常因 Cookie 加密读不到）。"
                 if IS_MAC
-                else "读取本机已登录浏览器，或打开网站登录。"
+                else "优先 Firefox；部分新版 Chrome 因 App-Bound 加密无法读取。"
             ),
             glyph=_G_GLOBE,
         )
@@ -497,6 +497,7 @@ class SettingsWindow:
             st_off = "disabled" if idle else "normal"
             try:
                 btn_login.configure(state=st_on)
+                btn_firefox.configure(state=st_on)
                 btn_import.configure(state=st_on)
                 btn_cancel_import.configure(state=st_off)
             except tk.TclError:
@@ -534,13 +535,16 @@ class SettingsWindow:
         btn_block = ctk.CTkFrame(import_exp.body_host, fg_color="transparent")
         btn_block.pack(fill="x", pady=(0, 4))
 
-        def run_import(*, open_browser: bool) -> None:
+        def run_import(*, open_browser: bool, prefer: str | None = None) -> None:
             if importing["value"]:
                 return
             importing["value"] = True
             cancel_flag["value"] = False
             _set_import_btns(idle=False)
-            set_auth_status_ui("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
+            if open_browser and prefer == "firefox":
+                set_auth_status_ui("正在打开 Firefox…")
+            else:
+                set_auth_status_ui("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
             root.after(50, _drain_import_events)
 
             def worker() -> None:
@@ -556,6 +560,7 @@ class SettingsWindow:
                     if open_browser:
                         result = start_browser_login_and_import(
                             timeout_sec=180.0,
+                            prefer=prefer,
                             should_cancel=cancel_cb,
                             on_progress=on_progress,
                         )
@@ -580,9 +585,16 @@ class SettingsWindow:
             set_auth_status_ui("正在取消…")
 
         btn_login = ctk.CTkButton(
-            btn_block, text="浏览器登录并导入", command=lambda: run_import(open_browser=True), height=32
+            btn_block,
+            text="Safari 登录导入" if IS_MAC else "浏览器登录并导入",
+            command=lambda: run_import(open_browser=True, prefer="safari" if IS_MAC else None),
+            height=32,
         )
         btn_login.pack(side="left", padx=(0, 8))
+        btn_firefox = make_ghost_button(
+            btn_block, "Firefox 登录导入", lambda: run_import(open_browser=True, prefer="firefox")
+        )
+        btn_firefox.pack(side="left", padx=(0, 8))
         btn_import = make_ghost_button(btn_block, "仅导入 Cookie", lambda: run_import(open_browser=False))
         btn_import.pack(side="left", padx=(0, 8))
         btn_cancel_import = ctk.CTkButton(

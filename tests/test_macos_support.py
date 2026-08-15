@@ -155,6 +155,67 @@ class SafariCookieTests(unittest.TestCase):
         self.assertEqual(name_s, "WorkosCursorSessionToken")
         self.assertEqual(value_s, "cookie-value-abc")
 
+    def test_parse_safari_sqlite(self) -> None:
+        import sqlite3
+
+        from browser_auth import parse_safari_sqlite_cookies
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Cookies.db"
+            conn = sqlite3.connect(path)
+            conn.execute(
+                "CREATE TABLE cookies (name TEXT, value TEXT, host TEXT, last_access INTEGER)"
+            )
+            conn.execute(
+                "INSERT INTO cookies VALUES (?,?,?,?)",
+                ("WorkosCursorSessionToken", "user_01ABC%3A%3AeyJ.aa.bb", ".cursor.com", 123),
+            )
+            conn.commit()
+            conn.close()
+            rows = parse_safari_sqlite_cookies(path)
+        self.assertEqual(len(rows), 1)
+        host, name, value, ts = rows[0]
+        self.assertEqual(host, ".cursor.com")
+        self.assertEqual(name, "WorkosCursorSessionToken")
+        self.assertEqual(value, "user_01ABC%3A%3AeyJ.aa.bb")
+        self.assertEqual(ts, 123)
+
+
+class FirefoxProfileTests(unittest.TestCase):
+    def test_profiles_ini_and_install_default(self) -> None:
+        from browser_auth import _iter_firefox_profiles
+
+        with tempfile.TemporaryDirectory() as tmp:
+            support = Path(tmp)
+            prof = support / "Profiles" / "abcd.default-release"
+            prof.mkdir(parents=True)
+            (prof / "cookies.sqlite").write_bytes(b"")
+            (support / "profiles.ini").write_text(
+                "[InstallDEADBEEF]\n"
+                "Default=Profiles/abcd.default-release\n"
+                "\n"
+                "[Profile0]\n"
+                "Name=default-release\n"
+                "IsRelative=1\n"
+                "Path=Profiles/abcd.default-release\n",
+                encoding="utf-8",
+            )
+            found = _iter_firefox_profiles(support)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].name, "abcd.default-release")
+
+
+class BrowserPreferTests(unittest.TestCase):
+    def test_mac_app_names_prefer_safari_firefox(self) -> None:
+        from browser_auth import COOKIE_HOST_HINTS, _default_prefer_browsers, preferred_mac_app_names
+
+        self.assertIn("cursor.sh", COOKIE_HOST_HINTS)
+        self.assertTrue(any("cursor.sh" in h or "cursor.com" in h for h in COOKIE_HOST_HINTS))
+        self.assertEqual(preferred_mac_app_names("safari")[0], "Safari")
+        self.assertEqual(preferred_mac_app_names("firefox")[0], "Firefox")
+        self.assertEqual(_default_prefer_browsers("safari")[0], "safari")
+        self.assertEqual(_default_prefer_browsers("firefox")[0], "firefox")
+
 
 class InstanceLockUnixTests(unittest.TestCase):
     def test_second_acquire_fails(self) -> None:

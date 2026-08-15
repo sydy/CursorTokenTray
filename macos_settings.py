@@ -263,7 +263,7 @@ def _present(
         if focus_token:
             ctrl.focusTokenField()
         if start_import and not reused:
-            AppHelper.callLater(0.4, ctrl.loginImport_, None)
+            AppHelper.callLater(0.4, ctrl.safariImport_, None)
 
         if owns_loop:
             return
@@ -302,7 +302,7 @@ class SettingsController(NSObject):
         if not hasattr(self, "_in_modal"):
             self._in_modal = False
 
-        width, height = 640.0, 540.0
+        width, height = 640.0, 600.0
         style = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
@@ -320,31 +320,33 @@ class SettingsController(NSObject):
         self.window.setDelegate_(self)
         view = self.window.contentView()
 
-        _label(view, "账户与登录", 24, 500, 400, 22, 16)
-        _label(view, "会话 Token（请勿分享）", 24, 472, 300, 16, 12)
-        self.tokenField = _field(view, str(cfg.get("session_token") or ""), 24, 442, 592, 26)
+        _label(view, "账户与登录", 24, 560, 400, 22, 16)
+        _label(view, "会话 Token（请勿分享）", 24, 532, 300, 16, 12)
+        self.tokenField = _field(view, str(cfg.get("session_token") or ""), 24, 502, 592, 26)
+        _label(view, "Chrome 常因加密读不到，建议用 Safari 或 Firefox 登录后再导入", 24, 474, 592, 16, 11)
 
-        self.btnLogin = _button(view, "浏览器登录并导入", b"loginImport:", self, 24, 376, 160)
-        self.btnCookie = _button(view, "仅导入 Cookie", b"cookieImport:", self, 192, 376, 130)
-        self.btnCancelImp = _button(view, "取消等待", b"cancelImport:", self, 330, 376, 100)
+        self.btnSafari = _button(view, "Safari 登录导入", b"safariImport:", self, 24, 438, 150)
+        self.btnFirefox = _button(view, "Firefox 登录导入", b"firefoxImport:", self, 184, 438, 150)
+        self.btnCookie = _button(view, "仅导入 Cookie", b"cookieImport:", self, 24, 404, 130)
+        self.btnCancelImp = _button(view, "取消等待", b"cancelImport:", self, 164, 404, 100)
         self.btnCancelImp.setEnabled_(False)
-        self.status = _label(view, "", 24, 348, 592, 22, 12)
+        self.status = _label(view, "", 24, 376, 592, 22, 12)
 
-        _label(view, "刷新与通知", 24, 312, 400, 22, 16)
-        _label(view, "刷新间隔（分钟）", 24, 286, 160, 16, 12)
-        self.intervalField = _field(view, str(int(cfg.get("refresh_interval_minutes", 10))), 190, 282, 64, 24)
-        _label(view, "告警阈值，例如 50,20,5", 24, 254, 220, 16, 12)
+        _label(view, "刷新与通知", 24, 340, 400, 22, 16)
+        _label(view, "刷新间隔（分钟）", 24, 314, 160, 16, 12)
+        self.intervalField = _field(view, str(int(cfg.get("refresh_interval_minutes", 10))), 190, 310, 64, 24)
+        _label(view, "告警阈值，例如 50,20,5", 24, 282, 220, 16, 12)
         thresholds = cfg.get("alert_thresholds") or [50, 20, 5]
-        self.thresholdField = _field(view, ",".join(str(int(x)) for x in thresholds), 250, 250, 140, 24)
-        self.notifyBox = _checkbox(view, "启用用量通知", bool(cfg.get("notify_enabled", True)), 24, 218, 220)
+        self.thresholdField = _field(view, ",".join(str(int(x)) for x in thresholds), 250, 278, 140, 24)
+        self.notifyBox = _checkbox(view, "启用用量通知", bool(cfg.get("notify_enabled", True)), 24, 246, 220)
         self.exhaustBox = _checkbox(
-            view, "启用耗尽风险通知", bool(cfg.get("notify_exhaustion_risk", True)), 250, 218, 220
+            view, "启用耗尽风险通知", bool(cfg.get("notify_exhaustion_risk", True)), 250, 246, 220
         )
 
-        _label(view, "菜单栏与启动", 24, 180, 400, 22, 16)
-        _label(view, "菜单栏图标", 24, 154, 120, 16, 12)
+        _label(view, "菜单栏与启动", 24, 208, 400, 22, 16)
+        _label(view, "菜单栏图标", 24, 182, 120, 16, 12)
         self.modePopup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(150, 148, 160, 26), False
+            NSMakeRect(150, 176, 160, 26), False
         )
         self._modes = [("ring", "圆环百分比"), ("number", "纯数字"), ("dot", "仅色点")]
         for _key, title in self._modes:
@@ -354,10 +356,10 @@ class SettingsController(NSObject):
         self.modePopup.selectItemAtIndex_(idx)
         view.addSubview_(self.modePopup)
         self.autostartBox = _checkbox(
-            view, "开机自启（下次登录生效）", bool(cfg.get("autostart_enabled", True)), 24, 118, 280
+            view, "开机自启（下次登录生效）", bool(cfg.get("autostart_enabled", True)), 24, 146, 280
         )
 
-        self.hint = _label(view, "", 24, 70, 360, 18, 12)
+        self.hint = _label(view, "", 24, 90, 360, 18, 12)
         _button(view, "取消", b"cancel:", self, 300, 28, 90)
         _button(view, "应用", b"apply:", self, 400, 28, 90)
         _button(view, "保存", b"save:", self, 500, 28, 90)
@@ -388,8 +390,14 @@ class SettingsController(NSObject):
         except Exception:
             pass
 
+    def safariImport_(self, _sender=None) -> None:
+        self._run_import(open_browser=True, prefer="safari")
+
+    def firefoxImport_(self, _sender=None) -> None:
+        self._run_import(open_browser=True, prefer="firefox")
+
     def loginImport_(self, _sender=None) -> None:
-        self._run_import(open_browser=True)
+        self._run_import(open_browser=True, prefer="safari")
 
     def cookieImport_(self, _sender=None) -> None:
         self._run_import(open_browser=False)
@@ -412,16 +420,23 @@ class SettingsController(NSObject):
 
     def _set_importing(self, busy: bool) -> None:
         self._importing = busy
-        self.btnLogin.setEnabled_(not busy)
-        self.btnCookie.setEnabled_(not busy)
+        idle = not busy
+        for btn in (getattr(self, "btnSafari", None), getattr(self, "btnFirefox", None), self.btnCookie):
+            if btn is not None:
+                btn.setEnabled_(idle)
         self.btnCancelImp.setEnabled_(busy)
 
-    def _run_import(self, *, open_browser: bool) -> None:
+    def _run_import(self, *, open_browser: bool, prefer: str | None = None) -> None:
         if self._importing:
             return
         self._cancel_import = False
         self._set_importing(True)
-        self.status.setStringValue_("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
+        if open_browser and prefer == "safari":
+            self.status.setStringValue_("正在打开 Safari…")
+        elif open_browser and prefer == "firefox":
+            self.status.setStringValue_("正在打开 Firefox…")
+        else:
+            self.status.setStringValue_("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
 
         def worker() -> None:
             result = None
@@ -437,6 +452,7 @@ class SettingsController(NSObject):
                 if open_browser:
                     result = start_browser_login_and_import(
                         timeout_sec=180.0,
+                        prefer=prefer,
                         should_cancel=cancel,
                         on_progress=on_progress,
                     )
