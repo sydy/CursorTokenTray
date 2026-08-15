@@ -86,9 +86,9 @@ python3 main.py
 ### 方式一：浏览器登录并导入（推荐）
 
 1. 托盘 / 菜单栏右键 → **设置…**
-2. 点击 **Safari 登录导入** 或 **Firefox 登录导入**（macOS 推荐这两项；Chrome 常因 Cookie 加密读不到）
-3. 在打开的浏览器中登录 [cursor.com](https://cursor.com/dashboard)
-4. 工具会自动读取该浏览器的 `WorkosCursorSessionToken`，并立即校验用量
+2. 优先点 **从 Cursor 导入**（读取本机已登录的 Cursor 应用，不依赖浏览器 Cookie）
+3. 若未登录 Cursor 应用，再点 **Safari 登录** / **Firefox 登录**，在对应浏览器登录 [cursor.com](https://cursor.com/dashboard)
+4. 工具会校验用量并写入 Token
 
 若浏览器里已经登录，可直接点 **仅导入 Cookie**。
 

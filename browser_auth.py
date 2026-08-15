@@ -48,6 +48,7 @@ class _ScanStats:
     safari_rows: int = 0
     firefox_profiles: int = 0
     firefox_rows: int = 0
+    cursor_app: int = 0
 
 
 _SCAN = _ScanStats()
@@ -106,13 +107,16 @@ def _default_prefer_browsers(prefer: str | None = None) -> tuple[str, ...]:
         "waterfox",
         "zen",
     )
+    cursor_first = ("cursor-app",)
     if prefer == "safari":
-        return ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
+        return cursor_first + ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
     if prefer in firefox_first:
-        return firefox_first + ("safari", "edge", "chrome", "brave", "arc")
+        return cursor_first + firefox_first + ("safari", "edge", "chrome", "brave", "arc")
+    if prefer == "cursor-app":
+        return cursor_first + ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
     if IS_MAC:
-        return ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
-    return firefox_first + ("edge", "chrome")
+        return cursor_first + ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
+    return cursor_first + firefox_first + ("edge", "chrome")
 
 
 def preferred_mac_app_names(prefer: str | None = None) -> list[str]:
@@ -257,6 +261,8 @@ def _scan_failure_note() -> str:
         parts.append("未找到 Firefox 配置目录。若已安装，请先打开过一次 Firefox。")
     elif _SCAN.firefox_rows == 0:
         parts.append("已找到 Firefox，但没有 cursor.com 的登录 Cookie。请用 Firefox 登录后再导入。")
+    if _SCAN.cursor_app == 0:
+        parts.append("未从本机 Cursor 应用读到登录态。可点「从 Cursor 导入」，或确认已在 Cursor 里登录。")
     return "\n".join(parts)
 
 
@@ -265,6 +271,7 @@ def find_session_candidates() -> list[CookieCandidate]:
     global _SCAN
     _SCAN = _ScanStats()
     found: list[CookieCandidate] = []
+    found.extend(_find_cursor_app_candidates())
     found.extend(_find_chromium_candidates())
     found.extend(_find_firefox_candidates())
     if IS_MAC:
@@ -280,6 +287,103 @@ def find_session_candidates() -> list[CookieCandidate]:
         seen.add(c.token)
         uniq.append(c)
     return uniq
+
+
+def cursor_state_db_paths() -> list[Path]:
+    """Cursor 桌面端 state.vscdb 候选路径。"""
+    home = Path.home()
+    if IS_MAC:
+        support = home / "Library" / "Application Support"
+        return [
+            support / "Cursor" / "User" / "globalStorage" / "state.vscdb",
+            support / "Cursor Nightly" / "User" / "globalStorage" / "state.vscdb",
+            support / "Cursor - Insiders" / "User" / "globalStorage" / "state.vscdb",
+        ]
+    if os.name == "nt":
+        appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+        return [
+            appdata / "Cursor" / "User" / "globalStorage" / "state.vscdb",
+            appdata / "Cursor Nightly" / "User" / "globalStorage" / "state.vscdb",
+        ]
+    return [
+        home / ".config" / "Cursor" / "User" / "globalStorage" / "state.vscdb",
+        home / ".config" / "Cursor Nightly" / "User" / "globalStorage" / "state.vscdb",
+    ]
+
+
+def read_cursor_access_token(db_path: Path) -> str | None:
+    """只读打开 state.vscdb，取出 cursorAuth/accessToken。文件可能被 Cursor 占用且很大，禁止整文件拷贝。"""
+    if not db_path.is_file():
+        return None
+    uri = f"file:{db_path.resolve().as_posix()}?mode=ro&immutable=1"
+    keys = (
+        "cursorAuth/accessToken",
+        "cursorAuth/cachedAccessToken",
+        "cursorAuth/refreshToken",
+    )
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error as exc:
+        app_log(f"cursor state.vscdb open failed {db_path}: {exc}")
+        return None
+    try:
+        for key in keys:
+            try:
+                row = conn.execute(
+                    "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
+                    (key,),
+                ).fetchone()
+            except sqlite3.Error:
+                continue
+            if row and str(row[0] or "").strip():
+                return str(row[0]).strip()
+    finally:
+        conn.close()
+    return None
+
+
+def _find_cursor_app_candidates() -> list[CookieCandidate]:
+    found: list[CookieCandidate] = []
+    for path in cursor_state_db_paths():
+        jwt = read_cursor_access_token(path)
+        if not jwt:
+            continue
+        token = _safe_normalize(jwt)
+        if not token:
+            app_log(f"cursor app token not plausible from {path}")
+            continue
+        _SCAN.cursor_app += 1
+        mtime = 0
+        try:
+            mtime = int(path.stat().st_mtime * 1_000_000)
+        except OSError:
+            pass
+        found.append(
+            CookieCandidate(
+                browser="cursor-app",
+                profile=path.parent.parent.parent.name,
+                token=token,
+                last_update=mtime,
+            )
+        )
+        app_log(f"cursor app token from {path}")
+    if IS_MAC:
+        secret = _keychain_password("cursor-access-token", "cursor-user")
+        if not secret:
+            secret = _keychain_password("cursor-access-token", "")
+        if secret:
+            token = _safe_normalize(secret)
+            if token:
+                _SCAN.cursor_app += 1
+                found.append(
+                    CookieCandidate(
+                        browser="cursor-app",
+                        profile="keychain",
+                        token=token,
+                        last_update=int(time.time() * 1_000_000),
+                    )
+                )
+    return found
 
 
 def import_and_validate(
@@ -370,9 +474,6 @@ def poll_until_valid(
         if should_cancel and should_cancel():
             return ImportResult(ok=False, message="已取消")
         attempt += 1
-        if on_progress:
-            left = max(0, int(deadline - time.monotonic()))
-            on_progress(f"正在检测浏览器 Cookie…（第 {attempt} 次，剩余约 {left}s）")
         result = import_and_validate(
             prefer_browsers=prefer_browsers,
             validate_timeout=_POLL_VALIDATE_TIMEOUT_SEC,
@@ -380,6 +481,15 @@ def poll_until_valid(
             should_cancel=should_cancel,
             on_progress=None,  # 轮询外层已有进度文案，避免刷屏
         )
+        if on_progress:
+            left = max(0, int(deadline - time.monotonic()))
+            why = ""
+            if not result.ok:
+                why = (result.message or _scan_failure_note()).split("\n")[0]
+                if len(why) > 80:
+                    why = why[:77] + "…"
+            suffix = f" · {why}" if why else ""
+            on_progress(f"正在检测登录态…（第 {attempt} 次，剩余约 {left}s）{suffix}")
         if result.ok:
             return result
         if result.message == "已取消":
@@ -410,6 +520,15 @@ def start_browser_login_and_import(
         "firefox-dev": "正在打开 Firefox…",
         "chrome": "正在打开 Chrome…",
     }.get(prefer or "", "正在打开浏览器…")
+    if on_progress:
+        on_progress("正在读取本机 Cursor 登录态…")
+    existing = import_and_validate(
+        prefer_browsers=_default_prefer_browsers("cursor-app"),
+        should_cancel=should_cancel,
+        on_progress=None,
+    )
+    if existing.ok:
+        return existing
     if on_progress:
         on_progress(opening)
     open_login_page(prefer=prefer)
@@ -586,8 +705,6 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
                 for name, host, plain_value, enc, last_update in rows:
                     if name != COOKIE_NAME:
                         continue
-                    if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
-                        continue
                     _SCAN.chromium_rows += 1
                     raw = ""
                     if _is_plausible_session_token(plain_value):
@@ -695,8 +812,6 @@ def _find_firefox_candidates() -> list[CookieCandidate]:
                 continue
             for host, value, last_access in rows:
                 _SCAN.firefox_rows += 1
-                if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
-                    continue
                 token = _safe_normalize(value)
                 if not token:
                     continue
@@ -1059,8 +1174,6 @@ def _find_safari_candidates() -> list[CookieCandidate]:
             if name != COOKIE_NAME:
                 continue
             _SCAN.safari_rows += 1
-            if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
-                continue
             token = _safe_normalize(value)
             if not token:
                 continue

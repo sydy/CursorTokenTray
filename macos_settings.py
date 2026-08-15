@@ -263,7 +263,7 @@ def _present(
         if focus_token:
             ctrl.focusTokenField()
         if start_import and not reused:
-            AppHelper.callLater(0.4, ctrl.safariImport_, None)
+            AppHelper.callLater(0.4, ctrl.cursorImport_, None)
 
         if owns_loop:
             return
@@ -323,11 +323,12 @@ class SettingsController(NSObject):
         _label(view, "账户与登录", 24, 560, 400, 22, 16)
         _label(view, "会话 Token（请勿分享）", 24, 532, 300, 16, 12)
         self.tokenField = _field(view, str(cfg.get("session_token") or ""), 24, 502, 592, 26)
-        _label(view, "Chrome 常因加密读不到，建议用 Safari 或 Firefox 登录后再导入", 24, 474, 592, 16, 11)
+        _label(view, "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。", 24, 474, 592, 16, 11)
 
-        self.btnSafari = _button(view, "Safari 登录导入", b"safariImport:", self, 24, 438, 150)
-        self.btnFirefox = _button(view, "Firefox 登录导入", b"firefoxImport:", self, 184, 438, 150)
-        self.btnCookie = _button(view, "仅导入 Cookie", b"cookieImport:", self, 24, 404, 130)
+        self.btnCursor = _button(view, "从 Cursor 导入", b"cursorImport:", self, 24, 438, 140)
+        self.btnSafari = _button(view, "Safari 登录", b"safariImport:", self, 174, 438, 110)
+        self.btnFirefox = _button(view, "Firefox 登录", b"firefoxImport:", self, 294, 438, 120)
+        self.btnCookie = _button(view, "仅扫描 Cookie", b"cookieImport:", self, 24, 404, 130)
         self.btnCancelImp = _button(view, "取消等待", b"cancelImport:", self, 164, 404, 100)
         self.btnCancelImp.setEnabled_(False)
         self.status = _label(view, "", 24, 376, 592, 22, 12)
@@ -390,6 +391,9 @@ class SettingsController(NSObject):
         except Exception:
             pass
 
+    def cursorImport_(self, _sender=None) -> None:
+        self._run_import(open_browser=False, prefer="cursor-app")
+
     def safariImport_(self, _sender=None) -> None:
         self._run_import(open_browser=True, prefer="safari")
 
@@ -421,7 +425,12 @@ class SettingsController(NSObject):
     def _set_importing(self, busy: bool) -> None:
         self._importing = busy
         idle = not busy
-        for btn in (getattr(self, "btnSafari", None), getattr(self, "btnFirefox", None), self.btnCookie):
+        for btn in (
+            getattr(self, "btnCursor", None),
+            getattr(self, "btnSafari", None),
+            getattr(self, "btnFirefox", None),
+            self.btnCookie,
+        ):
             if btn is not None:
                 btn.setEnabled_(idle)
         self.btnCancelImp.setEnabled_(busy)
@@ -431,12 +440,14 @@ class SettingsController(NSObject):
             return
         self._cancel_import = False
         self._set_importing(True)
-        if open_browser and prefer == "safari":
+        if prefer == "cursor-app":
+            self.status.setStringValue_("正在读取 Cursor 应用登录态…")
+        elif open_browser and prefer == "safari":
             self.status.setStringValue_("正在打开 Safari…")
         elif open_browser and prefer == "firefox":
             self.status.setStringValue_("正在打开 Firefox…")
         else:
-            self.status.setStringValue_("正在打开浏览器…" if open_browser else "正在读取 Cookie…")
+            self.status.setStringValue_("正在打开浏览器…" if open_browser else "正在读取登录态…")
 
         def worker() -> None:
             result = None
@@ -457,7 +468,13 @@ class SettingsController(NSObject):
                         on_progress=on_progress,
                     )
                 else:
-                    result = import_and_validate(should_cancel=cancel, on_progress=on_progress)
+                    from browser_auth import _default_prefer_browsers
+
+                    result = import_and_validate(
+                        prefer_browsers=_default_prefer_browsers(prefer) if prefer else None,
+                        should_cancel=cancel,
+                        on_progress=on_progress,
+                    )
             except Exception as exc:  # noqa: BLE001
                 error = exc
             done_result, done_error = result, error

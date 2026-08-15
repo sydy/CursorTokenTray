@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import os
+import sqlite3
 import struct
 import sys
 import tempfile
@@ -204,6 +207,78 @@ class FirefoxProfileTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].name, "abcd.default-release")
 
+    def test_read_named_cookie_from_sqlite(self) -> None:
+        from browser_auth import COOKIE_NAME, _read_firefox_cookie_rows, _safe_normalize
+
+        token = "user_01FFTEST%3A%3AeyJhbGciOi.aaa.bbb"
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "cookies.sqlite"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT, lastAccessed INTEGER)"
+            )
+            conn.execute(
+                "INSERT INTO moz_cookies VALUES (?,?,?,?)",
+                ("authenticator.cursor.sh", COOKIE_NAME, token, 1_700_000_000_000_000),
+            )
+            conn.commit()
+            conn.close()
+            rows = _read_firefox_cookie_rows(db)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(_safe_normalize(rows[0][1]), token)
+
+
+class CursorAppTokenTests(unittest.TestCase):
+    def _jwt(self, sub: str) -> str:
+        header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"sub": sub, "aud": "https://cursor.com", "type": "session"}).encode()
+        ).decode().rstrip("=")
+        return f"{header}.{payload}.sig"
+
+    def test_state_vscdb_to_workos_cookie(self) -> None:
+        from browser_auth import _safe_normalize, read_cursor_access_token
+
+        jwt = self._jwt("github|user_01CURSORAPP")
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "state.vscdb"
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+            conn.execute(
+                "INSERT INTO ItemTable VALUES (?, ?)",
+                ("cursorAuth/accessToken", jwt),
+            )
+            conn.commit()
+            conn.close()
+            raw = read_cursor_access_token(db)
+        self.assertEqual(raw, jwt)
+        token = _safe_normalize(raw or "")
+        self.assertIsNotNone(token)
+        assert token is not None
+        self.assertTrue(token.startswith("user_01CURSORAPP%3A%3A"))
+        self.assertIn(jwt, token)
+
+    def test_find_session_candidates_reads_cursor_app(self) -> None:
+        import browser_auth
+
+        jwt = self._jwt("github|user_01FINDME")
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "state.vscdb"
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE ItemTable (key TEXT, value TEXT)")
+            conn.execute("INSERT INTO ItemTable VALUES (?, ?)", ("cursorAuth/accessToken", jwt))
+            conn.commit()
+            conn.close()
+            old = browser_auth.cursor_state_db_paths
+            browser_auth.cursor_state_db_paths = lambda: [db]
+            try:
+                found = browser_auth.find_session_candidates()
+            finally:
+                browser_auth.cursor_state_db_paths = old
+        tokens = [c.token for c in found if c.browser == "cursor-app"]
+        self.assertTrue(tokens)
+        self.assertTrue(tokens[0].startswith("user_01FINDME%3A%3A"))
+
 
 class BrowserPreferTests(unittest.TestCase):
     def test_mac_app_names_prefer_safari_firefox(self) -> None:
@@ -213,8 +288,10 @@ class BrowserPreferTests(unittest.TestCase):
         self.assertTrue(any("cursor.sh" in h or "cursor.com" in h for h in COOKIE_HOST_HINTS))
         self.assertEqual(preferred_mac_app_names("safari")[0], "Safari")
         self.assertEqual(preferred_mac_app_names("firefox")[0], "Firefox")
-        self.assertEqual(_default_prefer_browsers("safari")[0], "safari")
-        self.assertEqual(_default_prefer_browsers("firefox")[0], "firefox")
+        self.assertEqual(_default_prefer_browsers("safari")[0], "cursor-app")
+        self.assertEqual(_default_prefer_browsers("safari")[1], "safari")
+        self.assertEqual(_default_prefer_browsers("firefox")[0], "cursor-app")
+        self.assertEqual(_default_prefer_browsers("firefox")[1], "firefox")
 
 
 class InstanceLockUnixTests(unittest.TestCase):
