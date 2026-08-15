@@ -6,6 +6,7 @@ import base64
 import configparser
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from cursor_api import CursorApiError, fetch_usage_summary, normalize_workos_token
-from platform_util import IS_MAC
+from platform_util import IS_MAC, app_log
 
 LOGIN_URL = "https://cursor.com/dashboard"
 COOKIE_NAME = "WorkosCursorSessionToken"
@@ -29,6 +30,22 @@ _COPY_TIMEOUT_SEC = 3.0
 _SQLITE_TIMEOUT_SEC = 1.0
 _VALIDATE_TIMEOUT_SEC = 12.0
 _POLL_VALIDATE_TIMEOUT_SEC = 8.0
+# 钥匙串弹窗要等用户输入开机密码，「始终允许」也常超过 12 秒
+_KEYCHAIN_TIMEOUT_SEC = 180.0
+_TOKEN_ASCII = re.compile(r"^[\x21-\x7e]+$")
+
+
+@dataclass
+class _ScanStats:
+    chromium_rows: int = 0
+    decrypt_ok: int = 0
+    decrypt_fail: int = 0
+    v20: int = 0
+    keychain_ok: bool = False
+    keychain_error: str = ""
+
+
+_SCAN = _ScanStats()
 
 
 @dataclass
@@ -124,8 +141,60 @@ def open_login_page() -> None:
     threading.Thread(target=_open, daemon=True, name="open-login").start()
 
 
+def _is_plausible_session_token(value: str) -> bool:
+    text = (value or "").strip()
+    if len(text) < 16 or "\ufffd" in text:
+        return False
+    try:
+        text.encode("latin-1")
+    except UnicodeEncodeError:
+        return False
+    if not _TOKEN_ASCII.match(text):
+        return False
+    lowered = text.lower()
+    return (
+        "%3a%3a" in lowered
+        or "::" in text
+        or text.count(".") >= 2
+        or text.startswith("user_")
+        or lowered.startswith("workoscursorsessiontoken=")
+    )
+
+
+def _safe_normalize(raw: str) -> str | None:
+    try:
+        token = normalize_workos_token(raw)
+    except CursorApiError:
+        return None
+    if not token or not _is_plausible_session_token(token):
+        return None
+    return token
+
+
+def _scan_failure_note() -> str:
+    parts: list[str] = []
+    if _SCAN.v20:
+        parts.append(
+            "Chrome/Edge Cookie 使用了 App-Bound 加密（v20），本工具无法直接解密。"
+        )
+    if _SCAN.decrypt_fail and not _SCAN.decrypt_ok:
+        if _SCAN.keychain_error and not _SCAN.keychain_ok:
+            parts.append(
+                "已找到 Chrome Cookie，但钥匙串未授权或等待超时，解密失败。"
+                "请再点一次导入，弹窗里选「始终允许」（可输入 Mac 开机密码）。"
+            )
+        else:
+            parts.append(
+                "已找到 Chrome Cookie，但解密结果无效。"
+                "请再点一次导入并「始终允许」钥匙串，或改用 Safari / Firefox / 手动粘贴。"
+            )
+    return "\n".join(parts)
+
+
 def find_session_candidates() -> list[CookieCandidate]:
     """扫描本机 Chrome / Edge / Firefox，收集 cursor.com 的 Session Token。"""
+    global _SCAN
+    _SCAN = _ScanStats()
     found: list[CookieCandidate] = []
     found.extend(_find_chromium_candidates())
     found.extend(_find_firefox_candidates())
@@ -165,10 +234,11 @@ def import_and_validate(
         on_progress(_import_progress_label())
     candidates = find_session_candidates()
     if not candidates:
-        return ImportResult(
-            ok=False,
-            message=_no_cookie_message(),
-        )
+        note = _scan_failure_note()
+        message = _no_cookie_message()
+        if note:
+            message = f"{note}\n\n{message}"
+        return ImportResult(ok=False, message=message)
 
     skip = skip_tokens if skip_tokens is not None else set()
     order = {name: i for i, name in enumerate(prefer_browsers)}
@@ -308,8 +378,9 @@ def _no_cookie_message() -> str:
         return (
             "未在 Safari / Chrome / Edge / Firefox 中找到 WorkosCursorSessionToken。\n"
             "请先在浏览器打开并登录 cursor.com，然后再试。\n"
-            "Chrome 系读取 Cookie 可能弹出钥匙串授权；Safari 需在「系统设置 → 隐私与安全性」"
-            "给予本工具完全磁盘访问权限。也可改用手动粘贴。"
+            "Chrome 系读取 Cookie 会弹出钥匙串授权，请选「始终允许」并输入 Mac 开机密码；"
+            "Safari 需在「系统设置 → 隐私与安全性」给予本工具完全磁盘访问权限。"
+            "也可在浏览器开发者工具里复制 WorkosCursorSessionToken 后手动粘贴。"
         )
     return (
         "未在 Firefox / Chrome / Edge 中找到 WorkosCursorSessionToken。\n"
@@ -408,9 +479,7 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
     for browser, root in _browser_user_data_roots():
         if not root.is_dir():
             continue
-        key = _load_browser_key(browser, root)
-        if key is None:
-            continue
+        keys = _browser_keys(browser, root)
         for profile_dir in _iter_profiles(root):
             for db_path in _cookie_db_paths(profile_dir):
                 if not db_path.is_file():
@@ -419,18 +488,21 @@ def _find_chromium_candidates() -> list[CookieCandidate]:
                     rows = _read_cookie_rows(db_path)
                 except Exception:
                     continue
-                for name, host, enc, last_update in rows:
+                for name, host, plain_value, enc, last_update in rows:
                     if name != COOKIE_NAME:
                         continue
                     if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
                         continue
-                    try:
-                        raw = _decrypt_chrome_value(enc, key, macos=IS_MAC)
-                    except Exception:
-                        continue
-                    token = normalize_workos_token(raw)
+                    _SCAN.chromium_rows += 1
+                    raw = ""
+                    if _is_plausible_session_token(plain_value):
+                        raw = plain_value
+                    else:
+                        raw = _decrypt_with_keys(enc, keys)
+                    token = _safe_normalize(raw)
                     if not token:
                         continue
+                    _SCAN.decrypt_ok += 1
                     found.append(
                         CookieCandidate(
                             browser=browser,
@@ -509,7 +581,7 @@ def _find_firefox_candidates() -> list[CookieCandidate]:
         for host, value, last_access in rows:
             if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
                 continue
-            token = normalize_workos_token(value)
+            token = _safe_normalize(value)
             if not token:
                 continue
             found.append(
@@ -566,19 +638,37 @@ _MAC_KEYCHAIN = {
 }
 
 
-def _load_browser_key(browser: str, root: Path) -> bytes | None:
+def _browser_keys(browser: str, root: Path) -> list[bytes]:
     if IS_MAC:
-        return _load_macos_chrome_key(browser)
-    return _load_aes_key(root / "Local State")
+        return _macos_chrome_keys(browser)
+    key = _load_aes_key(root / "Local State")
+    return [key] if key else []
 
 
-def _load_macos_chrome_key(browser: str) -> bytes | None:
-    """Keychain 密码 + PBKDF2-SHA1（1003 次，16 字节 AES-128）。失败则尝试 peanuts。"""
+def _macos_chrome_keys(browser: str) -> list[bytes]:
+    """钥匙串密码 + peanuts 都试一遍；只接受能解出合法 Token 的密钥。"""
     import hashlib
 
     service, account = _MAC_KEYCHAIN.get(browser, ("Chrome Safe Storage", "Chrome"))
-    password = _keychain_password(service, account) or "peanuts"
-    return hashlib.pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, dklen=16)
+    passwords: list[str] = []
+    secret = _keychain_password(service, account)
+    if secret:
+        passwords.append(secret)
+        _SCAN.keychain_ok = True
+    else:
+        if not _SCAN.keychain_error:
+            _SCAN.keychain_error = f"{browser} 钥匙串未授权或等待超时"
+        app_log(f"keychain miss for {browser}: {_SCAN.keychain_error}")
+    if "peanuts" not in passwords:
+        passwords.append("peanuts")
+    keys: list[bytes] = []
+    seen: set[bytes] = set()
+    for password in passwords:
+        key = hashlib.pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, dklen=16)
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
 
 
 def _keychain_password(service: str, account: str) -> str | None:
@@ -587,14 +677,42 @@ def _keychain_password(service: str, account: str) -> str | None:
             ["security", "find-generic-password", "-w", "-s", service, "-a", account],
             capture_output=True,
             text=True,
-            timeout=12,
+            timeout=_KEYCHAIN_TIMEOUT_SEC,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        app_log(f"keychain prompt timed out after {_KEYCHAIN_TIMEOUT_SEC:.0f}s ({service})")
+        return None
+    except OSError as exc:
+        app_log(f"keychain security command failed: {exc}")
         return None
     if result.returncode != 0:
+        err = (result.stderr or "").strip().replace("\n", " ")[:180]
+        app_log(f"keychain denied/failed rc={result.returncode} {err}")
         return None
     secret = (result.stdout or "").strip()
     return secret or None
+
+
+def _decrypt_with_keys(encrypted: bytes, keys: list[bytes]) -> str:
+    if not encrypted:
+        _SCAN.decrypt_fail += 1
+        return ""
+    last_exc: Exception | None = None
+    for key in keys:
+        try:
+            raw = _decrypt_chrome_value(encrypted, key, macos=IS_MAC)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if "v20" in str(exc):
+                _SCAN.v20 += 1
+                return ""
+            continue
+        if _is_plausible_session_token(raw):
+            return raw
+    _SCAN.decrypt_fail += 1
+    if last_exc is not None:
+        app_log(f"chrome cookie decrypt failed: {last_exc}")
+    return ""
 
 
 def _load_aes_key(local_state_path: Path) -> bytes | None:
@@ -646,6 +764,26 @@ def _dpapi_decrypt(data: bytes) -> bytes:
         kernel32.LocalFree(blob_out.pbData)
 
 
+def _decode_cookie_bytes(plain: bytes) -> str:
+    """严格 UTF-8。错误密钥的 CBC 会解出乱码，绝不能 errors=replace 再拿去当 Token。"""
+    if not plain:
+        raise ValueError("Cookie 解密结果为空")
+    try:
+        text = plain.decode("utf-8")
+        if "\ufffd" not in text:
+            return text
+    except UnicodeDecodeError:
+        text = ""
+    if len(plain) > 32:
+        try:
+            tail = plain[32:].decode("utf-8")
+            if "\ufffd" not in tail:
+                return tail
+        except UnicodeDecodeError:
+            pass
+    raise ValueError("Cookie 解密结果不是合法文本（密钥不对或加密格式已变）")
+
+
 def _decrypt_chrome_value(encrypted: bytes, key: bytes, *, macos: bool = False) -> str:
     if not encrypted:
         return ""
@@ -653,7 +791,7 @@ def _decrypt_chrome_value(encrypted: bytes, key: bytes, *, macos: bool = False) 
         return _decrypt_chrome_macos(encrypted, key)
     # 极老版本可能是直接 DPAPI
     if encrypted.startswith(b"\x01\x00\x00\x00"):
-        return _dpapi_decrypt(encrypted).decode("utf-8", errors="replace")
+        return _decode_cookie_bytes(_dpapi_decrypt(encrypted))
 
     prefix = encrypted[:3]
     if prefix in (b"v10", b"v11"):
@@ -662,7 +800,7 @@ def _decrypt_chrome_value(encrypted: bytes, key: bytes, *, macos: bool = False) 
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         plain = AESGCM(key).decrypt(nonce, ciphertext, None)
-        return plain.decode("utf-8", errors="replace")
+        return _decode_cookie_bytes(plain)
 
     if prefix == b"v20":
         raise ValueError(
@@ -672,7 +810,7 @@ def _decrypt_chrome_value(encrypted: bytes, key: bytes, *, macos: bool = False) 
 
     # 未知格式：尝试 DPAPI
     try:
-        return _dpapi_decrypt(encrypted).decode("utf-8", errors="replace")
+        return _decode_cookie_bytes(_dpapi_decrypt(encrypted))
     except Exception as err:
         raise ValueError(f"无法解密 Cookie（前缀 {prefix!r}）") from err
 
@@ -693,7 +831,7 @@ def _decrypt_chrome_macos(encrypted: bytes, key: bytes) -> str:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         plain = AESGCM(key).decrypt(payload[:12], payload[12:], None)
-        return plain.decode("utf-8", errors="replace")
+        return _decode_cookie_bytes(plain)
     except Exception:
         pass
 
@@ -707,7 +845,7 @@ def _decrypt_chrome_macos(encrypted: bytes, key: bytes) -> str:
     pad = plain[-1]
     if 1 <= pad <= 16 and plain.endswith(bytes([pad]) * pad):
         plain = plain[:-pad]
-    return plain.decode("utf-8", errors="replace")
+    return _decode_cookie_bytes(plain)
 
 
 def _find_safari_candidates() -> list[CookieCandidate]:
@@ -739,7 +877,7 @@ def _find_safari_candidates() -> list[CookieCandidate]:
                 continue
             if not any(h in (host or "").lower() for h in COOKIE_HOST_HINTS):
                 continue
-            token = normalize_workos_token(value)
+            token = _safe_normalize(value)
             if not token:
                 continue
             found.append(
@@ -821,7 +959,10 @@ def _parse_safari_cookie_record(page: bytes, offset: int) -> tuple[str, str, str
         end = page.find(b"\x00", start, offset + size)
         if end < 0:
             end = offset + size
-        return page[start:end].decode("utf-8", errors="replace")
+        try:
+            return page[start:end].decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
 
     host = _cstr(url_off)
     name = _cstr(name_off)
@@ -853,8 +994,8 @@ def _copy_with_timeout(src: Path, dst: Path, timeout: float = _COPY_TIMEOUT_SEC)
         raise errors[0]
 
 
-def _read_cookie_rows(db_path: Path) -> list[tuple[str, str, bytes, int]]:
-    """返回 (name, host_key, encrypted_value, last_update_utc)。"""
+def _read_cookie_rows(db_path: Path) -> list[tuple[str, str, str, bytes, int]]:
+    """返回 (name, host_key, value, encrypted_value, last_update_utc)。"""
     tmp_dir = tempfile.mkdtemp(prefix="cursor_tray_cookies_")
     try:
         dst = Path(tmp_dir) / "Cookies"
@@ -870,19 +1011,27 @@ def _read_cookie_rows(db_path: Path) -> list[tuple[str, str, bytes, int]]:
         conn = sqlite3.connect(str(dst), timeout=_SQLITE_TIMEOUT_SEC)
         try:
             cur = conn.execute(
-                "SELECT name, host_key, encrypted_value, last_update_utc "
+                "SELECT name, host_key, value, encrypted_value, last_update_utc "
                 "FROM cookies WHERE name = ?",
                 (COOKIE_NAME,),
             )
-            rows: list[tuple[str, str, bytes, int]] = []
-            for name, host, enc, last_update in cur.fetchall():
+            rows: list[tuple[str, str, str, bytes, int]] = []
+            for name, host, value, enc, last_update in cur.fetchall():
                 if isinstance(enc, memoryview):
                     enc_b = enc.tobytes()
                 elif isinstance(enc, bytes):
                     enc_b = enc
                 else:
                     enc_b = bytes(enc or b"")
-                rows.append((str(name), str(host or ""), enc_b, int(last_update or 0)))
+                rows.append(
+                    (
+                        str(name),
+                        str(host or ""),
+                        str(value or ""),
+                        enc_b,
+                        int(last_update or 0),
+                    )
+                )
             return rows
         finally:
             conn.close()

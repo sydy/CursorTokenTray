@@ -86,6 +86,34 @@ class ChromeMacDecryptTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _decrypt_chrome_macos(b"v20" + b"\x00" * 32, b"\x00" * 16)
 
+    def test_wrong_key_does_not_return_replacement_chars(self) -> None:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.padding import PKCS7
+
+        from browser_auth import _decrypt_chrome_macos, _safe_normalize
+
+        password = b"peanuts"
+        key = hashlib.pbkdf2_hmac("sha1", password, b"saltysalt", 1003, dklen=16)
+        iv = b" " * 16
+        padder = PKCS7(128).padder()
+        data = padder.update(b"user_01ABC%3A%3AeyJhbGciOi.aaa.bbb") + padder.finalize()
+        enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+        payload = enc.update(data) + enc.finalize()
+        wrong = hashlib.pbkdf2_hmac("sha1", b"wrong", b"saltysalt", 1003, dklen=16)
+        try:
+            plain = _decrypt_chrome_macos(b"v10" + payload, wrong)
+        except ValueError:
+            plain = ""
+        self.assertNotEqual(plain, "user_01ABC%3A%3AeyJhbGciOi.aaa.bbb")
+        self.assertNotIn("\ufffd", plain)
+        self.assertIsNone(_safe_normalize("user_\ufffd\ufffdbroken"))
+        self.assertIsNone(_safe_normalize("not-a-token"))
+
+    def test_keychain_timeout_is_long_enough(self) -> None:
+        from browser_auth import _KEYCHAIN_TIMEOUT_SEC
+
+        self.assertGreaterEqual(_KEYCHAIN_TIMEOUT_SEC, 60)
+
 
 class SafariCookieTests(unittest.TestCase):
     def test_parse_minimal_binarycookies(self) -> None:
@@ -291,6 +319,15 @@ class NativeSettingsGuardTests(unittest.TestCase):
         self.assertIn("runModalForWindow_", text)
         self.assertNotIn("subprocess", text)
         self.assertNotIn("Popen", text)
+
+
+class TokenNormalizeTests(unittest.TestCase):
+    def test_replacement_char_is_decrypt_damage(self) -> None:
+        from cursor_api import CursorApiError, normalize_workos_token
+
+        with self.assertRaises(CursorApiError) as ctx:
+            normalize_workos_token("user_01ABC%3A%3A\ufffd")
+        self.assertIn("解密失败", str(ctx.exception))
 
 
 class StatusTextTests(unittest.TestCase):

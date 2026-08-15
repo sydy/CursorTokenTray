@@ -132,6 +132,13 @@ def normalize_workos_token(token: str) -> str:
         value.encode("latin-1")
     except UnicodeEncodeError as err:
         bad = value[err.start : err.end]
+        if "\ufffd" in value or any(ord(ch) > 255 for ch in bad):
+            raise CursorApiError(
+                "读到的 Token 已损坏（常见于 Chrome Cookie 解密失败，不是复制漏了）。"
+                "请再点一次「导入」，钥匙串弹窗选「始终允许」；"
+                "或改用 Safari / Firefox，或在开发者工具里完整复制 WorkosCursorSessionToken。",
+                status_code=401,
+            ) from err
         raise CursorApiError(
             "Token 含非法字符（可能复制不完整，出现了省略号等）。"
             "请在浏览器 Cookies 里双击完整复制 WorkosCursorSessionToken 的值后重试。"
