@@ -502,6 +502,10 @@ class NativeSettingsGuardTests(unittest.TestCase):
         self.assertIn("runModalForWindow_", text)
         self.assertNotIn("subprocess", text)
         self.assertNotIn("Popen", text)
+        self.assertIn("NSToolbar", text)
+        self.assertIn("其他导入方式", text)
+        self.assertIn("selectPane_", text)
+        self.assertIn("_show_page", text)
 
 
 class TokenNormalizeTests(unittest.TestCase):
