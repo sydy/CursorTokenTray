@@ -111,7 +111,10 @@ def show_already_running() -> None:
                     "osascript",
                     "-e",
                     'display alert "CursorToken 剩余进度" message '
-                    '"CursorToken 已在菜单栏运行。请查看屏幕右上角。" as informational',
+                    '"已经在运行。请看屏幕最上方菜单栏右侧（Wi‑Fi / 控制中心旁边）的圆环图标，'
+                    '不是 iPhone 状态栏，也没有 Dock 图标。\\n\\n'
+                    '若仍看不到：点菜单栏 「•••」或「控制中心」展开隐藏项；'
+                    '或打开「活动监视器」结束 CursorTokenTray 后再启动一次。" as informational',
                 ],
                 check=False,
                 capture_output=True,

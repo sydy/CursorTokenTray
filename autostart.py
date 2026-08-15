@@ -160,6 +160,8 @@ def build_launch_agent_plist(program_args: list[str] | None = None, workdir: str
     <false/>
     <key>ProcessType</key>
     <string>Interactive</string>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
 </dict>
 </plist>
 """
@@ -175,29 +177,15 @@ def _xml_escape(value: str) -> str:
 
 
 def _enable_mac() -> None:
+    """只写入 LaunchAgents，不立刻 bootstrap/load。
+
+    立刻 load 会再拉起第二个进程：第一个实例还在初始化菜单栏图标，
+    第二个实例抢锁失败，弹出「已在后台运行」，用户也看不到图标。
+    plist 在下次登录时由 launchd 自动加载即可。
+    """
     plist = _plist_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
     plist.write_text(build_launch_agent_plist(), encoding="utf-8")
-    uid = os.getuid()
-    domain = f"gui/{uid}/{MAC_LAUNCH_LABEL}"
-    # 新版 launchctl；失败则回退 load -w。写好 plist 后下次登录仍会生效。
-    bootout = subprocess.run(
-        ["launchctl", "bootout", domain],
-        capture_output=True,
-        text=True,
-    )
-    _ = bootout
-    bootstrap = subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
-        capture_output=True,
-        text=True,
-    )
-    if bootstrap.returncode != 0:
-        subprocess.run(
-            ["launchctl", "load", "-w", str(plist)],
-            capture_output=True,
-            text=True,
-        )
 
 
 def _disable_mac() -> None:

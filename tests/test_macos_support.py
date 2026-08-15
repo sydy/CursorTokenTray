@@ -54,6 +54,8 @@ class LaunchAgentTests(unittest.TestCase):
         self.assertIn("/usr/bin/python3", xml)
         self.assertIn("/tmp/main.py", xml)
         self.assertIn("<key>RunAtLoad</key>", xml)
+        self.assertIn("LimitLoadToSessionType", xml)
+        self.assertIn("Aqua", xml)
         escaped = build_launch_agent_plist(
             program_args=["/tmp/a&b"],
             workdir="/tmp",
@@ -145,6 +147,23 @@ class InstanceLockUnixTests(unittest.TestCase):
                 fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             fp.close()
             instance_lock._release_unix()
+
+
+class MenuBarIconTests(unittest.TestCase):
+    def test_macos_idle_icon_has_light_pixels(self) -> None:
+        import icon_renderer
+
+        original = sys.platform
+        try:
+            sys.platform = "darwin"
+            img = icon_renderer.create_idle_icon(size=64)
+            bright = 0
+            for r, g, b, a in img.getdata():
+                if a > 80 and (r + g + b) / 3 > 170:
+                    bright += 1
+            self.assertGreater(bright, 40, "macOS 菜单栏图标应有足够浅色像素")
+        finally:
+            sys.platform = original
 
 
 class MainGuardTests(unittest.TestCase):
