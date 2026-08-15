@@ -20,11 +20,15 @@ from cursor_api import (
     is_auth_error_message,
 )
 from icon_renderer import create_idle_icon, create_progress_icon
-from platform_util import IS_MAC, app_log, copy_text, show_native_status
+from platform_util import IS_MAC, app_log, copy_text
 from status_text import format_summary_text
 import usage_history
 
 if IS_MAC:
+    from macos_menubar import apply_retina_icon, close_status as close_macos_status
+    from macos_menubar import install as install_menubar
+    from macos_menubar import show_status as show_macos_status
+    from macos_menubar import update_status as update_macos_status
     from macos_settings import show_settings
 else:
     from popup_ui import MenuAction, PopupManager, StatusActions
@@ -102,6 +106,10 @@ class TrayApp:
                 NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
             except Exception as exc:
                 app_log(f"set accessory policy failed: {exc}")
+            try:
+                install_menubar(icon, on_left_click=self._open_status_bg)
+            except Exception as exc:
+                app_log(f"install menubar hooks failed: {exc}")
             app_log("menubar icon ready; no Tk in tray process")
             self._maybe_open_first_run_settings()
             return
@@ -203,9 +211,16 @@ class TrayApp:
     def _open_status_bg(self) -> None:
         if IS_MAC:
             usage, err, updated = self._ui_snapshot()
-            text = format_summary_text(usage, err, updated)
-            app_log(f"open native status: {text[:160]}")
-            show_native_status("Cursor Token 剩余进度", text)
+            app_log("open macos status panel")
+            show_macos_status(
+                usage=usage,
+                error_message=err,
+                updated_at=updated,
+                icon=self.icon,
+                on_refresh=self._action_refresh,
+                on_open_spending=self._action_open_spending,
+                on_open_settings=self._action_open_settings,
+            )
             return
         self.popups.cancel_hover_close()
         if self.popups is None:
@@ -314,6 +329,10 @@ class TrayApp:
         def _do() -> None:
             app_log("quit on main thread")
             try:
+                close_macos_status()
+            except Exception as exc:
+                app_log(f"close_status failed: {exc}")
+            try:
                 from macos_settings import close_settings
 
                 close_settings()
@@ -330,6 +349,10 @@ class TrayApp:
             _do()
 
     def _action_open_status(self, _icon=None, _item=None) -> None:
+        if IS_MAC:
+            # 菜单回调已在 AppKit 主线程；再丢到后台线程后状态窗经常出不来。
+            self._open_status_bg()
+            return
         threading.Thread(target=self._open_status_bg, daemon=True).start()
 
     def _action_refresh(self, _icon=None, _item=None) -> None:
@@ -654,12 +677,20 @@ class TrayApp:
 
         self.icon.icon = image
         if IS_MAC:
+            try:
+                apply_retina_icon(self.icon, image)
+            except Exception as exc:
+                app_log(f"apply retina icon failed: {exc}")
             if usage is not None:
                 self.icon.title = f"{usage.remaining_percent:.0f}%"
             elif err and str(err).startswith("未配置"):
                 self.icon.title = "Token"
             else:
                 self.icon.title = "Token"
+            try:
+                update_macos_status(usage=usage, error_message=err, updated_at=updated)
+            except Exception as exc:
+                app_log(f"update macos status failed: {exc}")
         else:
             self.icon.title = ""
 

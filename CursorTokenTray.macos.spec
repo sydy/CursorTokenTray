@@ -30,6 +30,7 @@ a = Analysis(
         'PyObjCTools',
         'objc',
         'macos_settings',
+        'macos_menubar',
         'settings_launch',
         'status_text',
         'certifi',

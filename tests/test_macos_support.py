@@ -361,6 +361,28 @@ class MenuBarIconTests(unittest.TestCase):
         finally:
             sys.platform = original
 
+    def test_menubar_icon_pixels_matches_retina(self) -> None:
+        from icon_renderer import menubar_icon_pixels
+
+        self.assertEqual(menubar_icon_pixels(22, 1), 22)
+        self.assertEqual(menubar_icon_pixels(22, 2), 44)
+        self.assertEqual(menubar_icon_pixels(22, 3), 66)
+
+    def test_macos_tray_icon_size_is_retina(self) -> None:
+        import importlib
+
+        import icon_renderer
+
+        original = sys.platform
+        try:
+            sys.platform = "darwin"
+            icon_renderer.tray_icon_size.cache_clear()
+            importlib.reload(icon_renderer)
+            self.assertGreaterEqual(icon_renderer.tray_icon_size(), 44)
+        finally:
+            sys.platform = original
+            importlib.reload(icon_renderer)
+
 
 class SettingsProcessTests(unittest.TestCase):
     def test_is_settings_process_argv_and_env(self) -> None:
@@ -513,6 +535,65 @@ class StatusTextTests(unittest.TestCase):
 
         self.assertIn("等待刷新", format_summary_text(None, None, None))
         self.assertIn("过期", format_summary_text(None, "Token 过期", "12:00"))
+
+    def test_build_status_lines_usage(self) -> None:
+        from cursor_api import UsageSnapshot
+        from status_text import build_status_lines
+
+        snap = UsageSnapshot(
+            used_percent=36.0,
+            remaining_percent=64.0,
+            auto_percent_used=10.0,
+            api_percent_used=2.0,
+            total_percent_used=12.0,
+            membership_type="Pro",
+            billing_cycle_start=None,
+            billing_cycle_end="2026-09-01T00:00:00Z",
+            days_remaining=17,
+            days_elapsed=13.0,
+            estimated_usable_days=20.0,
+            raw={},
+            total_tokens=12345,
+        )
+        rows = dict(build_status_lines(snap, None, "12:00"))
+        self.assertIn("64.0%", rows["剩余"])
+        self.assertEqual(rows["计划"], "Pro")
+        self.assertIn("First-party", rows["明细"])
+        self.assertIn("9月1日", rows["重置"])
+        self.assertEqual(rows["更新"], "12:00")
+
+    def test_build_status_lines_error(self) -> None:
+        from status_text import build_status_lines
+
+        self.assertEqual(build_status_lines(None, "Token 过期"), [("状态", "Token 过期")])
+        self.assertEqual(build_status_lines(None, None), [("状态", "等待刷新…")])
+
+
+class NativeMenubarGuardTests(unittest.TestCase):
+    def test_macos_menubar_module_has_no_tk(self) -> None:
+        text = (ROOT / "macos_menubar.py").read_text(encoding="utf-8")
+        self.assertNotIn("tkinter", text)
+        self.assertNotIn("customtkinter", text)
+        self.assertNotIn("import tk", text)
+
+    def test_menubar_api_importable(self) -> None:
+        import macos_menubar
+
+        self.assertTrue(callable(macos_menubar.install))
+        self.assertTrue(callable(macos_menubar.show_status))
+        self.assertTrue(callable(macos_menubar.update_status))
+        self.assertTrue(callable(macos_menubar.close_status))
+        self.assertTrue(callable(macos_menubar.apply_retina_icon))
+        self.assertFalse(macos_menubar.is_status_visible())
+
+    def test_tray_uses_status_panel_not_alert(self) -> None:
+        text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
+        self.assertIn("from macos_menubar import", text)
+        self.assertIn("show_macos_status", text)
+        self.assertIn("apply_retina_icon", text)
+        self.assertIn("install_menubar", text)
+        self.assertNotIn("show_native_status", text)
+        self.assertIn("close_macos_status", text)
 
 
 class MainGuardTests(unittest.TestCase):

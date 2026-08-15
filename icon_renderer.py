@@ -39,6 +39,11 @@ def _track_color() -> tuple[int, int, int, int]:
     return (72, 76, 84, 255)
 
 
+def menubar_icon_pixels(point_size: float = 22.0, scale: float = 2.0) -> int:
+    """菜单栏约 22pt；按 backing scale 出像素，避免 1x 位图被 Retina 放大发糊。"""
+    return max(22, int(round(float(point_size) * max(1.0, float(scale)))))
+
+
 @lru_cache(maxsize=1)
 def tray_icon_size() -> int:
     """尽量用大图，系统缩放到托盘 / 菜单栏时更清晰。"""
@@ -48,8 +53,7 @@ def tray_icon_size() -> int:
         if sys.platform == "darwin":
             from dpi_util import enable_dpi_awareness
 
-            scale = enable_dpi_awareness()
-            return max(44, min(128, int(22 * scale * 2)))
+            return menubar_icon_pixels(22.0, enable_dpi_awareness())
         import ctypes
 
         sm = int(ctypes.windll.user32.GetSystemMetrics(49))  # SM_CXSMICON

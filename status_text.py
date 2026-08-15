@@ -60,3 +60,39 @@ def format_reset_date(iso_value: str) -> str:
         return f"{dt.month}月{dt.day}日"
     except ValueError:
         return iso_value
+
+
+def build_status_lines(
+    usage: UsageSnapshot | None,
+    error_message: str | None,
+    updated_at: str | None = None,
+) -> list[tuple[str, str]]:
+    """状态明细行（Windows 飞出层 / macOS 原生面板共用）。"""
+    if error_message:
+        return [("状态", error_message)]
+    if usage is None:
+        return [("状态", "等待刷新…")]
+
+    rows: list[tuple[str, str]] = [
+        ("剩余", f"{usage.remaining_percent:.1f}%（已用 {usage.used_percent:.1f}%）"),
+        ("计划", usage.membership_type),
+    ]
+    if usage.total_tokens:
+        rows.append(("消耗 Token", format_token_count(usage.total_tokens)))
+    if usage.auto_percent_used is not None or usage.api_percent_used is not None:
+        auto = "—" if usage.auto_percent_used is None else f"{usage.auto_percent_used:.1f}%"
+        api = "—" if usage.api_percent_used is None else f"{usage.api_percent_used:.1f}%"
+        rows.append(("明细", f"First-party {auto} · API {api}"))
+
+    if usage.billing_cycle_end:
+        end_text = format_reset_date(usage.billing_cycle_end)
+        if usage.days_remaining is not None:
+            rows.append(("重置", f"{end_text}（还剩 {usage.days_remaining} 天）"))
+        else:
+            rows.append(("重置", end_text))
+        rows.append(("预计可用", format_estimated_days(usage)))
+    elif usage.estimated_usable_days is not None:
+        rows.append(("预计可用", format_estimated_days(usage)))
+
+    rows.append(("更新", updated_at or datetime.now().strftime("%H:%M:%S")))
+    return rows
