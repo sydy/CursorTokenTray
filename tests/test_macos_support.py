@@ -364,9 +364,12 @@ class MenuBarIconTests(unittest.TestCase):
     def test_menubar_icon_pixels_matches_retina(self) -> None:
         from icon_renderer import menubar_icon_pixels
 
-        self.assertEqual(menubar_icon_pixels(22, 1), 22)
+        self.assertEqual(menubar_icon_pixels(22, 1), 44)
         self.assertEqual(menubar_icon_pixels(22, 2), 44)
         self.assertEqual(menubar_icon_pixels(22, 3), 66)
+        from icon_renderer import menubar_icon_rep_sizes
+
+        self.assertEqual(menubar_icon_rep_sizes(22), (44, 66))
 
     def test_macos_tray_icon_size_is_retina(self) -> None:
         import importlib
@@ -378,7 +381,7 @@ class MenuBarIconTests(unittest.TestCase):
             sys.platform = "darwin"
             icon_renderer.tray_icon_size.cache_clear()
             importlib.reload(icon_renderer)
-            self.assertGreaterEqual(icon_renderer.tray_icon_size(), 44)
+            self.assertGreaterEqual(icon_renderer.tray_icon_size(), 66)
         finally:
             sys.platform = original
             importlib.reload(icon_renderer)
@@ -575,6 +578,9 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertNotIn("tkinter", text)
         self.assertNotIn("customtkinter", text)
         self.assertNotIn("import tk", text)
+        self.assertIn("imageWithSize_flipped_drawingHandler_", text)
+        self.assertIn("menubar_icon_rep_sizes", text)
+        self.assertIn("_update_icon", text)
 
     def test_menubar_api_importable(self) -> None:
         import macos_menubar
@@ -584,16 +590,18 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertTrue(callable(macos_menubar.update_status))
         self.assertTrue(callable(macos_menubar.close_status))
         self.assertTrue(callable(macos_menubar.apply_retina_icon))
+        self.assertTrue(callable(macos_menubar.set_menubar_icon))
         self.assertFalse(macos_menubar.is_status_visible())
 
     def test_tray_uses_status_panel_not_alert(self) -> None:
         text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
         self.assertIn("from macos_menubar import", text)
         self.assertIn("show_macos_status", text)
-        self.assertIn("apply_retina_icon", text)
+        self.assertIn("set_menubar_icon", text)
         self.assertIn("install_menubar", text)
         self.assertNotIn("show_native_status", text)
         self.assertIn("close_macos_status", text)
+        self.assertIn("不要走 pystray 的 icon setter", text)
 
 
 class MainGuardTests(unittest.TestCase):

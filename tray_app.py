@@ -25,8 +25,9 @@ from status_text import format_summary_text
 import usage_history
 
 if IS_MAC:
-    from macos_menubar import apply_retina_icon, close_status as close_macos_status
+    from macos_menubar import close_status as close_macos_status
     from macos_menubar import install as install_menubar
+    from macos_menubar import set_menubar_icon
     from macos_menubar import show_status as show_macos_status
     from macos_menubar import update_status as update_macos_status
     from macos_settings import show_settings
@@ -99,7 +100,6 @@ class TrayApp:
 
     def _on_icon_ready(self, icon: pystray.Icon) -> None:
         if IS_MAC:
-            icon.visible = True
             try:
                 from AppKit import NSApp, NSApplicationActivationPolicyAccessory
 
@@ -110,6 +110,7 @@ class TrayApp:
                 install_menubar(icon, on_left_click=self._open_status_bg)
             except Exception as exc:
                 app_log(f"install menubar hooks failed: {exc}")
+            icon.visible = True
             app_log("menubar icon ready; no Tk in tray process")
             self._maybe_open_first_run_settings()
             return
@@ -668,19 +669,30 @@ class TrayApp:
         usage, err, updated = self._ui_snapshot()
         if err and str(err).startswith("未配置"):
             image = create_idle_icon(mode=mode)
+            remaining, is_error = None, False
         elif err:
             image = create_progress_icon(None, error=True, mode=mode)
+            remaining, is_error = None, True
         elif usage:
             image = create_progress_icon(usage.remaining_percent, mode=mode)
+            remaining, is_error = usage.remaining_percent, False
         else:
             image = create_idle_icon(mode=mode)
+            remaining, is_error = None, False
 
-        self.icon.icon = image
         if IS_MAC:
             try:
-                apply_retina_icon(self.icon, image)
+                # 不要走 pystray 的 icon setter：它会把图缩成 22×22 1x。
+                if getattr(self.icon, "_icon", None) is None:
+                    self.icon._icon = image
+                set_menubar_icon(
+                    self.icon,
+                    remaining=remaining,
+                    error=is_error,
+                    mode=mode,
+                )
             except Exception as exc:
-                app_log(f"apply retina icon failed: {exc}")
+                app_log(f"set menubar icon failed: {exc}")
             if usage is not None:
                 self.icon.title = f"{usage.remaining_percent:.0f}%"
             elif err and str(err).startswith("未配置"):
@@ -692,6 +704,7 @@ class TrayApp:
             except Exception as exc:
                 app_log(f"update macos status failed: {exc}")
         else:
+            self.icon.icon = image
             self.icon.title = ""
 
         if self.popups is not None:

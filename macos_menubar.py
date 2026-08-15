@@ -7,7 +7,7 @@ pystray 的 Darwin 后端会把图标缩成 statusBar.thickness()（约 22×22 �
 所以「显示状态」的 NSAlert 既不像明细窗，也经常在 LSUIElement 下不出现。
 
 这里在菜单栏进程里用 AppKit：
-- 用 2x/3x 像素重建 NSImage，按 22pt 显示，且不是 template
+- 用 drawingHandler 按目标 scale 矢量重画，或嵌入 2x+3x 位图；禁止 1x 22px
 - 左键打开原生状态面板；右键仍弹出原菜单
 不要用 Tk。
 """
@@ -32,6 +32,7 @@ try:
         NSEvent,
         NSFloatingWindowLevel,
         NSFont,
+        NSBitmapImageRep,
         NSImage,
         NSImageView,
         NSObject,
@@ -59,6 +60,12 @@ _RIGHT_MONITOR = None
 _OUTSIDE_MONITOR = None
 _LAST_MENU_AT = 0.0
 _INSTALLED_ICON = None
+_ICON_STATE: dict[str, Any] = {
+    "remaining": None,
+    "error": False,
+    "mode": "ring",
+}
+_LAST_ICON_LOG: tuple[Any, ...] | None = None
 
 # NSEventType / NSEventMask（避免个别 SDK 常量名差异）
 _NS_LEFT_UP = 2
@@ -80,68 +87,45 @@ def install(icon, *, on_left_click: Callable[[], None] | None = None) -> None:
         return
     global _INSTALLED_ICON
     _INSTALLED_ICON = icon
-    _patch_assert_image(icon)
-    apply_retina_icon(icon, getattr(icon, "icon", None))
+    _patch_icon_updates(icon)
     _patch_update_menu(icon)
     _detach_menu(icon)
     _install_clicks(icon, on_left_click)
+    set_menubar_icon(icon, remaining=None, error=False, mode="ring")
     app_log("menubar retina icon and status panel installed")
 
 
-def apply_retina_icon(icon, image) -> None:
-    """用带 scale 的 NSImage 替换 pystray 的 22px 1x 图。"""
-    if not _HAS_APPKIT or icon is None or image is None:
+def apply_retina_icon(icon, image=None, **kwargs: Any) -> None:
+    """兼容旧入口：改走矢量 / 2x+3x 图标。"""
+    set_menubar_icon(icon, image=image, **kwargs)
+
+
+def set_menubar_icon(
+    icon,
+    *,
+    remaining: float | None = None,
+    error: bool = False,
+    mode: str = "ring",
+    image=None,
+) -> None:
+    """在主线程设置菜单栏图标。不要把小图放大，也不要走 pystray 的 22px 路径。"""
+    _ICON_STATE["remaining"] = remaining
+    _ICON_STATE["error"] = bool(error)
+    _ICON_STATE["mode"] = (mode or "ring").strip().lower()
+    if image is not None:
+        _ICON_STATE["image"] = image
+    if not _HAS_APPKIT or icon is None:
         return
-    item = getattr(icon, "_status_item", None)
-    if item is None:
-        return
+
+    def go() -> None:
+        _apply_icon_now(icon)
+
     try:
-        from AppKit import NSStatusBar
+        from macos_settings import _on_main
 
-        thickness = float(NSStatusBar.systemStatusBar().thickness() or 22.0)
+        _on_main(go)
     except Exception:
-        thickness = 22.0
-    if thickness <= 0:
-        thickness = 22.0
-
-    from dpi_util import enable_dpi_awareness
-    from icon_renderer import menubar_icon_pixels
-
-    px = menubar_icon_pixels(thickness, enable_dpi_awareness())
-    work = image
-    try:
-        if work.size != (px, px):
-            from PIL import Image
-
-            work = image.resize((px, px), Image.Resampling.LANCZOS)
-    except Exception:
-        work = image
-
-    ns = _pil_to_nsimage(work, thickness)
-    if ns is None:
-        return
-    try:
-        ns.setTemplate_(False)
-    except Exception:
-        pass
-    button = item.button()
-    if button is None:
-        return
-    button.setImage_(ns)
-    try:
-        button.setImagePosition_(1)  # NSImageOnly
-    except Exception:
-        pass
-    icon._icon_image = ns
-    try:
-        from AppKit import NSSquareStatusItemLength
-
-        item.setLength_(NSSquareStatusItemLength)
-    except Exception:
-        try:
-            item.setLength_(thickness)
-        except Exception:
-            pass
+        go()
 
 
 def show_status(
@@ -232,11 +216,309 @@ def is_status_visible() -> bool:
         return False
 
 
-def _patch_assert_image(icon) -> None:
+def _patch_icon_updates(icon) -> None:
+    """彻底接管 pystray 设图，避免它再 resize 成 22×22 并 setTemplate。"""
+
     def _assert_image() -> None:
-        apply_retina_icon(icon, getattr(icon, "icon", None))
+        _apply_icon_now(icon)
+
+    def _update_icon() -> None:
+        def go() -> None:
+            _apply_icon_now(icon)
+            icon._icon_valid = True
+
+        try:
+            from macos_settings import _on_main
+
+            _on_main(go)
+        except Exception:
+            go()
 
     icon._assert_image = _assert_image
+    icon._update_icon = _update_icon
+
+
+def _menubar_point_size(icon) -> float:
+    try:
+        from AppKit import NSStatusBar
+
+        thickness = float(NSStatusBar.systemStatusBar().thickness() or 22.0)
+        if thickness > 0:
+            return thickness
+    except Exception:
+        pass
+    return 22.0
+
+
+def _menubar_scale(icon) -> float:
+    scales = [2.0]
+    try:
+        item = getattr(icon, "_status_item", None)
+        if item is not None:
+            win = item.button().window()
+            if win is not None:
+                scales.append(float(win.backingScaleFactor()))
+    except Exception:
+        pass
+    try:
+        from AppKit import NSScreen
+
+        for screen in list(NSScreen.screens() or []):
+            scales.append(float(screen.backingScaleFactor()))
+        main = NSScreen.mainScreen()
+        if main is not None:
+            scales.append(float(main.backingScaleFactor()))
+    except Exception:
+        pass
+    return max(scales)
+
+
+def _apply_icon_now(icon) -> None:
+    if not _HAS_APPKIT or icon is None:
+        return
+    item = getattr(icon, "_status_item", None)
+    if item is None:
+        return
+    button = item.button()
+    if button is None:
+        return
+
+    point = _menubar_point_size(icon)
+    scale = _menubar_scale(icon)
+    remaining = _ICON_STATE.get("remaining")
+    error = bool(_ICON_STATE.get("error"))
+    mode = str(_ICON_STATE.get("mode") or "ring")
+
+    ns = _make_status_nsimage(remaining, error, mode, point, scale)
+    if ns is None:
+        return
+    try:
+        ns.setTemplate_(False)
+    except Exception:
+        pass
+    try:
+        from AppKit import NSImageCacheNever
+
+        ns.setCacheMode_(NSImageCacheNever)
+    except Exception:
+        try:
+            ns.setCacheMode_(3)
+        except Exception:
+            pass
+
+    button.setImage_(ns)
+    try:
+        button.setImagePosition_(1)  # NSImageOnly
+    except Exception:
+        pass
+    try:
+        button.setImageScaling_(2)  # NSImageScaleNone
+    except Exception:
+        pass
+    icon._icon_image = ns
+    try:
+        from AppKit import NSSquareStatusItemLength
+
+        item.setLength_(NSSquareStatusItemLength)
+    except Exception:
+        try:
+            item.setLength_(point)
+        except Exception:
+            pass
+
+    global _LAST_ICON_LOG
+    key = (
+        None if remaining is None else int(round(float(remaining))),
+        error,
+        mode,
+        round(point, 1),
+        round(scale, 2),
+    )
+    if key != _LAST_ICON_LOG:
+        _LAST_ICON_LOG = key
+        app_log(f"menubar icon applied pt={point:.1f} scale={scale:.2f} mode={mode} remaining={remaining}")
+
+
+def _make_status_nsimage(
+    remaining: float | None,
+    error: bool,
+    mode: str,
+    point: float,
+    scale: float,
+):
+    size = NSMakeSize(float(point), float(point))
+    try:
+        def handler(rect) -> bool:
+            try:
+                _draw_status_icon(rect, remaining, error, mode)
+            except Exception as exc:  # noqa: BLE001
+                app_log(f"draw menubar icon failed: {exc}")
+            return True
+
+        img = NSImage.imageWithSize_flipped_drawingHandler_(size, False, handler)
+        if img is not None:
+            img.setTemplate_(False)
+            return img
+    except Exception as exc:
+        app_log(f"vector menubar icon failed, using bitmap reps: {exc}")
+    return _bitmap_status_nsimage(remaining, error, mode, point)
+
+
+def _draw_status_icon(rect, remaining: float | None, error: bool, mode: str) -> None:
+    from AppKit import NSBezierPath
+    from icon_renderer import remaining_color
+
+    w = float(rect.size.width)
+    h = float(rect.size.height)
+    cx = float(rect.origin.x) + w / 2.0
+    cy = float(rect.origin.y) + h / 2.0
+    box = min(w, h)
+    inset = max(1.0, box * 0.08)
+    outer = box / 2.0 - inset
+    if mode == "dot":
+        r = box * 0.38
+        if error:
+            rgb = (231, 76, 60)
+        elif remaining is None:
+            rgb = (100, 116, 139)
+        else:
+            rgb = remaining_color(remaining)
+        _ns_color(*rgb).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(
+            NSMakeRect(cx - r, cy - r, r * 2.0, r * 2.0)
+        ).fill()
+        if error:
+            _draw_centered_text("!", cx, cy, box * 0.42, (255, 255, 255))
+        return
+
+    ring_w = outer * (0.12 if mode == "number" else 0.28)
+    mid_r = outer - ring_w / 2.0
+
+    disc_r = outer - ring_w * 0.08
+    _ns_color(255, 255, 255, 0.16).setFill()
+    NSBezierPath.bezierPathWithOvalInRect_(
+        NSMakeRect(cx - disc_r, cy - disc_r, disc_r * 2.0, disc_r * 2.0)
+    ).fill()
+
+    track = NSBezierPath.bezierPathWithOvalInRect_(
+        NSMakeRect(cx - mid_r, cy - mid_r, mid_r * 2.0, mid_r * 2.0)
+    )
+    track.setLineWidth_(ring_w)
+    _ns_color(236, 236, 240).setStroke()
+    track.stroke()
+
+    label = "–"
+    rgb = (148, 163, 184)
+    if error:
+        rgb = (248, 113, 113)
+        label = "!"
+        _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, rgb)
+    elif remaining is None:
+        _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, rgb)
+    else:
+        pct = min(100.0, max(0.0, float(remaining)))
+        rgb = remaining_color(pct)
+        if pct >= 99.95:
+            _stroke_arc(cx, cy, mid_r, ring_w, 0.0, 360.0, rgb)
+        elif pct > 0.05:
+            _stroke_arc(cx, cy, mid_r, ring_w, 90.0, 90.0 - pct / 100.0 * 360.0, rgb)
+        label = "100" if pct >= 99.5 else str(int(round(pct)))
+
+    if mode == "dot":
+        return
+    font_box = box * (0.40 if label == "100" else 0.50 if len(label) >= 2 else 0.58)
+    _draw_centered_text(label, cx, cy, font_box, rgb)
+
+
+def _stroke_arc(
+    cx: float,
+    cy: float,
+    radius: float,
+    width: float,
+    start: float,
+    end: float,
+    rgb: tuple[int, int, int],
+) -> None:
+    from AppKit import NSBezierPath
+
+    path = NSBezierPath.bezierPath()
+    path.setLineWidth_(width)
+    try:
+        path.setLineCapStyle_(1)  # round
+    except Exception:
+        pass
+    if abs(abs(end - start) - 360.0) < 0.5:
+        path.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
+            (cx, cy), radius, 0.0, 360.0, False
+        )
+    else:
+        path.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
+            (cx, cy), radius, float(start), float(end), True
+        )
+    _ns_color(*rgb).setStroke()
+    path.stroke()
+
+
+def _ns_color(r: int, g: int, b: int, a: float = 1.0):
+    return NSColor.colorWithCalibratedRed_green_blue_alpha_(
+        r / 255.0, g / 255.0, b / 255.0, a
+    )
+
+
+def _draw_centered_text(
+    text: str,
+    cx: float,
+    cy: float,
+    size: float,
+    rgb: tuple[int, int, int],
+) -> None:
+    from AppKit import (
+        NSColor,
+        NSFont,
+        NSFontAttributeName,
+        NSForegroundColorAttributeName,
+        NSStrokeColorAttributeName,
+        NSStrokeWidthAttributeName,
+    )
+    from Foundation import NSAttributedString
+
+    try:
+        font = NSFont.monospacedDigitSystemFontOfSize_weight_(size, 0.5)
+    except Exception:
+        font = NSFont.boldSystemFontOfSize_(size)
+    attrs = {
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: _ns_color(*rgb),
+        NSStrokeColorAttributeName: NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.92),
+        NSStrokeWidthAttributeName: -10.0,
+    }
+    s = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
+    ts = s.size()
+    s.drawAtPoint_((cx - float(ts.width) / 2.0, cy - float(ts.height) / 2.0))
+
+
+def _bitmap_status_nsimage(
+    remaining: float | None,
+    error: bool,
+    mode: str,
+    point: float,
+):
+    from icon_renderer import create_progress_icon, menubar_icon_rep_sizes
+
+    img = NSImage.alloc().initWithSize_(NSMakeSize(float(point), float(point)))
+    img.setTemplate_(False)
+    for px in menubar_icon_rep_sizes(point):
+        pil = create_progress_icon(remaining, error=error, size=int(px), mode=mode)
+        buf = io.BytesIO()
+        pil.save(buf, format="PNG")
+        raw = buf.getvalue()
+        data = NSData.dataWithBytes_length_(raw, len(raw))
+        rep = NSBitmapImageRep.alloc().initWithData_(data)
+        if rep is None:
+            continue
+        rep.setSize_(NSMakeSize(float(point), float(point)))
+        img.addRepresentation_(rep)
+    return img
 
 
 def _patch_update_menu(icon) -> None:
