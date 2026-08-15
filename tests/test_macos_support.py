@@ -149,6 +149,17 @@ class InstanceLockUnixTests(unittest.TestCase):
             instance_lock._release_unix()
 
 
+class WindowHelperTests(unittest.TestCase):
+    def test_center_pos(self) -> None:
+        from platform_util import window_center_pos
+
+        x, y = window_center_pos(1440, 900, 760, 560)
+        self.assertGreaterEqual(x, 40)
+        self.assertGreaterEqual(y, 48)
+        self.assertLess(x + 760, 1440)
+        self.assertLess(y + 560, 900)
+
+
 class MenuBarIconTests(unittest.TestCase):
     def test_macos_idle_icon_has_light_pixels(self) -> None:
         import icon_renderer

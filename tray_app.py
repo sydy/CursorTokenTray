@@ -21,7 +21,7 @@ from cursor_api import (
 )
 from icon_renderer import create_idle_icon, create_progress_icon
 from popup_ui import MenuAction, PopupManager, StatusActions, format_summary_text
-from platform_util import IS_MAC
+from platform_util import IS_MAC, app_log
 from settings_ui import SettingsWindow
 import usage_history
 
@@ -73,7 +73,8 @@ class TrayApp:
 
     def run(self) -> None:
         if not self.config.get("session_token"):
-            threading.Timer(0.8, lambda: self.settings.open(focus_token=True)).start()
+            delay = 1.2 if IS_MAC else 0.8
+            threading.Timer(delay, lambda: self.settings.open(focus_token=True)).start()
 
         try:
             from autostart import set_autostart
@@ -289,9 +290,9 @@ class TrayApp:
         self._open_settings_bg(focus_token=False)
 
     def _action_open_settings_focus(self, _icon=None, _item=None) -> None:
-        self._open_settings_bg(focus_token=True)
+        self._open_settings_bg(focus_token=True, start_import=True)
 
-    def _open_settings_bg(self, *, focus_token: bool = False) -> None:
+    def _open_settings_bg(self, *, focus_token: bool = False, start_import: bool = False) -> None:
         """先收起飞出层/菜单，再在同一 Tk 线程打开设置（避免闪一下的空窗）。"""
 
         def worker() -> None:
@@ -299,15 +300,26 @@ class TrayApp:
             if watcher is not None:
                 watcher.pause()
             try:
-                # 设置已挂到同一 UI 线程，只需关掉飞出层；不必长时间等待
                 self.popups.close()
             except Exception:
                 pass
             if watcher is not None:
                 watcher.notify_closed()
-            self.settings.open(focus_token=focus_token)
+            if IS_MAC:
+                # 等 NSMenu 收起后再建窗，否则窗口常被系统丢掉
+                time.sleep(0.2)
+            try:
+                self.settings.open(focus_token=focus_token, start_import=start_import)
+            except Exception as exc:  # noqa: BLE001
+                app_log(f"open settings failed: {exc}")
+                try:
+                    from platform_util import show_error_alert
 
-        threading.Thread(target=worker, daemon=True).start()
+                    show_error_alert("设置", f"无法打开设置：{exc}")
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True, name="open-settings").start()
 
     def _action_quit(self, _icon=None, _item=None) -> None:
         # 稍延后，让矢量菜单 Tk 先收尾，避免与 icon.stop 打架

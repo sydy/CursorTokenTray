@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 IS_WIN = sys.platform == "win32"
@@ -142,6 +143,66 @@ def set_dock_visible(visible: bool) -> None:
             NSApp.activateIgnoringOtherApps_(True)
         else:
             NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except Exception:
+        pass
+
+
+def reveal_app_windows() -> None:
+    """把 LSUIElement 应用切到前台，否则 Toplevel 经常建出来却看不见。"""
+    set_dock_visible(True)
+    try:
+        from AppKit import NSApp
+
+        NSApp.activateIgnoringOtherApps_(True)
+        for nsw in list(NSApp.windows() or []):
+            try:
+                nsw.makeKeyAndOrderFront_(None)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def show_error_alert(title: str, message: str) -> None:
+    if IS_MAC:
+        try:
+            import subprocess
+
+            def _q(text: str) -> str:
+                return text.replace("\\", "\\\\").replace('"', '\\"')
+
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    f'display alert "{_q(title)}" message "{_q(message)}" as critical',
+                ],
+                check=False,
+                capture_output=True,
+                timeout=8,
+            )
+            return
+        except Exception:
+            pass
+    print(f"{title}: {message}")
+
+
+def window_center_pos(screen_w: int, screen_h: int, win_w: int, win_h: int) -> tuple[int, int]:
+    x = max(40, (int(screen_w) - int(win_w)) // 2)
+    y = max(48, (int(screen_h) - int(win_h)) // 3)
+    return x, y
+
+
+def app_log(message: str) -> None:
+    try:
+        path = (
+            Path.home() / "Library" / "Logs" / "CursorTokenTray.log"
+            if IS_MAC
+            else app_config_dir() / "app.log"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
     except Exception:
         pass
 

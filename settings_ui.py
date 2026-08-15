@@ -13,7 +13,14 @@ import customtkinter as ctk
 from app_icon import apply_window_icon
 from config import load_config, save_config
 from dpi_util import enable_dpi_awareness
-from platform_util import IS_MAC, set_dock_visible
+from platform_util import (
+    IS_MAC,
+    app_log,
+    reveal_app_windows,
+    set_dock_visible,
+    show_error_alert,
+    window_center_pos,
+)
 from ui_ctk import (
     ACCENT,
     BG,
@@ -29,6 +36,51 @@ from ui_ctk import (
     make_ghost_button,
     make_switch,
 )
+
+
+def _present_settings_window(win: tk.Misc, win_w: int = 760, win_h: int = 560) -> None:
+    """确保设置窗真正映射到屏幕前台（macOS LSUIElement 下 withdraw/几何失败很常见）。"""
+    reveal_app_windows()
+    try:
+        win.deiconify()
+    except tk.TclError:
+        pass
+    try:
+        win.update_idletasks()
+    except tk.TclError:
+        pass
+    try:
+        sw = int(win.winfo_screenwidth() or 1440)
+        sh = int(win.winfo_screenheight() or 900)
+        px, py = window_center_pos(sw, sh, win_w, win_h)
+        win.geometry(f"{win_w}x{win_h}+{px}+{py}")
+    except tk.TclError:
+        try:
+            win.geometry(f"{win_w}x{win_h}")
+        except tk.TclError:
+            pass
+    try:
+        win.minsize(640, 420)
+    except tk.TclError:
+        pass
+    try:
+        win.lift()
+        win.focus_force()
+        win.attributes("-topmost", True)
+        win.after(1200, lambda: _relax_topmost(win))
+    except tk.TclError:
+        pass
+    reveal_app_windows()
+
+
+def _relax_topmost(win: tk.Misc) -> None:
+    try:
+        if win.winfo_exists():
+            win.attributes("-topmost", False)
+            win.lift()
+    except tk.TclError:
+        pass
+
 
 _DISPLAY_MODE_LABELS = (
     ("ring", "圆环百分比"),
@@ -59,6 +111,7 @@ class SettingsWindow:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._focus_token = False
+        self._start_import = False
         self._root: tk.Misc | None = None
         self._owns_loop = False
 
@@ -78,8 +131,9 @@ class SettingsWindow:
         with self._lock:
             return self._root
 
-    def open(self, *, focus_token: bool = False) -> None:
+    def open(self, *, focus_token: bool = False, start_import: bool = False) -> None:
         self._focus_token = bool(focus_token)
+        self._start_import = bool(start_import)
         if self._ui is not None:
             self._ui.run_on_ui(self._show_on_ui_thread, wait=False)
             return
@@ -95,24 +149,33 @@ class SettingsWindow:
             if win is not None and win.winfo_exists():
                 if self._focus_token:
                     self._focus_token_field()
-                win.deiconify()
-                win.lift()
-                win.focus_force()
+                _present_settings_window(win, 760, 560)
                 return
         except tk.TclError:
             with self._lock:
                 self._root = None
 
         host = getattr(self._ui, "tk_root", None) if self._ui is not None else None
+        if host is None and self._ui is not None:
+            try:
+                attach = getattr(self._ui, "attach_main_thread", None)
+                if callable(attach):
+                    attach()
+                host = getattr(self._ui, "tk_root", None)
+            except Exception as exc:  # noqa: BLE001
+                app_log(f"settings attach failed: {exc}")
         if host is None:
+            app_log("settings: no tk host")
+            show_error_alert("设置", "界面尚未就绪，请再点一次菜单栏图标后的「设置…」。")
             return
         try:
             self._build_ui(host=host, owns_loop=False)
         except Exception as exc:  # noqa: BLE001
+            app_log(f"settings build failed: {exc}")
             try:
                 messagebox.showerror("设置", f"无法打开设置窗口：{exc}")
             except Exception:
-                pass
+                show_error_alert("设置", f"无法打开设置窗口：{exc}")
 
     def _focus_token_field(self) -> None:
         entry = getattr(self, "_token_entry", None)
@@ -126,8 +189,7 @@ class SettingsWindow:
                 entry.select_range(0, "end")
             except Exception:
                 pass
-            win.lift()
-            win.focus_force()
+            _present_settings_window(win)
         except tk.TclError:
             pass
 
@@ -159,14 +221,15 @@ class SettingsWindow:
             root: tk.Misc = ctk.CTk()
         else:
             root = ctk.CTkToplevel(host)
-            try:
-                root.withdraw()
-            except tk.TclError:
-                pass
+            if not IS_MAC:
+                try:
+                    root.withdraw()
+                except tk.TclError:
+                    pass
 
         with self._lock:
             self._root = root
-        set_dock_visible(True)
+        reveal_app_windows()
         root.title("设置")
         root.resizable(True, True)
 
@@ -693,22 +756,20 @@ class SettingsWindow:
 
         try:
             root.bind("<Escape>", lambda _e: _close_window())
-            root.update_idletasks()
-            root.geometry(f"{win_w}x{win_h}")
-            root.minsize(640, 420)
-            root.deiconify()
-            root.lift()
-            root.focus_force()
-            root.attributes("-topmost", True)
-            root.after(280, lambda: root.attributes("-topmost", False))
         except tk.TclError:
             pass
+        _present_settings_window(root, win_w, win_h)
 
         apply_window_icon(root)
         apply_native_window_chrome(root)
 
         if focus_token:
             self._focus_token_field()
+        if getattr(self, "_start_import", False):
+            try:
+                root.after(400, lambda: run_import(open_browser=True))
+            except tk.TclError:
+                run_import(open_browser=True)
 
         if owns_loop:
             try:

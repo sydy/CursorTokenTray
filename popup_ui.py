@@ -19,7 +19,7 @@ from config import APP_NAME
 from cursor_api import UsageSnapshot, format_token_count, is_auth_error_message
 from dpi_util import enable_dpi_awareness
 from icon_renderer import create_progress_icon, create_sparkline, remaining_color
-from platform_util import IS_MAC, cursor_pos, mouse_left_down, place_tray_popup, ui_font_family
+from platform_util import IS_MAC, app_log, cursor_pos, mouse_left_down, place_tray_popup, ui_font_family
 from ui_ctk import init_ctk
 
 DPI_SCALE = enable_dpi_awareness()
@@ -77,8 +77,7 @@ class PopupManager:
             return
         init_ctk()
         root = ctk.CTk()
-        root.withdraw()
-        _apply_tk_scaling(root)
+        _prepare_hidden_root(root)
         with self._lock:
             self._root = root
             self._ui_thread = threading.current_thread()
@@ -94,8 +93,10 @@ class PopupManager:
             try:
                 if root.winfo_exists():
                     root.update()
-            except tk.TclError:
-                return
+            except tk.TclError as exc:
+                app_log(f"macos tk pump: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                app_log(f"macos tk pump: {exc}")
             try:
                 from PyObjCTools import AppHelper
 
@@ -184,6 +185,8 @@ class PopupManager:
             except Exception as exc:
                 if err_box is not None:
                     err_box[0] = exc
+                else:
+                    app_log(f"ui command failed: {exc}")
             finally:
                 if done is not None:
                     done.set()
@@ -196,8 +199,17 @@ class PopupManager:
         timeout: float = 3.0,
     ) -> bool:
         self._start_ui_thread()
-        if IS_MAC and not self._ui_ready.wait(timeout=max(timeout, 5.0)):
-            return False
+        if IS_MAC:
+            if not self._ui_ready.wait(timeout=max(timeout, 5.0)):
+                app_log("run_on_ui: tk host not ready")
+                return False
+            # 菜单栏点击发生在 NSMenu 跟踪期间，同步建窗经常不显示，一律排队
+            done = threading.Event() if wait else None
+            err_box: list[BaseException | None] | None = [None] if wait else None
+            self._cmd_queue.put((fn, done, err_box))
+            if not wait:
+                return True
+            return done.wait(timeout=timeout)
         if self._ui_thread is not None and threading.current_thread() is self._ui_thread:
             fn()
             return True
@@ -666,6 +678,33 @@ def _format_date(iso_value: str) -> str:
         return iso_value
 
 
+def _prepare_hidden_root(root: tk.Misc) -> None:
+    """macOS：withdraw 的根窗口会导致 CTkToplevel 建出来却不显示。改为映射到屏外。"""
+    _apply_tk_scaling(root)
+    if not IS_MAC:
+        try:
+            root.withdraw()
+        except tk.TclError:
+            pass
+        return
+    try:
+        root.overrideredirect(True)
+    except tk.TclError:
+        pass
+    try:
+        root.attributes("-alpha", 0.0)
+    except tk.TclError:
+        pass
+    try:
+        root.geometry("1x1+-32000+-32000")
+        root.deiconify()
+    except tk.TclError:
+        try:
+            root.withdraw()
+        except tk.TclError:
+            pass
+
+
 def _apply_tk_scaling(root: tk.Misc) -> None:
     if IS_MAC:
         return
@@ -757,17 +796,6 @@ class _StatusCard:
         win.title(APP_NAME)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        if IS_MAC:
-            try:
-                win.tk.call(
-                    "::tk::unsupported::MacWindowStyle",
-                    "style",
-                    win._w,
-                    "help",
-                    "noTitleBar",
-                )
-            except tk.TclError:
-                pass
         win.configure(fg_color=self.BG)
 
         self._body_host = ctk.CTkFrame(win, fg_color=self.BG, corner_radius=0)
