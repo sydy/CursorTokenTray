@@ -440,6 +440,7 @@ class NativeSettingsGuardTests(unittest.TestCase):
 
         self.assertTrue(callable(macos_settings.show_settings))
         self.assertTrue(callable(macos_settings.run_macos_settings))
+        self.assertTrue(callable(macos_settings.close_settings))
         self.assertTrue(callable(macos_settings._on_main))
         seen: list[int] = []
         macos_settings._on_main(lambda: seen.append(1))
@@ -449,6 +450,14 @@ class NativeSettingsGuardTests(unittest.TestCase):
         text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
         self.assertIn("from macos_settings import show_settings", text)
         self.assertNotIn("open_settings_async", text)
+
+    def test_quit_closes_settings_on_main_thread(self) -> None:
+        tray = (ROOT / "tray_app.py").read_text(encoding="utf-8")
+        settings = (ROOT / "macos_settings.py").read_text(encoding="utf-8")
+        self.assertIn("close_settings", tray)
+        self.assertIn("abortModal", settings)
+        self.assertIn("def close_settings", settings)
+        self.assertIn("_quit_macos", tray)
 
     def test_settings_uses_main_thread_modal(self) -> None:
         text = (ROOT / "macos_settings.py").read_text(encoding="utf-8")

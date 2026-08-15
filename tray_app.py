@@ -247,6 +247,7 @@ class TrayApp:
         app_log("stop requested")
         self._stop.set()
         self._refresh_event.set()
+        self._arm_quit_watchdog(2.0)
 
         watcher = getattr(self.icon, "_hover_watcher", None)
         if watcher is not None:
@@ -264,35 +265,15 @@ class TrayApp:
                 except Exception:
                     pass
 
-        def _stop_icon() -> None:
-            try:
-                self.icon.visible = False
-            except Exception:
-                pass
-            try:
-                self.icon.stop()
-            except Exception as exc:
-                app_log(f"icon.stop failed: {exc}")
-            if IS_MAC:
-                try:
-                    from PyObjCTools import AppHelper
-
-                    AppHelper.stopEventLoop()
-                except Exception:
-                    pass
-
         if IS_MAC:
-            try:
-                from PyObjCTools import AppHelper
+            self._quit_macos()
+            return
 
-                AppHelper.callLater(0.05, _stop_icon)
-            except Exception:
-                _stop_icon()
-        else:
-            threading.Thread(target=_stop_icon, daemon=True, name="stop-icon").start()
+        threading.Thread(target=self._stop_icon, daemon=True, name="stop-icon").start()
 
+    def _arm_quit_watchdog(self, seconds: float) -> None:
         def _watchdog() -> None:
-            time.sleep(5.0)
+            time.sleep(seconds)
             app_log("stop watchdog: icon.run did not return, forcing exit")
             try:
                 from instance_lock import release
@@ -303,6 +284,50 @@ class TrayApp:
             os._exit(0)
 
         threading.Thread(target=_watchdog, daemon=True, name="stop-watchdog").start()
+
+    def _stop_icon(self) -> None:
+        try:
+            self.icon.visible = False
+        except Exception:
+            pass
+        try:
+            self.icon.stop()
+        except Exception as exc:
+            app_log(f"icon.stop failed: {exc}")
+        if IS_MAC:
+            try:
+                from PyObjCTools import AppHelper
+
+                AppHelper.stopEventLoop()
+            except Exception:
+                pass
+            try:
+                from AppKit import NSApp
+
+                NSApp.terminate_(None)
+            except Exception:
+                pass
+
+    def _quit_macos(self) -> None:
+        """必须在 AppKit 主线程关模态窗再停循环，否则点退出没反应。"""
+
+        def _do() -> None:
+            app_log("quit on main thread")
+            try:
+                from macos_settings import close_settings
+
+                close_settings()
+            except Exception as exc:
+                app_log(f"close_settings failed: {exc}")
+            self._stop_icon()
+
+        try:
+            from macos_settings import _on_main
+
+            _on_main(_do)
+        except Exception as exc:
+            app_log(f"quit dispatch failed: {exc}")
+            _do()
 
     def _action_open_status(self, _icon=None, _item=None) -> None:
         threading.Thread(target=self._open_status_bg, daemon=True).start()
@@ -366,7 +391,18 @@ class TrayApp:
         threading.Thread(target=worker, daemon=True, name="open-settings").start()
 
     def _action_quit(self, _icon=None, _item=None) -> None:
-        # 稍延后，让矢量菜单 Tk 先收尾，避免与 icon.stop 打架
+        app_log("quit menu clicked")
+        if IS_MAC:
+            # 菜单回调已在主线程。再丢到后台线程后 callLater 不会触发，表现为退不出。
+            try:
+                from PyObjCTools import AppHelper
+
+                AppHelper.callLater(0.05, self.stop)
+            except Exception:
+                self.stop()
+            return
+
+        # Windows：稍延后，让矢量菜单 Tk 先收尾，避免与 icon.stop 打架
         def _later() -> None:
             time.sleep(0.2)
             self.stop()

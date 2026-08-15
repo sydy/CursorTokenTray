@@ -94,6 +94,30 @@ def _on_main(fn: Callable[[], None]) -> None:
     app_log("settings dispatched via performSelectorOnMainThread")
 
 
+def close_settings() -> None:
+    """退出前关掉设置模态窗，否则主循环停不下来。"""
+    global _CONTROLLER
+    app_log("close_settings")
+    ctrl = _CONTROLLER
+    _CONTROLLER = None
+    if not _HAS_APPKIT:
+        return
+    try:
+        NSApplication.sharedApplication().abortModal()
+    except Exception:
+        pass
+    try:
+        NSApplication.sharedApplication().stopModal()
+    except Exception:
+        pass
+    window = getattr(ctrl, "window", None) if ctrl is not None else None
+    if window is not None:
+        try:
+            window.close()
+        except Exception as exc:
+            app_log(f"close settings window failed: {exc}")
+
+
 def show_settings(
     *,
     focus_token: bool = False,
