@@ -18,7 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from cursor_api import CursorApiError, fetch_usage_summary, normalize_workos_token
+from cursor_api import (
+    CursorApiError,
+    fetch_usage_summary,
+    normalize_workos_token,
+    session_token_variants,
+)
 from platform_util import IS_MAC, app_log
 
 LOGIN_URL = "https://cursor.com/dashboard"
@@ -217,7 +222,8 @@ def _is_plausible_session_token(value: str) -> bool:
     return (
         "%3a%3a" in lowered
         or "::" in text
-        or text.count(".") >= 2
+        or text.startswith("eyJ")
+        or ".eyJ" in text
         or text.startswith("user_")
         or lowered.startswith("workoscursorsessiontoken=")
     )
@@ -319,7 +325,6 @@ def read_cursor_access_token(db_path: Path) -> str | None:
     keys = (
         "cursorAuth/accessToken",
         "cursorAuth/cachedAccessToken",
-        "cursorAuth/refreshToken",
     )
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=1.0)
@@ -416,45 +421,68 @@ def import_and_validate(
         key=lambda c: (-c.last_update, order.get(c.browser, 99)),
     )
     last_err = "找到 Cookie，但校验均失败"
+    last_source = candidates[0].browser
     tried = 0
     for c in candidates:
         if should_cancel and should_cancel():
             return ImportResult(ok=False, message="已取消")
-        if c.token in skip:
+        variants = session_token_variants(c.token)
+        if not variants:
+            variants = [c.token]
+        if all(v in skip for v in variants):
             continue
-        tried += 1
         if on_progress:
-            on_progress(f"正在校验 {c.browser} ({c.profile}) 的 Cookie…")
-        try:
-            snap = fetch_usage_summary(c.token, timeout=validate_timeout)
-            return ImportResult(
-                ok=True,
-                token=c.token,
-                browser=c.browser,
-                profile=c.profile,
-                remaining_percent=snap.remaining_percent,
-                membership_type=snap.membership_type,
-                message=(
-                    f"已从 {c.browser} ({c.profile}) 导入并校验成功："
-                    f"剩余 {snap.remaining_percent:.1f}% · {snap.membership_type}"
-                ),
-            )
-        except CursorApiError as err:
-            last_err = str(err)
-            skip.add(c.token)
-        except Exception as err:  # noqa: BLE001
-            last_err = f"校验失败: {err}"
-            skip.add(c.token)
+            on_progress(f"正在校验 {c.browser} ({c.profile}) 的登录态…")
+        for variant in variants:
+            if variant in skip:
+                continue
+            tried += 1
+            try:
+                snap = fetch_usage_summary(variant, timeout=validate_timeout)
+                return ImportResult(
+                    ok=True,
+                    token=variant,
+                    browser=c.browser,
+                    profile=c.profile,
+                    remaining_percent=snap.remaining_percent,
+                    membership_type=snap.membership_type,
+                    message=(
+                        f"已从 {c.browser} ({c.profile}) 导入并校验成功："
+                        f"剩余 {snap.remaining_percent:.1f}% · {snap.membership_type}"
+                    ),
+                )
+            except CursorApiError as err:
+                last_err = str(err)
+                last_source = c.browser
+                app_log(f"validate {c.browser} HTTP {err.status_code}: {err}")
+                if err.is_auth_error:
+                    skip.add(variant)
+                else:
+                    # 超时/网络错误下一轮还要重试，不能把可用 Cookie 永久丢掉
+                    break
+            except Exception as err:  # noqa: BLE001
+                last_err = f"校验失败: {err}"
+                last_source = c.browser
+                app_log(f"validate {c.browser} error: {err}")
+                break
 
     if tried == 0 and skip:
         return ImportResult(
             ok=False,
-            message="已读取到 Cookie，但尚未通过校验（仍在等待新的登录态）。",
+            message=(
+                f"已读到 {last_source} 的 Cookie，但接口拒绝了这条登录态。"
+                "网页上看着已登录，不等于读到的 WorkosCursorSessionToken 能用。"
+                "请在当前浏览器按 F12 → Application/存储 → Cookies → cursor.com，"
+                "复制 WorkosCursorSessionToken 的完整值并粘贴到上方。"
+            ),
         )
 
     return ImportResult(
         ok=False,
-        message=f"已读取到 Cookie，但无法通过校验：{last_err}\n请重新登录 cursor.com 后再导入。",
+        message=(
+            f"已读到 {last_source} 的 Cookie，但校验失败：{last_err}\n"
+            "请在当前已登录的浏览器里完整复制 WorkosCursorSessionToken 后粘贴。"
+        ),
     )
 
 

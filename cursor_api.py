@@ -149,6 +149,45 @@ def normalize_workos_token(token: str) -> str:
     return value
 
 
+def session_token_variants(token: str) -> list[str]:
+    """Dashboard 对 Cookie 形态不统一，把常见写法都试一遍。"""
+    variants: list[str] = []
+
+    def add(value: str | None) -> None:
+        text = (value or "").strip()
+        if text and text not in variants:
+            variants.append(text)
+
+    raw = (token or "").strip()
+    try:
+        add(normalize_workos_token(raw))
+    except CursorApiError:
+        pass
+    add(raw)
+    jwt = raw
+    if "%3A%3A" in raw:
+        jwt = raw.split("%3A%3A", 1)[-1]
+        add(raw.replace("%3A%3A", "::", 1))
+    elif "%3a%3a" in raw:
+        jwt = raw.split("%3a%3a", 1)[-1]
+        add(raw.replace("%3a%3a", "::", 1))
+    elif "::" in raw:
+        jwt = raw.split("::", 1)[-1]
+        add(raw.replace("::", "%3A%3A", 1))
+    if _looks_like_jwt(jwt):
+        add(jwt)
+        payload = _jwt_payload(jwt)
+        sub = str((payload or {}).get("sub") or "")
+        if sub:
+            user_id = sub.split("|")[-1]
+            add(f"{user_id}%3A%3A{jwt}")
+            add(f"{user_id}::{jwt}")
+            if sub != user_id:
+                add(f"{sub}%3A%3A{jwt}")
+                add(f"{sub}::{jwt}")
+    return variants[:4]
+
+
 def fetch_usage_summary(session_token: str, timeout: float = 30.0) -> UsageSnapshot:
     token = normalize_workos_token(session_token)
     if not token:
@@ -517,15 +556,20 @@ def _looks_like_jwt(value: str) -> bool:
     return len(parts) == 3 and all(parts)
 
 
-def _extract_user_id_from_jwt(jwt: str) -> str:
+def _jwt_payload(jwt: str) -> dict[str, Any] | None:
     try:
         payload_part = jwt.split(".")[1]
         padded = payload_part + "=" * (-len(payload_part) % 4)
         padded = padded.replace("-", "+").replace("_", "/")
         payload = json.loads(base64.b64decode(padded).decode("utf-8"))
-        sub = str(payload.get("sub") or "")
-        if not sub:
-            return ""
-        return sub.split("|")[-1]
+        return payload if isinstance(payload, dict) else None
     except Exception:
+        return None
+
+
+def _extract_user_id_from_jwt(jwt: str) -> str:
+    payload = _jwt_payload(jwt)
+    if not payload:
         return ""
+    sub = str(payload.get("sub") or "")
+    return sub.split("|")[-1] if sub else ""

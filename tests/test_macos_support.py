@@ -467,6 +467,19 @@ class TokenNormalizeTests(unittest.TestCase):
             normalize_workos_token("user_01ABC%3A%3A\ufffd")
         self.assertIn("解密失败", str(ctx.exception))
 
+    def test_session_token_variants_cover_common_shapes(self) -> None:
+        from cursor_api import session_token_variants
+
+        header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"sub": "github|user_01VAR"}).encode()
+        ).decode().rstrip("=")
+        jwt = f"{header}.{payload}.sig"
+        variants = session_token_variants(jwt)
+        self.assertTrue(any(v.startswith("user_01VAR%3A%3A") for v in variants))
+        self.assertTrue(any("::" in v for v in variants))
+        self.assertLessEqual(len(variants), 4)
+
 
 class StatusTextTests(unittest.TestCase):
     def test_waiting_and_error(self) -> None:
