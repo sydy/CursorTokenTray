@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import queue
 import subprocess
-import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -29,7 +28,7 @@ from platform_util import (
     show_error_alert,
     window_center_pos,
 )
-from settings_launch import settings_command
+from settings_launch import settings_command, settings_env, settings_flags
 from ui_ctk import (
     ACCENT,
     BG,
@@ -64,21 +63,25 @@ def spawn_settings_process(*, focus_token: bool = False, start_import: bool = Fa
             app_log("settings process already running")
             return None
         cmd = settings_command(focus_token=focus_token, start_import=start_import)
+        env = settings_env(focus_token=focus_token, start_import=start_import)
         app_log(f"spawn settings: {cmd}")
         _settings_proc = subprocess.Popen(
             cmd,
+            env=env,
             start_new_session=True,
             close_fds=True,
             cwd=str(Path(cmd[0]).resolve().parent) if os.path.isabs(cmd[0]) else None,
         )
         proc = _settings_proc
-    return int(proc.wait())
+    rc = int(proc.wait())
+    app_log(f"settings process exited rc={rc}")
+    return rc
 
 
 def run_settings_main() -> int:
     """`python main.py --settings` / 打包后 `CursorTokenTray --settings` 的入口。"""
-    focus_token = "--focus-token" in sys.argv[1:]
-    start_import = "--start-import" in sys.argv[1:]
+    focus_token, start_import = settings_flags()
+    app_log(f"settings ui start focus={focus_token} import={start_import}")
     become_foreground_app()
     enable_dpi_awareness()
     try:

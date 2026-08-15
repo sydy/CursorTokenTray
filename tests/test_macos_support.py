@@ -149,6 +149,14 @@ class InstanceLockUnixTests(unittest.TestCase):
             instance_lock._release_unix()
 
 
+class LogPathTests(unittest.TestCase):
+    def test_log_path_current_platform(self) -> None:
+        from platform_util import log_path
+
+        path = log_path()
+        self.assertTrue(path.name in {"CursorTokenTray.log", "app.log"})
+
+
 class WindowHelperTests(unittest.TestCase):
     def test_center_pos(self) -> None:
         from platform_util import window_center_pos
@@ -178,6 +186,16 @@ class MenuBarIconTests(unittest.TestCase):
 
 
 class SettingsProcessTests(unittest.TestCase):
+    def test_is_settings_process_argv_and_env(self) -> None:
+        from settings_launch import is_settings_process, settings_flags
+
+        self.assertFalse(is_settings_process(argv=[], env={}))
+        self.assertTrue(is_settings_process(argv=["--settings"], env={}))
+        self.assertTrue(is_settings_process(argv=[], env={"CURSORTOKEN_MODE": "settings"}))
+        focus, start_import = settings_flags(argv=["--focus-token"], env={"CURSORTOKEN_START_IMPORT": "1"})
+        self.assertTrue(focus)
+        self.assertTrue(start_import)
+
     def test_settings_command_dev(self) -> None:
         from settings_launch import settings_command
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -192,18 +194,95 @@ def window_center_pos(screen_w: int, screen_h: int, win_w: int, win_h: int) -> t
     return x, y
 
 
+def log_path() -> Path:
+    if IS_MAC:
+        return Path.home() / "Library" / "Logs" / "CursorTokenTray.log"
+    return app_config_dir() / "app.log"
+
+
 def app_log(message: str) -> None:
+    line = f"{datetime.now().isoformat(timespec='seconds')} [{os.getpid()}] {message}"
     try:
-        path = (
-            Path.home() / "Library" / "Logs" / "CursorTokenTray.log"
-            if IS_MAC
-            else app_config_dir() / "app.log"
-        )
+        path = log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+            f.write(line + "\n")
     except Exception:
         pass
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def install_crash_logging() -> None:
+    """把未捕获异常写进日志。本地 `快速启动.command` 以前把 stderr 丢进 /dev/null。"""
+
+    def _hook(exc_type, exc, tb) -> None:
+        app_log(f"UNCAUGHT {getattr(exc_type, '__name__', exc_type)}: {exc}")
+        app_log("".join(traceback.format_exception(exc_type, exc, tb)).rstrip())
+
+    sys.excepthook = _hook
+
+    def _thread_hook(args) -> None:
+        name = args.thread.name if args.thread is not None else "?"
+        app_log(f"THREAD {name} {getattr(args.exc_type, '__name__', args.exc_type)}: {args.exc_value}")
+        if args.exc_type is not None:
+            app_log(
+                "".join(
+                    traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
+                ).rstrip()
+            )
+
+    threading.excepthook = _thread_hook
+
+
+def copy_text(text: str) -> bool:
+    """复制到剪贴板。macOS 用 pbcopy，避免托盘进程再碰 Tk。"""
+    if IS_MAC:
+        try:
+            import subprocess
+
+            subprocess.run(
+                ["pbcopy"],
+                input=text.encode("utf-8"),
+                check=False,
+                timeout=3,
+            )
+            return True
+        except Exception as exc:
+            app_log(f"pbcopy failed: {exc}")
+            return False
+    return False
+
+
+def show_native_status(title: str, body: str) -> None:
+    """macOS 状态用系统对话框，菜单栏进程里禁止创建 Tk。"""
+    if not IS_MAC:
+        return
+
+    def _show() -> None:
+        app_log("native status dialog")
+        try:
+            from AppKit import NSAlert, NSInformationalAlertStyle
+
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(body)
+            alert.setAlertStyle_(NSInformationalAlertStyle)
+            alert.addButtonWithTitle_("好")
+            alert.runModal()
+            return
+        except Exception as exc:
+            app_log(f"NSAlert failed: {exc}")
+        show_error_alert(title, body)
+
+    try:
+        from PyObjCTools import AppHelper
+
+        AppHelper.callLater(0.15, _show)
+    except Exception:
+        threading.Thread(target=_show, daemon=True, name="native-status").start()
 
 
 def _cursor_pos_win() -> tuple[int, int]:

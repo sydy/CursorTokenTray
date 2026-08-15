@@ -53,6 +53,8 @@ python3 main.py
 
 图标会出现在屏幕右上角菜单栏。首次从 Chrome 导入 Cookie 时，系统可能弹出钥匙串授权，请点「允许」。
 
+本地运行日志：`~/Library/Logs/CursorTokenTray.log`（`快速启动.command` 也会把 stdout/stderr 追加进去）。出问题请先看这份日志。
+
 ## 使用已打包版本
 
 ### Windows

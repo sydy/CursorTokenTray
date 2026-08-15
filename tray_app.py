@@ -21,7 +21,7 @@ from cursor_api import (
 )
 from icon_renderer import create_idle_icon, create_progress_icon
 from popup_ui import MenuAction, PopupManager, StatusActions, format_summary_text
-from platform_util import IS_MAC, app_log
+from platform_util import IS_MAC, app_log, copy_text, show_native_status
 from settings_ui import SettingsWindow
 import usage_history
 
@@ -78,6 +78,7 @@ class TrayApp:
     def run(self) -> None:
         if not self.config.get("session_token"):
             delay = 1.2 if IS_MAC else 0.8
+            app_log(f"no session token, open settings in {delay}s")
             threading.Timer(delay, lambda: self.settings.open(focus_token=True)).start()
 
         try:
@@ -98,21 +99,10 @@ class TrayApp:
                 from AppKit import NSApp, NSApplicationActivationPolicyAccessory
 
                 NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
-            except Exception:
-                pass
-            # 先让 NSStatusItem 出现，再创建 Tk，避免抢 NSApplication 导致图标不显示
-            def _attach_tk() -> None:
-                try:
-                    self.popups.attach_main_thread()
-                except Exception:
-                    pass
-
-            try:
-                from PyObjCTools import AppHelper
-
-                AppHelper.callLater(0.4, _attach_tk)
-            except Exception:
-                _attach_tk()
+            except Exception as exc:
+                app_log(f"set accessory policy failed: {exc}")
+            # 菜单栏进程禁止创建 Tk：和 pystray 同线程 50Hz update() 会卡死崩溃。
+            app_log("menubar icon ready; skip Tk in tray process")
             return
 
         from tray_hover import enable_hover_flyout, patch_pystray_uid
@@ -200,6 +190,12 @@ class TrayApp:
             watcher.resume()
 
     def _open_status_bg(self) -> None:
+        if IS_MAC:
+            usage, err, updated = self._ui_snapshot()
+            text = format_summary_text(usage, err, updated)
+            app_log(f"open native status: {text[:160]}")
+            show_native_status("Cursor Token 剩余进度", text)
+            return
         self.popups.cancel_hover_close()
         if self._status_opening or self.popups.status_visible or self.popups.busy:
             return
@@ -310,6 +306,7 @@ class TrayApp:
             if watcher is not None:
                 watcher.notify_closed()
             try:
+                app_log(f"open settings focus={focus_token} import={start_import}")
                 self.settings.open(focus_token=focus_token, start_import=start_import)
             except Exception as exc:  # noqa: BLE001
                 app_log(f"open settings failed: {exc}")
@@ -333,6 +330,10 @@ class TrayApp:
     def _copy_summary(self) -> None:
         usage, err, updated = self._ui_snapshot()
         text = format_summary_text(usage, err, updated)
+        if IS_MAC:
+            if copy_text(text):
+                app_log("copied summary via pbcopy")
+            return
 
         def _clip() -> None:
             root = self.popups.tk_root
