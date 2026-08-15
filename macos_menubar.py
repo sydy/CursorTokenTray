@@ -7,8 +7,8 @@ pystray 的 Darwin 后端会把图标缩成 statusBar.thickness()（约 22×22 �
 所以「显示状态」的 NSAlert 既不像明细窗，也经常在 LSUIElement 下不出现。
 
 这里在菜单栏进程里用 AppKit：
-- 用 drawingHandler 按目标 scale 矢量重画，或嵌入 2x+3x 位图；禁止 1x 22px
-- 左键打开原生状态面板；右键仍弹出原菜单
+- 方案 A：细环 + 数字的 template 图标，随菜单栏深浅着色
+- 组合 4：左右分栏状态浮层，不用大彩环
 不要用 Tk。
 """
 
