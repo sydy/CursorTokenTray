@@ -613,7 +613,18 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertIn("status_pill_text", text)
         self.assertIn("format_estimate_caption", text)
         self.assertIn("popup_origin_for_anchor", text)
+        self.assertIn("watch_ring_metrics", text)
         self.assertNotIn("remaining_color", text)
+
+    def test_watch_ring_metrics_leave_digit_gap(self) -> None:
+        from macos_menubar import watch_ring_metrics
+
+        m = watch_ring_metrics(22.0)
+        self.assertGreaterEqual(m["ring_w"], 1.85)
+        self.assertLessEqual(m["ring_w"], 2.4)
+        self.assertAlmostEqual(m["track_alpha"], 0.30)
+        self.assertLess(m["digit_2"], m["inner_r"] * 1.25)
+        self.assertGreater(m["inner_r"] - m["digit_2"] / 2, 0.8)
 
     def test_popup_origin_right_aligns_to_icon(self) -> None:
         from macos_menubar import popup_origin_for_anchor

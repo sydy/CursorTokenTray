@@ -7,7 +7,7 @@ pystray 的 Darwin 后端会把图标缩成 statusBar.thickness()（约 22×22 �
 所以「显示状态」的 NSAlert 既不像明细窗，也经常在 LSUIElement 下不出现。
 
 这里在菜单栏进程里用 AppKit：
-- 方案 A：细环 + 数字的 template 图标，随菜单栏深浅着色
+- 圆环 2：手表细环 + 略小数字的 template 图标
 - 组合 4：左右分栏状态浮层，不用大彩环
 不要用 Tk。
 """
@@ -411,8 +411,29 @@ def _make_status_nsimage(
     return _bitmap_status_nsimage(remaining, error, mode, point)
 
 
+def watch_ring_metrics(box: float) -> dict[str, float]:
+    """圆环 2 · 手表细环：约 2pt 线宽，数字小于内径，不贴环。"""
+    side = max(1.0, float(box))
+    inset = max(1.5, side * 0.13)
+    outer = side / 2.0 - inset
+    ring_w = max(1.85, min(2.4, side * 0.095))
+    mid_r = max(ring_w, outer - ring_w / 2.0)
+    inner_r = max(1.0, mid_r - ring_w / 2.0)
+    return {
+        "inset": inset,
+        "outer": outer,
+        "ring_w": ring_w,
+        "mid_r": mid_r,
+        "inner_r": inner_r,
+        "digit_2": inner_r * 1.18,
+        "digit_3": inner_r * 0.96,
+        "digit_1": inner_r * 1.32,
+        "track_alpha": 0.30,
+    }
+
+
 def _draw_status_icon(rect, remaining: float | None, error: bool, mode: str) -> None:
-    """方案 A：细环 + 数字，黑白模板，由系统按菜单栏深浅着色。"""
+    """圆环 2：手表细环 + 略小数字，黑白模板随菜单栏着色。"""
     from AppKit import NSBezierPath
 
     w = float(rect.size.width)
@@ -441,16 +462,20 @@ def _draw_status_icon(rect, remaining: float | None, error: bool, mode: str) -> 
         _draw_centered_text(label, cx, cy, font_box, ink, template=True)
         return
 
-    inset = max(1.1, box * 0.10)
-    outer = box / 2.0 - inset
-    ring_w = max(1.2, outer * 0.13)
-    mid_r = outer - ring_w / 2.0
+    m = watch_ring_metrics(box)
+    mid_r = m["mid_r"]
+    ring_w = m["ring_w"]
 
     track = NSBezierPath.bezierPathWithOvalInRect_(
         NSMakeRect(cx - mid_r, cy - mid_r, mid_r * 2.0, mid_r * 2.0)
     )
     track.setLineWidth_(ring_w)
-    _ns_color(*ink, 0.28).setStroke()
+    try:
+        track.setLineCapStyle_(1)
+        track.setLineJoinStyle_(1)
+    except Exception:
+        pass
+    _ns_color(*ink, m["track_alpha"]).setStroke()
     track.stroke()
 
     label = "–"
@@ -467,7 +492,12 @@ def _draw_status_icon(rect, remaining: float | None, error: bool, mode: str) -> 
             _stroke_arc(cx, cy, mid_r, ring_w, 90.0, 90.0 - pct / 100.0 * 360.0, ink)
         label = "100" if pct >= 99.5 else str(int(round(pct)))
 
-    font_box = box * (0.36 if label == "100" else 0.46 if len(label) >= 2 else 0.54)
+    if label == "100":
+        font_box = m["digit_3"]
+    elif len(label) >= 2:
+        font_box = m["digit_2"]
+    else:
+        font_box = m["digit_1"]
     _draw_centered_text(label, cx, cy, font_box, ink, template=True)
 
 
@@ -523,7 +553,7 @@ def _draw_centered_text(
     from Foundation import NSAttributedString
 
     try:
-        font = NSFont.monospacedDigitSystemFontOfSize_weight_(size, 0.4)
+        font = NSFont.monospacedDigitSystemFontOfSize_weight_(size, 0.3)
     except Exception:
         font = NSFont.boldSystemFontOfSize_(size)
     attrs = {
