@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -347,6 +348,16 @@ def parse_usage_summary(payload: dict[str, Any]) -> UsageSnapshot:
     )
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """打包进 .app 后系统 CA 经常找不到，必须自带 certifi。"""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def _request_json(
     method: str,
     endpoint: str,
@@ -366,7 +377,7 @@ def _request_json(
     data = None if body is None else json.dumps(body).encode("utf-8")
     try:
         req = Request(url, data=data, headers=headers, method=method)
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             text = resp.read().decode("utf-8", errors="replace")
             if not text:
                 return {}

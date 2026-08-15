@@ -25,6 +25,7 @@ a = Analysis(
         'tkinter.messagebox',
         'cryptography',
         'cryptography.hazmat.primitives.ciphers.aead',
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},

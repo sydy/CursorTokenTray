@@ -32,6 +32,7 @@ a = Analysis(
         'macos_settings',
         'settings_launch',
         'status_text',
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},

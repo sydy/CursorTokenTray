@@ -29,6 +29,21 @@ from platform_util import IS_MAC, app_log
 LOGIN_URL = "https://cursor.com/dashboard"
 COOKIE_NAME = "WorkosCursorSessionToken"
 COOKIE_HOST_HINTS = ("cursor.com", "cursor.sh")
+FIREFOX_BROWSERS = frozenset(
+    {"firefox", "firefox-dev", "firefox-nightly", "librewolf", "waterfox", "zen"}
+)
+CHROMIUM_BROWSERS = frozenset(
+    {
+        "chrome",
+        "chrome-beta",
+        "chrome-canary",
+        "edge",
+        "brave",
+        "arc",
+        "vivaldi",
+        "chromium",
+    }
+)
 
 # 拷贝/读库/单次校验的上限，避免浏览器锁文件或网络拖死导入线程
 _COPY_TIMEOUT_SEC = 3.0
@@ -122,6 +137,17 @@ def _default_prefer_browsers(prefer: str | None = None) -> tuple[str, ...]:
     if IS_MAC:
         return cursor_first + ("safari",) + firefox_first + ("edge", "chrome", "brave", "arc")
     return cursor_first + firefox_first + ("edge", "chrome")
+
+
+def only_browsers_for(prefer: str | None) -> tuple[str, ...] | None:
+    """点了某个浏览器就只读它，避免去碰 Chrome 加密 Cookie。"""
+    if prefer in FIREFOX_BROWSERS:
+        return tuple(FIREFOX_BROWSERS)
+    if prefer == "safari":
+        return ("safari",)
+    if prefer == "cursor-app":
+        return ("cursor-app",)
+    return None
 
 
 def preferred_mac_app_names(prefer: str | None = None) -> list[str]:
@@ -272,15 +298,26 @@ def _scan_failure_note() -> str:
     return "\n".join(parts)
 
 
-def find_session_candidates() -> list[CookieCandidate]:
-    """扫描本机 Chrome / Edge / Firefox，收集 cursor.com 的 Session Token。"""
+def find_session_candidates(
+    *,
+    only_browsers: tuple[str, ...] | None = None,
+) -> list[CookieCandidate]:
+    """扫描本机浏览器 / Cursor 应用，收集 Session Token。"""
     global _SCAN
     _SCAN = _ScanStats()
+    wanted = set(only_browsers) if only_browsers else None
     found: list[CookieCandidate] = []
-    found.extend(_find_cursor_app_candidates())
-    found.extend(_find_chromium_candidates())
-    found.extend(_find_firefox_candidates())
-    if IS_MAC:
+    if wanted is None or "cursor-app" in wanted:
+        found.extend(_find_cursor_app_candidates())
+    if wanted is None or (wanted & CHROMIUM_BROWSERS):
+        found.extend(
+            c for c in _find_chromium_candidates() if wanted is None or c.browser in wanted
+        )
+    if wanted is None or (wanted & FIREFOX_BROWSERS):
+        found.extend(
+            c for c in _find_firefox_candidates() if wanted is None or c.browser in wanted
+        )
+    if IS_MAC and (wanted is None or "safari" in wanted):
         found.extend(_find_safari_candidates())
     # 新 → 旧
     found.sort(key=lambda c: c.last_update, reverse=True)
@@ -394,6 +431,7 @@ def _find_cursor_app_candidates() -> list[CookieCandidate]:
 def import_and_validate(
     *,
     prefer_browsers: tuple[str, ...] | None = None,
+    only_browsers: tuple[str, ...] | None = None,
     validate_timeout: float = _VALIDATE_TIMEOUT_SEC,
     skip_tokens: set[str] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -406,7 +444,7 @@ def import_and_validate(
         return ImportResult(ok=False, message="已取消")
     if on_progress:
         on_progress(_import_progress_label())
-    candidates = find_session_candidates()
+    candidates = find_session_candidates(only_browsers=only_browsers)
     if not candidates:
         note = _scan_failure_note()
         message = _no_cookie_message()
@@ -491,6 +529,7 @@ def poll_until_valid(
     timeout_sec: float = 180.0,
     interval_sec: float = 2.0,
     prefer_browsers: tuple[str, ...] | None = None,
+    only_browsers: tuple[str, ...] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> ImportResult:
@@ -504,6 +543,7 @@ def poll_until_valid(
         attempt += 1
         result = import_and_validate(
             prefer_browsers=prefer_browsers,
+            only_browsers=only_browsers,
             validate_timeout=_POLL_VALIDATE_TIMEOUT_SEC,
             skip_tokens=failed_tokens,
             should_cancel=should_cancel,
@@ -548,15 +588,7 @@ def start_browser_login_and_import(
         "firefox-dev": "正在打开 Firefox…",
         "chrome": "正在打开 Chrome…",
     }.get(prefer or "", "正在打开浏览器…")
-    if on_progress:
-        on_progress("正在读取本机 Cursor 登录态…")
-    existing = import_and_validate(
-        prefer_browsers=_default_prefer_browsers("cursor-app"),
-        should_cancel=should_cancel,
-        on_progress=None,
-    )
-    if existing.ok:
-        return existing
+    only = only_browsers_for(prefer)
     if on_progress:
         on_progress(opening)
     open_login_page(prefer=prefer)
@@ -564,9 +596,9 @@ def start_browser_login_and_import(
         return ImportResult(ok=False, message="已取消")
     if on_progress:
         if prefer == "safari":
-            on_progress("已打开 Safari，请登录 Cursor 账号…")
-        elif prefer in {"firefox", "firefox-dev", "firefox-nightly"}:
-            on_progress("已打开 Firefox，请登录 Cursor 账号…")
+            on_progress("已打开 Safari。请在 Safari 里登录 cursor.com，不要用已打开的 Chrome。")
+        elif prefer in FIREFOX_BROWSERS:
+            on_progress("已打开 Firefox。请在 Firefox 里登录 cursor.com，不要用已打开的 Chrome。")
         else:
             on_progress("已打开浏览器，请登录 Cursor 账号…")
     if not _interruptible_sleep(1.0, should_cancel):
@@ -574,6 +606,7 @@ def start_browser_login_and_import(
     return poll_until_valid(
         timeout_sec=timeout_sec,
         prefer_browsers=_default_prefer_browsers(prefer),
+        only_browsers=only,
         should_cancel=should_cancel,
         on_progress=on_progress,
     )

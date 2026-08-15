@@ -293,6 +293,17 @@ class BrowserPreferTests(unittest.TestCase):
         self.assertEqual(_default_prefer_browsers("firefox")[0], "cursor-app")
         self.assertEqual(_default_prefer_browsers("firefox")[1], "firefox")
 
+    def test_firefox_only_excludes_chrome(self) -> None:
+        from browser_auth import only_browsers_for
+
+        only = only_browsers_for("firefox")
+        self.assertIsNotNone(only)
+        assert only is not None
+        self.assertIn("firefox", only)
+        self.assertNotIn("chrome", only)
+        self.assertNotIn("edge", only)
+        self.assertIsNone(only_browsers_for(None))
+
 
 class InstanceLockUnixTests(unittest.TestCase):
     def test_second_acquire_fails(self) -> None:
@@ -488,6 +499,12 @@ class TokenNormalizeTests(unittest.TestCase):
         self.assertTrue(any(v.startswith("user_01VAR%3A%3A") for v in variants))
         self.assertTrue(any("::" in v for v in variants))
         self.assertLessEqual(len(variants), 4)
+
+    def test_ssl_context_available(self) -> None:
+        from cursor_api import _ssl_context
+
+        ctx = _ssl_context()
+        self.assertIsNotNone(ctx)
 
 
 class StatusTextTests(unittest.TestCase):
