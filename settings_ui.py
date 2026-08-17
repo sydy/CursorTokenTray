@@ -16,7 +16,7 @@ import customtkinter as ctk
 
 from app_icon import apply_window_icon
 from config import load_config, save_config
-from dpi_util import enable_dpi_awareness
+from dpi_util import enable_dpi_awareness, physical_window_size, sync_windows_ui_scale
 from platform_util import (
     IS_MAC,
     app_log,
@@ -80,7 +80,16 @@ def _present_settings_window(win: tk.Misc, win_w: int = 760, win_h: int = 560) -
     try:
         sw = int(win.winfo_screenwidth() or 1440)
         sh = int(win.winfo_screenheight() or 900)
-        px, py = window_center_pos(sw, sh, win_w, win_h)
+        # CTk.geometry 会按 window_scaling 放大宽高，定位要用放大后的物理尺寸。
+        scale = 1.0
+        try:
+            getter = getattr(win, "_get_window_scaling", None)
+            if callable(getter):
+                scale = max(1.0, float(getter()))
+        except Exception:
+            scale = 1.0
+        phys_w, phys_h = physical_window_size(win_w, win_h, scale)
+        px, py = window_center_pos(sw, sh, phys_w, phys_h)
         win.geometry(f"{win_w}x{win_h}+{px}+{py}")
     except tk.TclError:
         try:
@@ -246,6 +255,8 @@ class SettingsWindow:
     def _build_ui(self, *, host: tk.Misc | None, owns_loop: bool) -> None:
         enable_dpi_awareness()
         init_ctk()
+        if not IS_MAC:
+            sync_windows_ui_scale()
         cfg = load_config()
         focus_token = self._focus_token
         self._owns_loop = owns_loop
