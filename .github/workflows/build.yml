@@ -17,8 +17,8 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install test deps
@@ -30,8 +30,8 @@ jobs:
     name: Build Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install deps
@@ -44,7 +44,7 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist\CursorTokenTray -DestinationPath CursorTokenTray-windows.zip -Force
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: CursorTokenTray-windows
           path: CursorTokenTray-windows.zip
@@ -54,8 +54,8 @@ jobs:
     name: Build macOS
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Ensure tkinter
@@ -69,7 +69,7 @@ jobs:
         run: python3 -m PyInstaller --noconfirm CursorTokenTray.macos.spec
       - name: Zip .app
         run: ditto -c -k --keepParent dist/CursorTokenTray.app CursorTokenTray-macos.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: CursorTokenTray-macos
           path: CursorTokenTray-macos.zip
@@ -83,10 +83,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/**/*.zip
           generate_release_notes: true
