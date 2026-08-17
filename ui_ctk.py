@@ -33,7 +33,12 @@ def init_ctk() -> None:
     import sys
 
     if sys.platform == "win32":
+        from dpi_util import apply_ctk_scaling, current_dpi_scale
+
+        # 只关掉 CTk 自己调 SetProcessDpiAwareness；缩放仍要写回 widget/window_scaling，
+        # 否则 DPI 感知进程里飞出层/设置窗会按 1x 物理像素画，高分屏又小又乱。
         ctk.deactivate_automatic_dpi_awareness()
+        apply_ctk_scaling(current_dpi_scale())
     ctk.set_appearance_mode("dark")
     if THEME_PATH.is_file():
         ctk.set_default_color_theme(str(THEME_PATH))

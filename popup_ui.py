@@ -17,13 +17,19 @@ from PIL import Image, ImageDraw, ImageTk
 
 from config import APP_NAME
 from cursor_api import UsageSnapshot, format_token_count, is_auth_error_message
-from dpi_util import enable_dpi_awareness
+from dpi_util import (
+    enable_dpi_awareness,
+    parse_geometry_xy,
+    scaled_px,
+    set_physical_geometry,
+    sync_windows_ui_scale,
+)
 from icon_renderer import create_progress_icon, create_sparkline, remaining_color
 from platform_util import IS_MAC, app_log, cursor_pos, mouse_left_down, place_tray_popup, ui_font_family
 from status_text import format_estimated_days, format_reset_date, format_summary_text
 from ui_ctk import init_ctk
 
-DPI_SCALE = enable_dpi_awareness()
+enable_dpi_awareness()
 
 
 @dataclass
@@ -89,7 +95,7 @@ class PopupManager:
             init_ctk()
             root = ctk.CTk()
             root.withdraw()
-            _apply_tk_scaling(root)
+            _apply_tk_scaling(root, point=cursor_pos())
             try:
                 from app_icon import hide_from_taskbar
 
@@ -240,6 +246,7 @@ class PopupManager:
             root = self._root
             if root is None:
                 return
+            _apply_tk_scaling(root, point=cursor_pos())
             with self._lock:
                 self._generation += 1
                 gen = self._generation
@@ -318,6 +325,7 @@ class PopupManager:
                 if root is None:
                     closed.set()
                     return
+                _apply_tk_scaling(root, point=cursor_pos())
                 with self._lock:
                     self._generation += 1
                     gen = self._generation
@@ -361,6 +369,7 @@ class PopupManager:
                         host_root._tray_popup_gen = gen  # type: ignore[attr-defined]
                     except Exception:
                         pass
+                    _apply_tk_scaling(host_root, point=cursor_pos())
                     menu = _VectorMenu(
                         host_root,
                         actions,
@@ -544,19 +553,10 @@ def _prepare_hidden_root(root: tk.Misc) -> None:
         pass
 
 
-def _apply_tk_scaling(root: tk.Misc) -> None:
+def _apply_tk_scaling(root: tk.Misc, point: tuple[int, int] | None = None) -> None:
     if IS_MAC:
         return
-    try:
-        import ctypes
-
-        dpi = int(ctypes.windll.user32.GetDpiForSystem())
-        root.tk.call("tk", "scaling", dpi / 72.0)
-    except Exception:
-        try:
-            root.tk.call("tk", "scaling", DPI_SCALE * 96 / 72.0)
-        except Exception:
-            pass
+    sync_windows_ui_scale(root, point=point)
 
 
 def _cursor_pos() -> tuple[int, int]:
@@ -643,8 +643,8 @@ class _StatusCard:
         self._rebuild_content()
 
         win.update_idletasks()
-        width = max(win.winfo_reqwidth(), 420)
-        height = win.winfo_reqheight()
+        width = max(int(win.winfo_reqwidth()), scaled_px(420))
+        height = int(win.winfo_reqheight())
         _place_above_taskbar(win, width, height, gap=14)
 
         win.update()
@@ -711,12 +711,13 @@ class _StatusCard:
             return
         try:
             self.win.update_idletasks()
-            width = max(self.win.winfo_reqwidth(), 420)
-            height = self.win.winfo_reqheight()
-            geo = self.win.geometry()
-            parts = geo.split("+")
-            pos = "+" + "+".join(parts[1:]) if len(parts) >= 3 else ""
-            self.win.geometry(f"{width}x{height}{pos}")
+            width = max(int(self.win.winfo_reqwidth()), scaled_px(420))
+            height = int(self.win.winfo_reqheight())
+            pos = parse_geometry_xy(str(tk.Wm.geometry(self.win)))
+            if pos is None:
+                set_physical_geometry(self.win, width, height)
+            else:
+                set_physical_geometry(self.win, width, height, pos[0], pos[1])
         except tk.TclError:
             pass
 
@@ -741,7 +742,7 @@ class _StatusCard:
         hero = ctk.CTkFrame(card, fg_color="transparent")
         hero.pack(fill="x", padx=16, pady=(14, 10))
 
-        icon_px = max(52, int(round(52 * DPI_SCALE)))
+        icon_px = scaled_px(52)
         if has_usage:
             icon_img = create_progress_icon(remaining, error=False, size=icon_px)
         elif is_error:
@@ -835,8 +836,8 @@ class _StatusCard:
             ctk.CTkLabel(chart, text=burn, text_color=self.FG_TER, font=ctk.CTkFont(size=11), anchor="w").pack(
                 fill="x"
             )
-            spark_w = max(200, int(round(220 * DPI_SCALE)))
-            spark_h = max(36, int(round(40 * DPI_SCALE)))
+            spark_w = scaled_px(220)
+            spark_h = scaled_px(40)
             spark = create_sparkline(self._history_values, width=spark_w, height=spark_h)
             sph = ImageTk.PhotoImage(spark)
             self._photos.append(sph)
@@ -1132,15 +1133,15 @@ def _menu_layout(root: tk.Misc | None = None) -> tuple[int, int, int, int, int]:
     from win11_theme import MENU_ITEM_RADIUS, font as win11_font
 
     font_size = 10
-    item_radius = MENU_ITEM_RADIUS
-    min_width = 248
-    icon_px = max(16, int(round(16 * DPI_SCALE)))
+    item_radius = scaled_px(MENU_ITEM_RADIUS)
+    min_width = scaled_px(248)
+    icon_px = scaled_px(16)
 
-    row_h = 36
+    row_h = scaled_px(36)
     if root is not None:
         try:
             f = tkfont.Font(root=root, font=win11_font(font_size))
-            row_h = max(32, int(f.metrics("linespace")) + 6)
+            row_h = max(scaled_px(32), int(f.metrics("linespace")) + scaled_px(6))
         except tk.TclError:
             pass
 

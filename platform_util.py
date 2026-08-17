@@ -57,7 +57,9 @@ def work_area() -> tuple[int, int, int, int]:
 
 
 def place_tray_popup(win, width: int, height: int, gap: int = 10) -> None:
-    """托盘/菜单栏附近放置无边框弹窗。"""
+    """托盘/菜单栏附近放置无边框弹窗。width/height 必须是屏幕像素。"""
+    from dpi_util import set_physical_geometry
+
     cx, cy = cursor_pos()
     left, top, right, bottom = work_area()
     px = cx - width // 2
@@ -70,7 +72,7 @@ def place_tray_popup(win, width: int, height: int, gap: int = 10) -> None:
         py = bottom - height - gap
         if py < top + 8:
             py = top + 8
-    win.geometry(f"{width}x{height}+{int(px)}+{int(py)}")
+    set_physical_geometry(win, width, height, int(px), int(py))
 
 
 def mouse_left_down() -> bool:
