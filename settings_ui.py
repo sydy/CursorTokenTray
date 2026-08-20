@@ -16,7 +16,7 @@ import customtkinter as ctk
 
 from app_icon import apply_window_icon
 from config import load_config, save_config
-from dpi_util import enable_dpi_awareness, physical_window_size, sync_windows_ui_scale
+from dpi_util import cap_ctk_maxsize, enable_dpi_awareness, physical_window_size, sync_windows_ui_scale
 from platform_util import (
     IS_MAC,
     app_log,
@@ -263,8 +263,10 @@ class SettingsWindow:
 
         if host is None:
             root: tk.Misc = ctk.CTk()
+            cap_ctk_maxsize(root)
         else:
             root = ctk.CTkToplevel(host)
+            cap_ctk_maxsize(root)
             if not IS_MAC:
                 try:
                     root.withdraw()

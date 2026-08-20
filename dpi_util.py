@@ -7,6 +7,10 @@
 
 飞出层用 ``winfo_reqwidth`` 得到的是**物理像素**，再走 CTk.geometry 会二次放大。
 这类尺寸必须用 ``set_physical_geometry``。
+
+CTk 窗口默认 ``_max_width/_max_height = 1_000_000``。``set_window_scaling`` 会把这个
+上限写进 Win32 ``ptMaxTrackSize``；GPU/DWM 常按最大纹理边长（约 16384）提交
+一块 CPU 几乎不碰的提交内存，表现为工作集不大、提交却到十几 GB。
 """
 
 from __future__ import annotations
@@ -14,8 +18,35 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+# 100%–300%。再高对托盘飞出层没有收益，却会把 CTk maxsize / 字体位图放大到危险区。
+MIN_UI_SCALE = 1.0
+MAX_UI_SCALE = 3.0
+MIN_DPI = 96
+MAX_DPI = 288
+# CTk 设计像素上限（再乘 window_scaling 才是屏幕像素）。4K 最大化设置窗够用。
+CTK_MAX_DESIGN_W = 2560
+CTK_MAX_DESIGN_H = 1600
+
 _process_scale = 1.0
 _ctk_scale: float | None = None
+
+
+def clamp_ui_scale(scale: float) -> float:
+    """把缩放钳在 [1.0, 3.0]，挡住 ctypes 读到的垃圾 DPI。"""
+    try:
+        value = float(scale)
+    except (TypeError, ValueError):
+        return MIN_UI_SCALE
+    if value != value:  # NaN
+        return MIN_UI_SCALE
+    return min(MAX_UI_SCALE, max(MIN_UI_SCALE, value))
+
+
+def clamp_dpi(dpi: int) -> int:
+    value = int(dpi or 0)
+    if value < MIN_DPI or value > MAX_DPI:
+        return MIN_DPI
+    return value
 
 
 def enable_dpi_awareness() -> float:
@@ -68,28 +99,28 @@ def current_dpi_scale(
         return max(1.0, float(_process_scale if sys.platform == "darwin" else 1.0))
     try:
         dpi = _windows_dpi(hwnd=hwnd, point=point)
-        return max(1.0, float(dpi) / 96.0)
+        return clamp_ui_scale(float(dpi) / 96.0)
     except Exception:
-        return max(1.0, float(_process_scale or 1.0))
+        return clamp_ui_scale(_process_scale or 1.0)
 
 
 def scaled_px(base: int, scale: float | None = None) -> int:
     """设计像素 → 物理像素。scale 默认取当前显示器。"""
     s = current_dpi_scale() if scale is None else float(scale)
-    return max(int(base), int(round(int(base) * max(1.0, s))))
+    s = clamp_ui_scale(s)
+    return max(int(base), int(round(int(base) * s)))
 
 
 def physical_window_size(design_w: int, design_h: int, scale: float | None = None) -> tuple[int, int]:
     """设计尺寸 × 缩放 → 屏幕像素，供居中计算。CTk.geometry 仍应传入设计尺寸。"""
-    s = current_dpi_scale() if scale is None else float(scale)
-    s = max(1.0, s)
+    s = clamp_ui_scale(current_dpi_scale() if scale is None else float(scale))
     return scaled_px(int(design_w), s), scaled_px(int(design_h), s)
 
 
 def tk_scaling_value(scale: float | None = None) -> float:
     """Tk ``tk scaling``：1.0 表示 72dpi。96dpi 时为 96/72。"""
-    s = current_dpi_scale() if scale is None else float(scale)
-    return max(1.0, s) * 96.0 / 72.0
+    s = clamp_ui_scale(current_dpi_scale() if scale is None else float(scale))
+    return s * 96.0 / 72.0
 
 
 def apply_tk_scaling(root: Any, scale: float | None = None) -> None:
@@ -106,7 +137,7 @@ def apply_ctk_scaling(scale: float | None = None) -> float:
     global _ctk_scale
     if sys.platform != "win32":
         return 1.0
-    s = max(1.0, float(current_dpi_scale() if scale is None else scale))
+    s = clamp_ui_scale(current_dpi_scale() if scale is None else scale)
     if _ctk_scale is not None and abs(_ctk_scale - s) < 0.02:
         return _ctk_scale
     try:
@@ -175,63 +206,138 @@ def ctk_window_scale(win: Any = None) -> float:
         try:
             getter = getattr(win, "_get_window_scaling", None)
             if callable(getter):
-                return max(1.0, float(getter()))
+                return clamp_ui_scale(getter())
         except Exception:
             pass
     if _ctk_scale is not None:
-        return max(1.0, float(_ctk_scale))
+        return clamp_ui_scale(_ctk_scale)
     return current_dpi_scale()
+
+
+def cap_ctk_maxsize(win: Any, design_w: int = CTK_MAX_DESIGN_W, design_h: int = CTK_MAX_DESIGN_H) -> None:
+    """把 CTk / CTkToplevel 的 100 万像素 maxsize 降到合理上限。
+
+    必须同时改 ``_max_width/_max_height``：CTk 会在 ``set_window_scaling`` 后 1 秒
+    用这两个字段再写一次 Win32 maxsize。
+    """
+    if win is None:
+        return
+    w = max(1, int(design_w))
+    h = max(1, int(design_h))
+    try:
+        win._max_width = w
+        win._max_height = h
+    except Exception:
+        pass
+    try:
+        win.maxsize(w, h)
+    except Exception:
+        pass
+
+
+def harden_hidden_tk_root(root: Any) -> None:
+    """托盘宿主：1×1、已撤回、maxsize 很小，避免 CTk 默认 600×500 / maxsize 1e6。"""
+    if root is None:
+        return
+    import tkinter as tk
+
+    try:
+        root.withdraw()
+    except tk.TclError:
+        pass
+    try:
+        root.resizable(False, False)
+    except tk.TclError:
+        pass
+    try:
+        root.minsize(1, 1)
+        root.maxsize(64, 64)
+    except tk.TclError:
+        pass
+    try:
+        tk.Wm.geometry(root, "1x1+0+0")
+    except tk.TclError:
+        pass
 
 
 def _windows_dpi(*, hwnd: int = 0, point: tuple[int, int] | None = None) -> int:
     import ctypes
     from ctypes import wintypes
 
-    user32 = ctypes.windll.user32
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
     MONITOR_DEFAULTTONEAREST = 2
     MDT_EFFECTIVE_DPI = 0
+
+    MonitorFromWindow = user32.MonitorFromWindow
+    MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    MonitorFromWindow.restype = ctypes.c_void_p
+
+    MonitorFromPoint = user32.MonitorFromPoint
+    MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    MonitorFromPoint.restype = ctypes.c_void_p
 
     monitor = None
     if hwnd:
         try:
-            monitor = user32.MonitorFromWindow(wintypes.HWND(int(hwnd)), MONITOR_DEFAULTTONEAREST)
+            monitor = MonitorFromWindow(wintypes.HWND(int(hwnd)), MONITOR_DEFAULTTONEAREST)
         except Exception:
             monitor = None
-    if monitor is None and point is not None:
-        pt = wintypes.POINT(int(point[0]), int(point[1]))
-        monitor = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
-    if monitor is None:
+    if not monitor and point is not None:
         try:
+            pt = wintypes.POINT(int(point[0]), int(point[1]))
+            monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        except Exception:
+            monitor = None
+    if not monitor:
+        try:
+            GetCursorPos = user32.GetCursorPos
+            GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+            GetCursorPos.restype = wintypes.BOOL
             pt = wintypes.POINT()
-            user32.GetCursorPos(ctypes.byref(pt))
-            monitor = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+            if GetCursorPos(ctypes.byref(pt)):
+                monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
         except Exception:
             monitor = None
 
     if monitor:
         try:
+            shcore = ctypes.WinDLL("shcore", use_last_error=True)
+            GetDpiForMonitor = shcore.GetDpiForMonitor
+            GetDpiForMonitor.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(wintypes.UINT),
+                ctypes.POINTER(wintypes.UINT),
+            ]
+            GetDpiForMonitor.restype = ctypes.HRESULT
             x_dpi = wintypes.UINT()
             y_dpi = wintypes.UINT()
-            ctypes.windll.shcore.GetDpiForMonitor(
+            hr = GetDpiForMonitor(
                 monitor,
                 MDT_EFFECTIVE_DPI,
                 ctypes.byref(x_dpi),
                 ctypes.byref(y_dpi),
             )
             dpi = int(x_dpi.value or 0)
-            if dpi > 0:
+            if hr == 0 and MIN_DPI <= dpi <= MAX_DPI:
                 return dpi
         except Exception:
             pass
         if hwnd:
             try:
-                dpi = int(user32.GetDpiForWindow(wintypes.HWND(int(hwnd))))
-                if dpi > 0:
+                GetDpiForWindow = user32.GetDpiForWindow
+                GetDpiForWindow.argtypes = [wintypes.HWND]
+                GetDpiForWindow.restype = ctypes.c_uint
+                dpi = int(GetDpiForWindow(wintypes.HWND(int(hwnd))) or 0)
+                if MIN_DPI <= dpi <= MAX_DPI:
                     return dpi
             except Exception:
                 pass
 
     try:
-        return int(user32.GetDpiForSystem() or 96)
+        GetDpiForSystem = user32.GetDpiForSystem
+        GetDpiForSystem.argtypes = []
+        GetDpiForSystem.restype = ctypes.c_uint
+        return clamp_dpi(int(GetDpiForSystem() or 96))
     except Exception:
-        return 96
+        return MIN_DPI

@@ -28,6 +28,44 @@ class ScaledPxTests(unittest.TestCase):
     def test_never_shrinks_below_base(self) -> None:
         self.assertEqual(dpi_util.scaled_px(52, 0.5), 52)
 
+    def test_insane_scale_is_clamped(self) -> None:
+        self.assertEqual(dpi_util.scaled_px(52, 120.0), dpi_util.scaled_px(52, 3.0))
+        self.assertEqual(dpi_util.scaled_px(420, 1e6), dpi_util.scaled_px(420, dpi_util.MAX_UI_SCALE))
+
+
+class ClampScaleTests(unittest.TestCase):
+    def test_clamp_rejects_garbage_and_nan(self) -> None:
+        self.assertEqual(dpi_util.clamp_ui_scale(1.5), 1.5)
+        self.assertEqual(dpi_util.clamp_ui_scale(0.1), 1.0)
+        self.assertEqual(dpi_util.clamp_ui_scale(120.0), 3.0)
+        self.assertEqual(dpi_util.clamp_ui_scale(float("nan")), 1.0)
+
+    def test_clamp_dpi_rejects_pointer_sized_garbage(self) -> None:
+        self.assertEqual(dpi_util.clamp_dpi(96), 96)
+        self.assertEqual(dpi_util.clamp_dpi(144), 144)
+        self.assertEqual(dpi_util.clamp_dpi(288), 288)
+        self.assertEqual(dpi_util.clamp_dpi(0), 96)
+        self.assertEqual(dpi_util.clamp_dpi(11520), 96)
+        self.assertEqual(dpi_util.clamp_dpi(-4), 96)
+
+    def test_tk_scaling_stays_bounded(self) -> None:
+        self.assertAlmostEqual(dpi_util.tk_scaling_value(100.0), dpi_util.MAX_UI_SCALE * 96 / 72)
+
+    def test_cap_ctk_maxsize_overrides_million_pixel_default(self) -> None:
+        class _Win:
+            _max_width = 1_000_000
+            _max_height = 1_000_000
+            sized: tuple[int, int] | None = None
+
+            def maxsize(self, w: int, h: int) -> None:
+                self.sized = (w, h)
+
+        win = _Win()
+        dpi_util.cap_ctk_maxsize(win)
+        self.assertEqual(win._max_width, dpi_util.CTK_MAX_DESIGN_W)
+        self.assertEqual(win._max_height, dpi_util.CTK_MAX_DESIGN_H)
+        self.assertEqual(win.sized, (dpi_util.CTK_MAX_DESIGN_W, dpi_util.CTK_MAX_DESIGN_H))
+
 
 class TkScalingTests(unittest.TestCase):
     def test_tk_scaling_is_dpi_over_72(self) -> None:
@@ -67,6 +105,31 @@ class SettingsCenterTests(unittest.TestCase):
         self.assertNotEqual((x, y), unscaled)
         self.assertGreater(x, 0)
         self.assertGreater(y, 0)
+
+
+class HiddenHostGuardTests(unittest.TestCase):
+    def test_popup_host_is_tk_not_ctk(self) -> None:
+        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
+        self.assertIn("root = tk.Tk()", text)
+        self.assertIn("harden_hidden_tk_root", text)
+        self.assertIn("cap_ctk_maxsize", text)
+        self.assertNotIn("root = ctk.CTk()", text)
+        self.assertIn("self._status_win = None", text)
+        # 空闲托盘不建 Tk 线程
+        self.assertNotIn("self._start_ui_thread()", text.split("def bind_tray_icon")[0])
+
+    def test_settings_caps_ctk_maxsize(self) -> None:
+        text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
+        self.assertIn("cap_ctk_maxsize(root)", text)
+        self.assertGreaterEqual(text.count("cap_ctk_maxsize(root)"), 2)
+
+
+class IconBudgetTests(unittest.TestCase):
+    def test_progress_icon_rejects_huge_size(self) -> None:
+        from icon_renderer import create_progress_icon
+
+        img = create_progress_icon(80, size=99_999)
+        self.assertLessEqual(max(img.size), 512)
 
 
 class LinuxDefaultsTests(unittest.TestCase):

@@ -18,7 +18,9 @@ from PIL import Image, ImageDraw, ImageTk
 from config import APP_NAME
 from cursor_api import UsageSnapshot, format_token_count, is_auth_error_message
 from dpi_util import (
+    cap_ctk_maxsize,
     enable_dpi_awareness,
+    harden_hidden_tk_root,
     parse_geometry_xy,
     scaled_px,
     set_physical_geometry,
@@ -72,8 +74,8 @@ class PopupManager:
         self._host_menu: _VectorMenu | None = None
         self._host_closed = threading.Event()
         self._status_win = None
-        if not IS_MAC:
-            self._start_ui_thread()
+        # 托盘空闲时不创建 Tk/CTk。隐藏 CTk() 默认 maxsize=1_000_000，
+        # 在 Windows 上会提交十几 GB 虚拟内存，工作集却很小。
 
     def bind_tray_icon(self, icon) -> None:
         self._tray_icon = icon
@@ -93,8 +95,10 @@ class PopupManager:
         root: tk.Tk | None = None
         try:
             init_ctk()
-            root = ctk.CTk()
-            root.withdraw()
+            # 必须用 tk.Tk 而不是 ctk.CTk：CTk 默认 600×500，且会把 maxsize
+            # 写成 100 万设计像素，Windows DWM/GPU 会按最大纹理边长提交 ~18GB。
+            root = tk.Tk()
+            harden_hidden_tk_root(root)
             _apply_tk_scaling(root, point=cursor_pos())
             try:
                 from app_icon import hide_from_taskbar
@@ -112,7 +116,7 @@ class PopupManager:
                 self._drain_commands()
                 try:
                     if root is not None and root.winfo_exists():
-                        root.after(16, pump)
+                        root.after(50, pump)
                 except tk.TclError:
                     pass
 
@@ -628,6 +632,7 @@ class _StatusCard:
 
         win = ctk.CTkToplevel(root)
         self.win = win
+        cap_ctk_maxsize(win)
         try:
             win.withdraw()
         except tk.TclError:
@@ -1200,7 +1205,7 @@ class _Win11MenuItem(tk.Frame):
     def _paint(self) -> None:
         c = self._canvas
         c.delete("all")
-        w = max(int(c.winfo_width()), 1)
+        w = min(max(int(c.winfo_width()), 1), 1024)
         h = self._row_h
         if self._hover:
             key = (w, h, self._item_radius)
@@ -1244,8 +1249,8 @@ def _menu_hover_image(w: int, h: int, radius: int, fill_hex: str) -> Image.Image
     """圆角悬停底 + 圆角柔化阴影（PIL 抗锯齿，避免方角光晕）。"""
     from PIL import ImageDraw, ImageFilter
 
-    w = max(1, w)
-    h = max(1, h)
+    w = min(max(1, w), 1024)
+    h = min(max(1, h), 256)
     r = max(1, min(radius, (w - 2) // 2, (h - 2) // 2))
     fill = _hex_to_rgb(fill_hex)
 
