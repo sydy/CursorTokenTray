@@ -61,7 +61,7 @@ def tray_icon_size() -> int:
         import ctypes
 
         sm = int(ctypes.windll.user32.GetSystemMetrics(49))  # SM_CXSMICON
-        return max(256, min(512, sm * 16))
+        return max(256, min(512, sm * 16 if 8 <= sm <= 64 else 256))
     except Exception:
         return DEFAULT_SIZE
 
@@ -133,9 +133,9 @@ def _create_ring_icon(
     error: bool = False,
     size: int | None = None,
 ) -> Image.Image:
-    out = size or tray_icon_size()
+    out = min(int(size or tray_icon_size()), 512)
     scale = SUPERSAMPLE
-    canvas = out * scale
+    canvas = min(out * scale, 2048)
     img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
@@ -201,9 +201,9 @@ def _create_number_icon(
     error: bool = False,
     size: int | None = None,
 ) -> Image.Image:
-    out = size or tray_icon_size()
+    out = min(int(size or tray_icon_size()), 512)
     scale = SUPERSAMPLE
-    canvas = out * scale
+    canvas = min(out * scale, 2048)
     img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
@@ -257,9 +257,9 @@ def _create_dot_icon(
     error: bool = False,
     size: int | None = None,
 ) -> Image.Image:
-    out = size or tray_icon_size()
+    out = min(int(size or tray_icon_size()), 512)
     scale = SUPERSAMPLE
-    canvas = out * scale
+    canvas = min(out * scale, 2048)
     img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     cx = cy = canvas / 2.0
