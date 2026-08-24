@@ -40,10 +40,10 @@ jobs:
         run: python assets/gen_app_icon.py
       - name: PyInstaller
         run: python -m PyInstaller --noconfirm CursorTokenTray.spec
-      - name: Zip onedir
+      - name: Zip onefile
         shell: pwsh
         run: |
-          Compress-Archive -Path dist\CursorTokenTray -DestinationPath CursorTokenTray-windows.zip -Force
+          Compress-Archive -Path dist\CursorTokenTray.exe -DestinationPath CursorTokenTray-windows.zip -Force
       - uses: actions/upload-artifact@v6
         with:
           name: CursorTokenTray-windows

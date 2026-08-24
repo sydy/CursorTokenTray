@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
 
+from app_icon import resource_dir
 from win11_theme import (
     ACCENT,
     ACCENT_LIGHT,
@@ -20,7 +20,7 @@ from win11_theme import (
     SURFACE_ALT,
 )
 
-THEME_PATH = Path(__file__).resolve().parent / "assets" / "ctk_theme.json"
+THEME_PATH = resource_dir() / "assets" / "ctk_theme.json"
 
 _initialized = False
 

@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec — onedir，无控制台
+# PyInstaller spec — onefile，无控制台
+#
+# Windows 设置窗挂在托盘同一进程，资源走 sys._MEIPASS，不需要 onedir。
+# 单文件启动时解到临时目录，关掉进程后由 bootloader 清理。
 
 block_cipher = None
 
@@ -42,13 +45,17 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='CursorTokenTray',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -56,15 +63,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/app_icon.ico',
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='CursorTokenTray',
 )

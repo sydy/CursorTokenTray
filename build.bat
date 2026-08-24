@@ -9,7 +9,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [2/3] 打包 onedir...
+echo [2/3] 打包 onefile...
 python -m PyInstaller --noconfirm CursorTokenTray.spec
 if errorlevel 1 (
   echo 打包失败
@@ -17,6 +17,6 @@ if errorlevel 1 (
 )
 
 echo [3/3] 完成
-echo 产物目录: %~dp0dist\CursorTokenTray\
-echo 运行: dist\CursorTokenTray\CursorTokenTray.exe
+echo 产物: %~dp0dist\CursorTokenTray.exe
+echo 运行: dist\CursorTokenTray.exe
 pause

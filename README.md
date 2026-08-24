@@ -59,9 +59,9 @@ python3 main.py
 
 ### Windows
 
-1. 双击 **`build.bat`**（需已安装 Python）生成 `dist\CursorTokenTray\`
-2. 运行 `dist\CursorTokenTray\CursorTokenTray.exe`
-3. 可将整个 `CursorTokenTray` 文件夹拷到任意位置使用；开机自启会指向该 exe
+1. 双击 **`build.bat`**（需已安装 Python）生成 `dist\CursorTokenTray.exe`
+2. 运行 `dist\CursorTokenTray.exe`
+3. 可将该 exe 拷到任意位置使用；开机自启会指向该 exe
 
 ### macOS
 
@@ -74,7 +74,7 @@ python3 main.py
 仓库使用 **GitHub Actions**（`.github/workflows/build.yml`）在每次推送 / PR 时：
 
 1. 在 Ubuntu 跑单元测试
-2. 在 `windows-latest` 打出 `CursorTokenTray-windows.zip`（onedir + exe）
+2. 在 `windows-latest` 打出 `CursorTokenTray-windows.zip`（单文件 exe）
 3. 在 `macos-latest` 打出 `CursorTokenTray-macos.zip`（`.app`）
 
 产物在对应 run 的 **Artifacts** 里下载。打 `v*` 标签（例如 `v1.0.0`）还会自动创建 GitHub Release 并挂上这两个 zip。
