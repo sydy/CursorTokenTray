@@ -484,6 +484,10 @@ class PopupManager:
         if card is not None and not getattr(card, "_closing", False):
             card._closing = True
             try:
+                _release_photos(root, getattr(card, "_photos", []))
+            except Exception:
+                pass
+            try:
                 card.win.destroy()
             except tk.TclError:
                 pass
@@ -555,6 +559,22 @@ def _prepare_hidden_root(root: tk.Misc) -> None:
         root.withdraw()
     except tk.TclError:
         pass
+
+
+def _release_photos(root: tk.Misc | None, photos: list) -> None:
+    """从 Tcl 删除 PhotoImage，避免只 drop Python 引用后图像仍占着解释器堆。"""
+    for photo in photos:
+        name = getattr(photo, "name", None)
+        if not name:
+            continue
+        try:
+            if root is not None:
+                root.tk.call("image", "delete", name)
+            else:
+                photo.tk.call("image", "delete", name)
+        except Exception:
+            pass
+    photos.clear()
 
 
 def _apply_tk_scaling(root: tk.Misc, point: tuple[int, int] | None = None) -> None:
@@ -732,7 +752,7 @@ class _StatusCard:
                 child.destroy()
             except tk.TclError:
                 pass
-        self._photos.clear()
+        _release_photos(self.root, self._photos)
 
         usage = self._usage
         error_message = self._error_message
@@ -1112,6 +1132,7 @@ class _StatusCard:
                 self._auto_close_job = None
         except tk.TclError:
             pass
+        _release_photos(self.root, self._photos)
         try:
             self.win.destroy()
         except tk.TclError:
@@ -1423,6 +1444,7 @@ class _VectorMenu:
                 self.root.quit()
             except tk.TclError:
                 pass
+        _release_photos(self.root, self._photos)
         try:
             self.win.destroy()
         except tk.TclError:

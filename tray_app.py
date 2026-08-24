@@ -55,6 +55,7 @@ class TrayApp:
         self._worker: threading.Thread | None = None
         self._suppress_status_closed_resume = False
         self._status_opening = False
+        self._icon_key: tuple | None = None
 
         # Windows：隐藏 default 供左键，右键走自定义矢量菜单。
         # macOS：原生菜单栏菜单；左键 default 打开状态飞出层。
@@ -704,8 +705,22 @@ class TrayApp:
             except Exception as exc:
                 app_log(f"update macos status failed: {exc}")
         else:
-            self.icon.icon = image
-            self.icon.title = ""
+            if err and str(err).startswith("未配置"):
+                key = ("idle", mode)
+            elif err:
+                key = ("error", mode)
+            elif usage:
+                key = ("ok", mode, int(round(usage.remaining_percent)))
+            else:
+                key = ("idle", mode)
+            # 百分比未变时不要让 pystray 反复存 ICO / LoadImage
+            if key != self._icon_key:
+                self._icon_key = key
+                self.icon.icon = image
+            try:
+                self.icon.title = ""
+            except Exception:
+                pass
 
         if self.popups is not None:
             hist, burn = self._history_payload()
