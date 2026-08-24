@@ -7,9 +7,12 @@ from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-# 固定高分辨率输出，由系统缩放到托盘；内部再 4× 超采样
-DEFAULT_SIZE = 256
+# Windows 托盘只要系统小图标。过大时 pystray 会把整图存成 ICO，
+# 长时间刷新会把提交内存顶到十几 GB。macOS 菜单栏仍走 2x/3x。
+DEFAULT_SIZE = 64
 SUPERSAMPLE = 4
+MAX_ICON_PX = 512
+MAX_WINDOWS_TRAY_PX = 64
 
 
 def remaining_color(remaining_percent: float) -> tuple[int, int, int]:
@@ -61,7 +64,9 @@ def tray_icon_size() -> int:
         import ctypes
 
         sm = int(ctypes.windll.user32.GetSystemMetrics(49))  # SM_CXSMICON
-        return max(256, min(512, sm * 16 if 8 <= sm <= 64 else 256))
+        if 8 <= sm <= 64:
+            return max(48, min(MAX_WINDOWS_TRAY_PX, sm * 3))
+        return DEFAULT_SIZE
     except Exception:
         return DEFAULT_SIZE
 
@@ -76,7 +81,21 @@ def create_progress_icon(
     mode = (mode or "ring").strip().lower()
     if mode not in ("ring", "number", "dot"):
         mode = "ring"
+    out = min(max(1, int(size or tray_icon_size())), MAX_ICON_PX)
+    if remaining_percent is None:
+        pct_key = None
+    else:
+        pct_key = int(round(min(100.0, max(0.0, float(remaining_percent)))))
+    return _cached_icon(pct_key, bool(error), out, mode)
 
+
+@lru_cache(maxsize=32)
+def _cached_icon(
+    remaining_percent: int | None,
+    error: bool,
+    size: int,
+    mode: str,
+) -> Image.Image:
     if mode == "dot":
         return _create_dot_icon(remaining_percent, error=error, size=size)
     if mode == "number":
@@ -290,8 +309,21 @@ def _create_dot_icon(
 
 
 def _downsample(img: Image.Image, out: int) -> Image.Image:
-    sharp = img.filter(ImageFilter.UnsharpMask(radius=max(1, SUPERSAMPLE // 2), percent=120, threshold=1))
-    return sharp.resize((out, out), Image.Resampling.LANCZOS)
+    try:
+        resized = img.resize((out, out), Image.Resampling.LANCZOS)
+    finally:
+        try:
+            img.close()
+        except Exception:
+            pass
+    if out < 40:
+        return resized
+    sharp = resized.filter(ImageFilter.UnsharpMask(radius=1, percent=90, threshold=1))
+    try:
+        resized.close()
+    except Exception:
+        pass
+    return sharp
 
 
 def _draw_ring(
@@ -358,7 +390,7 @@ def _draw_center_glyph(
     text: str,
     rgb: tuple[int, int, int],
 ) -> None:
-    target = inner_r * 1.72
+    target = int(round(inner_r * 1.72))
     font = _fit_font(text, target)
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
@@ -379,8 +411,8 @@ def _draw_center_glyph(
     )
 
 
-@lru_cache(maxsize=32)
-def _fit_font(text: str, target_px: float):
+@lru_cache(maxsize=1)
+def _font_path() -> str | None:
     paths = (
         r"C:\Windows\Fonts\seguisb.ttf",
         r"C:\Windows\Fonts\segoeuib.ttf",
@@ -400,18 +432,34 @@ def _fit_font(text: str, target_px: float):
         "arialbd.ttf",
         "Arial.ttf",
     )
-    base = None
     for path in paths:
         try:
-            ImageFont.truetype(path, 32)
-            base = path
-            break
+            font = ImageFont.truetype(path, 16)
         except OSError:
             continue
+        try:
+            font.close()
+        except Exception:
+            pass
+        return path
+    return None
+
+
+def _close_font(font) -> None:
+    try:
+        font.close()
+    except Exception:
+        pass
+
+
+@lru_cache(maxsize=64)
+def _fit_font(text: str, target_px: int):
+    base = _font_path()
     if base is None:
         return ImageFont.load_default()
 
-    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    probe_img = Image.new("L", (4, 4))
+    probe = ImageDraw.Draw(probe_img)
     lo, hi = 10, max(16, int(target_px * 2.2))
     best = ImageFont.truetype(base, lo)
     while lo <= hi:
@@ -421,8 +469,14 @@ def _fit_font(text: str, target_px: float):
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         if max(w, h) <= target_px:
+            _close_font(best)
             best = font
             lo = mid + 1
         else:
+            _close_font(font)
             hi = mid - 1
+    try:
+        probe_img.close()
+    except Exception:
+        pass
     return best

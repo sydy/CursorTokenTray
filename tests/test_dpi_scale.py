@@ -131,6 +131,27 @@ class IconBudgetTests(unittest.TestCase):
         img = create_progress_icon(80, size=99_999)
         self.assertLessEqual(max(img.size), 512)
 
+    def test_windows_default_tray_icon_stays_small(self) -> None:
+        from icon_renderer import create_progress_icon, tray_icon_size
+
+        if sys.platform == "darwin":
+            self.skipTest("macOS uses retina menubar size")
+        if sys.platform == "win32":
+            self.assertLessEqual(tray_icon_size(), 64)
+            self.assertLessEqual(max(create_progress_icon(80).size), 64)
+        else:
+            self.assertLessEqual(tray_icon_size(), 64)
+
+    def test_same_percent_reuses_cached_icon(self) -> None:
+        from icon_renderer import _cached_icon, create_progress_icon
+
+        before = _cached_icon.cache_info()
+        a = create_progress_icon(87.3, size=64, mode="ring")
+        b = create_progress_icon(87.4, size=64, mode="ring")
+        after = _cached_icon.cache_info()
+        self.assertIs(a, b)
+        self.assertGreaterEqual(after.hits, before.hits + 1)
+
 
 class LinuxDefaultsTests(unittest.TestCase):
     def test_non_windows_scale_is_one(self) -> None:
