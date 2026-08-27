@@ -10,7 +10,7 @@ swift run CursorTokenTray
 
 读取现有 `~/Library/Application Support/CursorTokenTray/config.json`。
 
-从 GitHub Releases 下载的 zip 带隔离属性，直接双击会提示「已损坏」。请先运行解压目录里的 `首次打开.command`，或：
+从 GitHub Releases 下载的 zip 带隔离属性。若提示「已损坏」，先点取消，到「系统设置 → 隐私与安全性」点「仍要打开」并输入密码（Sequoia 取消了右键打开放行）。没有该按钮时再运行 `首次打开.command`，或：
 
 ```bash
 xattr -cr CursorTokenTray.app
