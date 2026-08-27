@@ -53,3 +53,4 @@ class DotnetPublishTests(unittest.TestCase):
         self.assertIn("<SelfContained>true</SelfContained>", csproj)
         self.assertIn("<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>", csproj)
         self.assertIn("<InvariantGlobalization>true</InvariantGlobalization>", csproj)
+        self.assertIn("<PublishTrimmed>true</PublishTrimmed>", csproj)
