@@ -199,6 +199,15 @@ class IdleMemoryTests(unittest.TestCase):
         self.assertFalse(release_idle_memory(force=False))
         self.assertTrue(release_idle_memory(force=True))
 
+    def test_windows_spec_keeps_lazy_ui_modules(self) -> None:
+        text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
+        for name in ("popup_ui", "settings_ui", "win_memory", "customtkinter"):
+            self.assertIn(f"'{name}'", text)
+
+    def test_pr_builds_skip_artifact_upload(self) -> None:
+        text = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(text.count("github.event_name != 'pull_request'"), 2)
+
 
 class LinuxDefaultsTests(unittest.TestCase):
     def test_non_windows_scale_is_one(self) -> None:

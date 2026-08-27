@@ -44,11 +44,14 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist\CursorTokenTray -DestinationPath CursorTokenTray-windows.zip -Force
+      # PR 不上传：仓库制品配额满时 upload 会红，但 PyInstaller 已经验证过了。
       - uses: actions/upload-artifact@v6
+        if: github.event_name != 'pull_request'
         with:
           name: CursorTokenTray-windows
           path: CursorTokenTray-windows.zip
           if-no-files-found: error
+          retention-days: 7
 
   build-macos:
     name: Build macOS
@@ -70,10 +73,12 @@ jobs:
       - name: Zip .app
         run: ditto -c -k --keepParent dist/CursorTokenTray.app CursorTokenTray-macos.zip
       - uses: actions/upload-artifact@v6
+        if: github.event_name != 'pull_request'
         with:
           name: CursorTokenTray-macos
           path: CursorTokenTray-macos.zip
           if-no-files-found: error
+          retention-days: 7
 
   release:
     name: GitHub Release
