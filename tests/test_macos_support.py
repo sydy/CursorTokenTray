@@ -612,7 +612,7 @@ class StatusTextTests(unittest.TestCase):
         self.assertEqual(status_pill_text(10), "额度紧张")
         self.assertEqual(status_pill_text(0), "已耗尽")
         self.assertEqual(status_pill_text(None, error=True), "异常")
-        self.assertEqual(format_plan_caption("pro"), "pro 套餐")
+        self.assertEqual(format_plan_caption("pro"), "Pro 套餐")
         self.assertEqual(format_plan_caption("Pro 套餐"), "Pro 套餐")
         self.assertEqual(format_plan_caption("Pro", "公司"), "公司 · Pro 套餐")
         snap = UsageSnapshot(
@@ -642,7 +642,7 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertIn("menubar_icon_rep_sizes", text)
         self.assertIn("_update_icon", text)
         self.assertIn("setTemplate_(True)", text)
-        self.assertIn("查看用量账单", text)
+        self.assertIn("dashboard_link_label", text)
         self.assertIn("status_pill_text", text)
         self.assertIn("format_estimate_caption", text)
         self.assertIn("popup_origin_for_anchor", text)

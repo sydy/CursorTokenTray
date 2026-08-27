@@ -16,12 +16,13 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - Token 过期检测、一键打开设置并聚焦 Token 输入框
 - 多档额度告警（默认 50/20/5）与耗尽风险通知
 - **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警
+- 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
 - 中文设置窗口（账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
 - 默认每 10 分钟刷新（可配置）
 - 开机自启（默认开启；Windows 写 Startup 快捷方式，macOS 写 LaunchAgent）
 
-悬浮框字段顺序示例：剩余 → 计划 → 明细 → 重置 → **预计可用** → 趋势 → 更新时间。  
-预计可用按本周期已用比例与已过天数估算，并与重置日对比提示「可撑过本周期」或「可能提前耗尽」。
+悬浮框字段顺序示例：剩余 → 计划 → 金额（企业）→ 明细 → 重置 → **预计可用** → 趋势 → 更新时间。  
+预计可用按本周期已用比例与已过天数估算，并与重置日对比提示「可撑过本周期」或「可能提前耗尽」。企业 / 团队账号打开 [用量页](https://cursor.com/dashboard/usage)，个人账号仍打开账单页。
 
 ## 环境
 
@@ -99,7 +100,7 @@ python3 main.py
 
 ### 方式二：手动粘贴
 
-1. 浏览器登录 [cursor.com/dashboard](https://cursor.com/dashboard/spending)
+1. 浏览器登录 [cursor.com/dashboard](https://cursor.com/dashboard/usage)（个人账号也可打开 [Spending](https://cursor.com/dashboard/spending)）
 2. 按 `F12` → **Application**（Safari 为「存储」）→ **Cookies** → `https://cursor.com`
 3. 复制 `WorkosCursorSessionToken` 的值
 4. 托盘 / 菜单栏右键 → **设置…** → 粘贴并保存

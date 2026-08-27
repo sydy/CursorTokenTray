@@ -17,7 +17,14 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 from config import APP_NAME
-from cursor_api import UsageSnapshot, format_token_count, is_auth_error_message
+from cursor_api import (
+    UsageSnapshot,
+    dashboard_button_label,
+    format_spend_range,
+    format_token_count,
+    format_usd_cents,
+    is_auth_error_message,
+)
 from dpi_util import (
     cap_ctk_maxsize,
     enable_dpi_awareness,
@@ -848,7 +855,12 @@ class _StatusCard:
             bar.set(min(1.0, max(0.0, remaining / 100.0)))
             bar.pack(fill="x")
             memb = (usage.membership_type or "").strip()
-            sub = f"已用 {usage.used_percent:.1f}%"
+            if usage.is_unlimited:
+                sub = "不限量"
+            elif usage.shows_amount():
+                sub = f"已用 {format_spend_range(usage.used_cents, usage.limit_cents)}"
+            else:
+                sub = f"已用 {usage.used_percent:.1f}%"
             if usage.total_tokens:
                 sub = f"{sub} · {format_token_count(usage.total_tokens)} Token"
             acc_name = _current_account_label()
@@ -916,7 +928,12 @@ class _StatusCard:
             actions_row.grid_columnconfigure(i, weight=1)
         self._copy_btn = self._add_action_btn(actions_row, "复制", self._on_copy, col=0)
         self._add_action_btn(actions_row, "刷新", self._actions.on_refresh, col=1)
-        self._add_action_btn(actions_row, "账单", self._actions.on_open_spending, col=2)
+        self._add_action_btn(
+            actions_row,
+            dashboard_button_label(usage if has_usage else None),
+            self._actions.on_open_spending,
+            col=2,
+        )
         self._add_action_btn(actions_row, "设置", self._actions.on_open_settings, col=3)
         tip = updated_at or datetime.now().strftime("%H:%M:%S")
         ctk.CTkLabel(
@@ -1060,6 +1077,30 @@ class _StatusCard:
             return [("状态", "等待刷新…")]
 
         rows: list[tuple[str, str]] = []
+        if usage.shows_amount():
+            rows.append(("金额", format_spend_range(usage.used_cents, usage.limit_cents)))
+        if (
+            usage.pooled_used_cents is not None
+            and usage.pooled_limit_cents is not None
+            and usage.pooled_limit_cents > 0
+            and (
+                usage.used_cents != usage.pooled_used_cents
+                or usage.limit_cents != usage.pooled_limit_cents
+            )
+        ):
+            rows.append(("团队额度", format_spend_range(usage.pooled_used_cents, usage.pooled_limit_cents)))
+        if (
+            usage.on_demand_used_cents is not None
+            and usage.on_demand_limit_cents is not None
+            and usage.on_demand_limit_cents > 0
+            and (
+                usage.used_cents != usage.on_demand_used_cents
+                or usage.limit_cents != usage.on_demand_limit_cents
+            )
+        ):
+            rows.append(
+                ("按需用量", format_spend_range(usage.on_demand_used_cents, usage.on_demand_limit_cents))
+            )
         has_token_breakdown = bool(usage.model_usages) or bool(usage.total_tokens)
         if not has_token_breakdown:
             if usage.auto_percent_used is not None:
@@ -1113,8 +1154,13 @@ class _StatusCard:
             for model in shown:
                 self._sep(parent)
                 mv = format_token_count(model.tokens)
+                extras: list[str] = []
                 if model.usage_percent is not None:
-                    mv = f"{mv} · {model.usage_percent:.1f}%"
+                    extras.append(f"{model.usage_percent:.1f}%")
+                if model.cents:
+                    extras.append(format_usd_cents(model.cents))
+                if extras:
+                    mv = f"{mv} · {' · '.join(extras)}"
                 self._add_settings_row(
                     parent,
                     model.name,
@@ -1614,7 +1660,7 @@ def run_status_main() -> int:
     """`--status`：短命飞出层进程，退出即释放 CTk。"""
     from app_icon import set_app_user_model_id
     from config import load_config
-    from cursor_api import BILLING_URL, fetch_usage_summary
+    from cursor_api import dashboard_url_for, fetch_usage_summary
     from settings_launch import open_settings_async
     from usage_snapshot import read_status_snapshot, write_status_snapshot
 
@@ -1691,7 +1737,9 @@ def run_status_main() -> int:
         actions=StatusActions(
             on_open_settings=lambda: open_settings_async(focus_token=True, start_import=True),
             on_refresh=on_refresh,
-            on_open_spending=lambda: __import__("webbrowser").open(BILLING_URL),
+            on_open_spending=lambda: __import__("webbrowser").open(
+                dashboard_url_for(state.get("usage"))
+            ),
             on_copy_summary=on_copy,
         ),
         history_values=hist,
@@ -1703,19 +1751,24 @@ def run_status_main() -> int:
 
 def run_menu_main() -> int:
     """`--menu`：短命矢量菜单，把选中的 key 写到 stdout。"""
-    from accounts import format_account_caption, list_accounts
+    from accounts import active_account, format_account_caption, list_accounts
     from app_icon import set_app_user_model_id
     from config import load_config
+    from cursor_api import dashboard_menu_label
 
     enable_dpi_awareness()
     set_app_user_model_id()
     chosen: list[str] = []
     mgr = PopupManager()
     cfg = load_config()
+    acc = active_account(cfg)
+    web_label = dashboard_menu_label(
+        membership=str((acc or {}).get("membership_type") or "")
+    )
     actions = [
         MenuAction("status", "显示状态", "status", lambda: None),
         MenuAction("refresh", "立即刷新", "refresh", lambda: None),
-        MenuAction("web", "打开用量账单", "web", lambda: None),
+        MenuAction("web", web_label, "web", lambda: None),
     ]
     accounts = list_accounts(cfg)
     active_id = str(cfg.get("active_account_id") or "")
