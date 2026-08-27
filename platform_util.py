@@ -167,6 +167,14 @@ def set_dock_visible(visible: bool) -> None:
 
 
 def show_error_alert(title: str, message: str) -> None:
+    if IS_WIN:
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(0, str(message), str(title), 0x10)
+            return
+        except Exception:
+            pass
     if IS_MAC:
         try:
             import subprocess
@@ -250,7 +258,7 @@ def hidden_popen_kwargs() -> dict:
 
 
 def copy_text(text: str) -> bool:
-    """复制到剪贴板。macOS 用 pbcopy，避免托盘进程再碰 Tk。"""
+    """复制到剪贴板。macOS 用 pbcopy；Windows 用系统剪贴板。"""
     if IS_MAC:
         try:
             import subprocess
@@ -264,6 +272,32 @@ def copy_text(text: str) -> bool:
             return True
         except Exception as exc:
             app_log(f"pbcopy failed: {exc}")
+            return False
+    if IS_WIN:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            data = str(text or "")
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            if not user32.OpenClipboard(None):
+                return False
+            try:
+                user32.EmptyClipboard()
+                raw = data.encode("utf-16le") + b"\x00\x00"
+                handle = kernel32.GlobalAlloc(0x0002, len(raw))
+                if not handle:
+                    return False
+                locked = kernel32.GlobalLock(handle)
+                ctypes.memmove(locked, raw, len(raw))
+                kernel32.GlobalUnlock(handle)
+                user32.SetClipboardData(13, handle)  # CF_UNICODETEXT
+            finally:
+                user32.CloseClipboard()
+            return True
+        except Exception as exc:
+            app_log(f"clipboard failed: {exc}")
             return False
     return False
 

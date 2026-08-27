@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec — onefile，无控制台
 #
-# 资源走 sys._MEIPASS。飞出层 / 设置是短命子进程，会再启动同一份 exe。
-# 单文件启动时解到临时目录，关掉进程后由 bootloader 清理。
+# Windows UI 全部走本进程 Win32（托盘 / 系统菜单 / 分层飞出层 / 原生设置），
+# 不再打包 Tk、CustomTkinter、pystray。
 
 block_cipher = None
 
@@ -18,35 +18,41 @@ a = Analysis(
         ('assets/app_icon_48.png', 'assets'),
         ('assets/app_icon_64.png', 'assets'),
         ('assets/app_icon.svg', 'assets'),
-        ('assets/ctk_theme.json', 'assets'),
     ],
     hiddenimports=[
-        'pystray._win32',
-        'PIL._tkinter_finder',
-        'tkinter',
-        'tkinter.ttk',
-        'tkinter.messagebox',
         'cryptography',
         'cryptography.hazmat.primitives.ciphers.aead',
         'certifi',
-        # 托盘空闲时按需 import，分析器扫不到，必须显式打进包
-        'popup_ui',
-        'popup_launch',
-        'usage_snapshot',
         'accounts',
-        'settings_ui',
-        'ui_ctk',
-        'win11_settings',
+        'usage_snapshot',
+        'usage_history',
+        'status_text',
+        'settings_launch',
+        'win_api',
+        'win_tray',
+        'win_menu',
+        'win_flyout',
+        'win_settings',
         'win11_style',
-        'win11_theme',
-        'tray_hover',
-        'customtkinter',
-        'pywinstyles',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tkinter',
+        'tkinter.ttk',
+        'tkinter.messagebox',
+        'customtkinter',
+        'pywinstyles',
+        'pystray',
+        'popup_ui',
+        'popup_launch',
+        'settings_ui',
+        'ui_ctk',
+        'tray_hover',
+        'win11_settings',
+        'win11_theme',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

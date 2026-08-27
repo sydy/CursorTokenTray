@@ -9,8 +9,6 @@ import webbrowser
 from datetime import datetime
 from typing import Any
 
-import pystray
-
 from accounts import (
     active_account,
     apply_snapshot_to_account,
@@ -30,10 +28,12 @@ from cursor_api import (
     is_auth_error_message,
 )
 from icon_renderer import create_idle_icon, create_progress_icon
-from platform_util import IS_MAC, app_log
+from platform_util import IS_MAC, IS_WIN, app_log, copy_text
+from status_text import format_summary_text
 import usage_history
 
 if IS_MAC:
+    import pystray
     from macos_menubar import close_status as close_macos_status
     from macos_menubar import install as install_menubar
     from macos_menubar import set_menubar_icon
@@ -51,30 +51,27 @@ class TrayApp:
         self._stop = threading.Event()
         self._refresh_event = threading.Event()
         self._lock = threading.Lock()
-        # Windows：设置 / 飞出层 / 菜单都是短命子进程。托盘不 import CTk。
-        # macOS：托盘进程不导入 settings_ui / Tk。
+        # Windows：托盘 / 飞出层 / 菜单 / 设置都在本进程 Win32 消息循环。
+        # macOS：托盘进程不导入 Tk。
         self._worker: threading.Thread | None = None
         self._icon_key: tuple | None = None
 
-        # Windows：隐藏 default 供左键，右键走自定义矢量菜单。
-        # macOS：原生菜单栏菜单；左键 default 打开状态飞出层。
         if IS_MAC:
             menu = self._build_macos_menu()
-        else:
-            menu = pystray.Menu(
-                pystray.MenuItem(
-                    "显示状态",
-                    self._action_open_status,
-                    default=True,
-                    visible=False,
-                )
+            self.icon = pystray.Icon(
+                APP_NAME,
+                create_idle_icon(mode=self._display_mode()),
+                "",
+                menu=menu,
             )
-        self.icon = pystray.Icon(
-            APP_NAME,
-            create_idle_icon(mode=self._display_mode()),
-            "",
-            menu=menu,
-        )
+        else:
+            from win_tray import NativeTray
+
+            self.icon = NativeTray(
+                create_idle_icon(mode=self._display_mode()),
+                on_left_click=self._open_status_bg,
+                on_right_click=self._on_tray_right_click,
+            )
 
     def _build_macos_menu(self) -> pystray.Menu:
         return pystray.Menu(
@@ -135,9 +132,9 @@ class TrayApp:
         app_log(f"switch account {current} -> {account_id}")
         if not IS_MAC:
             try:
-                from popup_launch import close_popup_processes
+                from win_flyout import close_status_flyout
 
-                close_popup_processes()
+                close_status_flyout()
             except Exception:
                 pass
         self._on_config_saved(cfg)
@@ -170,7 +167,7 @@ class TrayApp:
         self._worker.start()
         self.icon.run(setup=self._on_icon_ready)
 
-    def _on_icon_ready(self, icon: pystray.Icon) -> None:
+    def _on_icon_ready(self, icon) -> None:
         if IS_MAC:
             try:
                 from AppKit import NSApp, NSApplicationActivationPolicyAccessory
@@ -187,35 +184,7 @@ class TrayApp:
             self._maybe_open_first_run_settings()
             return
 
-        from tray_hover import (
-            enable_hover_flyout,
-            patch_pystray_uid,
-            suppress_native_context_menu,
-        )
-
-        patch_pystray_uid(icon)
-        icon.visible = True
-        try:
-            icon.title = ""
-        except Exception:
-            pass
-        time.sleep(0.2)
-        try:
-            suppress_native_context_menu(
-                icon,
-                on_right_click=self._on_tray_right_click,
-            )
-        except Exception as exc:
-            app_log(f"suppress native menu failed: {exc}")
-        try:
-            enable_hover_flyout(
-                icon,
-                on_left_click=self._open_status_bg,
-                on_right_click=self._on_tray_right_click,
-            )
-        except Exception as exc:
-            app_log(f"enable hover flyout failed: {exc}")
-        app_log("windows tray icon ready")
+        app_log("windows native tray ready")
         self._maybe_open_first_run_settings()
 
     def _maybe_open_first_run_settings(self) -> None:
@@ -223,34 +192,40 @@ class TrayApp:
             return
         delay = 0.3 if IS_MAC else 0.2
         app_log(f"icon ready, open settings in {delay}s (no token)")
-        threading.Timer(delay, lambda: self._open_settings(focus_token=True)).start()
+        threading.Timer(delay, lambda: self._run_on_ui(lambda: self._open_settings(focus_token=True))).start()
+
+    def _run_on_ui(self, fn) -> None:
+        icon = self.icon
+        invoke = getattr(icon, "invoke", None)
+        if callable(invoke):
+            invoke(fn)
+            return
+        fn()
 
     def _on_tray_right_click(self) -> None:
         app_log("tray right click")
-        with self._lock:
-            if getattr(self, "_menu_opening", False):
-                app_log("tray right click ignored, menu already opening")
-                return
-            self._menu_opening = True
-        watcher = getattr(self.icon, "_hover_watcher", None)
-        if watcher is not None:
-            watcher.pause()
+        try:
+            from win_flyout import close_status_flyout
+            from win_menu import build_tray_menu_items, popup_native_menu
 
-        def open_menu() -> None:
-            try:
-                from popup_launch import run_menu_and_pick
-
-                key = run_menu_and_pick()
-                self._dispatch_menu_action(key)
-            except Exception as exc:
-                app_log(f"tray menu failed: {exc}")
-            finally:
-                self._menu_opening = False
-                if watcher is not None:
-                    watcher.notify_closed()
-                    watcher.resume()
-
-        threading.Thread(target=open_menu, daemon=True, name="tray-menu").start()
+            close_status_flyout()
+            with self._lock:
+                cfg = self.config
+                usage = self.usage
+            memb = ""
+            limit_type = ""
+            if usage is not None:
+                memb = usage.membership_type
+                limit_type = usage.limit_type
+            else:
+                acc = active_account(cfg)
+                memb = str((acc or {}).get("membership_type") or "")
+                limit_type = str((acc or {}).get("limit_type") or "")
+            items = build_tray_menu_items(cfg, membership=memb, limit_type=limit_type)
+            key = popup_native_menu(int(getattr(self.icon, "hwnd", 0) or 0), items)
+            self._dispatch_menu_action(key)
+        except Exception as exc:
+            app_log(f"tray menu failed: {exc}")
 
     def _dispatch_menu_action(self, key: str | None) -> None:
         if key == "status":
@@ -283,14 +258,38 @@ class TrayApp:
                 account_label=self._active_label(),
             )
             return
-        from popup_launch import open_status_async
+        from win_flyout import show_status_flyout
 
-        app_log("open windows status popup")
-        self._write_status_snapshot()
-        open_status_async()
+        usage, err, updated = self._ui_snapshot()
+        acc = active_account(self.config)
+        aid = str(acc.get("id") or "") if acc else ""
+        try:
+            points = usage_history.load_recent(7, account_id=aid or None)
+            hist = [p.remaining for p in points]
+        except Exception:
+            hist = []
+        label = self._active_label()
+
+        def on_copy() -> None:
+            copy_text(format_summary_text(usage, err, updated, account_label=label or None))
+
+        app_log("open windows status flyout")
+        show_status_flyout(
+            usage=usage,
+            error_message=err,
+            updated_at=updated,
+            account_label=label,
+            history_values=hist,
+            owner_hwnd=int(getattr(self.icon, "hwnd", 0) or 0),
+            icon_rect=self.icon.icon_rect() if hasattr(self.icon, "icon_rect") else None,
+            on_copy=on_copy,
+            on_refresh=self._action_refresh,
+            on_open_spending=self._action_open_spending,
+            on_open_settings=lambda: self._open_settings(focus_token=True, start_import=True),
+        )
 
     def stop(self) -> None:
-        """先请求 pystray 退出；只有消息循环不返回时才 os._exit。"""
+        """先请求托盘消息循环退出；只有循环不返回时才 os._exit。"""
         if getattr(self, "_stopping", False):
             return
         self._stopping = True
@@ -299,17 +298,12 @@ class TrayApp:
         self._refresh_event.set()
         self._arm_quit_watchdog(2.0)
 
-        watcher = getattr(self.icon, "_hover_watcher", None)
-        if watcher is not None:
-            try:
-                watcher.stop()
-            except Exception:
-                pass
-
         try:
-            from popup_launch import close_popup_processes
+            from win_flyout import close_status_flyout
+            from win_settings import close_settings
 
-            close_popup_processes()
+            close_status_flyout()
+            close_settings()
         except Exception:
             pass
 
@@ -386,7 +380,7 @@ class TrayApp:
             # 菜单回调已在 AppKit 主线程；再丢到后台线程后状态窗经常出不来。
             self._open_status_bg()
             return
-        threading.Thread(target=self._open_status_bg, daemon=True).start()
+        self._run_on_ui(self._open_status_bg)
 
     def _action_refresh(self, _icon=None, _item=None) -> None:
         self._refresh_event.set()
@@ -402,55 +396,35 @@ class TrayApp:
                 on_saved=self._on_config_saved,
             )
             return
-        from settings_launch import open_settings_async
+        from win_flyout import close_status_flyout
+        from win_settings import show_settings as show_win_settings
 
-        open_settings_async(
-            on_saved=self._on_config_saved,
-            focus_token=focus_token,
-            start_import=start_import,
-        )
+        def open_win() -> None:
+            close_status_flyout()
+            app_log(f"open settings focus={focus_token} import={start_import}")
+            show_win_settings(
+                on_saved=self._on_config_saved,
+                focus_token=focus_token,
+                start_import=start_import,
+            )
+
+        self._run_on_ui(open_win)
 
     def _action_open_settings(self, _icon=None, _item=None) -> None:
         if IS_MAC:
             # pystray 菜单回调已在 AppKit 主线程，不要再丢到后台线程。
             self._open_settings(focus_token=False)
             return
-        self._open_settings_bg(focus_token=False)
+        self._open_settings(focus_token=False)
 
     def _action_open_settings_focus(self, _icon=None, _item=None) -> None:
         if IS_MAC:
             self._open_settings(focus_token=True, start_import=True)
             return
-        self._open_settings_bg(focus_token=True, start_import=True)
+        self._open_settings(focus_token=True, start_import=True)
 
     def _open_settings_bg(self, *, focus_token: bool = False, start_import: bool = False) -> None:
-        """Windows：先收起飞出层/菜单，再打开设置。"""
-
-        def worker() -> None:
-            watcher = getattr(self.icon, "_hover_watcher", None)
-            if watcher is not None:
-                watcher.pause()
-            try:
-                from popup_launch import close_popup_processes
-
-                close_popup_processes()
-            except Exception:
-                pass
-            if watcher is not None:
-                watcher.notify_closed()
-            try:
-                app_log(f"open settings focus={focus_token} import={start_import}")
-                self._open_settings(focus_token=focus_token, start_import=start_import)
-            except Exception as exc:  # noqa: BLE001
-                app_log(f"open settings failed: {exc}")
-                try:
-                    from platform_util import show_error_alert
-
-                    show_error_alert("设置", f"无法打开设置：{exc}")
-                except Exception:
-                    pass
-
-        threading.Thread(target=worker, daemon=True, name="open-settings").start()
+        self._open_settings(focus_token=focus_token, start_import=start_import)
 
     def _action_quit(self, _icon=None, _item=None) -> None:
         app_log("quit menu clicked")
@@ -759,7 +733,7 @@ class TrayApp:
                 key = ("ok", mode, int(round(usage.remaining_percent)))
             else:
                 key = ("idle", mode)
-            # 百分比未变时不要让 pystray 反复存 ICO / LoadImage
+            # 百分比未变时不要反复 CreateIconIndirect
             if key != self._icon_key:
                 self._icon_key = key
                 self.icon.icon = image

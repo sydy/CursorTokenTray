@@ -34,8 +34,13 @@ class WindowsSpecTests(unittest.TestCase):
         self.assertNotIn("COLLECT", names)
         self.assertNotIn("exclude_binaries=True", text.replace(" ", ""))
 
-    def test_theme_uses_meipass_resource_dir(self) -> None:
-        text = (ROOT / "ui_ctk.py").read_text(encoding="utf-8")
-        self.assertIn("from app_icon import resource_dir", text)
-        self.assertIn('resource_dir() / "assets" / "ctk_theme.json"', text)
-        self.assertTrue((ROOT / "assets" / "ctk_theme.json").is_file())
+    def test_windows_spec_packs_native_ui(self) -> None:
+        spec = ROOT / "CursorTokenTray.spec"
+        text = spec.read_text(encoding="utf-8")
+        hidden = text.split("excludes")[0]
+        self.assertIn("'win_tray'", hidden)
+        self.assertIn("'win_flyout'", hidden)
+        self.assertIn("'win_settings'", hidden)
+        self.assertNotIn("'customtkinter'", hidden)
+        self.assertNotIn("'ui_ctk'", hidden)
+        self.assertNotIn("ctk_theme.json", text)
