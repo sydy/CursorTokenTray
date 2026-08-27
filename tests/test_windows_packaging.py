@@ -44,3 +44,13 @@ class WindowsSpecTests(unittest.TestCase):
         self.assertNotIn("'customtkinter'", hidden)
         self.assertNotIn("'ui_ctk'", hidden)
         self.assertNotIn("ctk_theme.json", text)
+
+
+class DotnetPublishTests(unittest.TestCase):
+    def test_self_contained_exe_is_compressed(self) -> None:
+        csproj = (ROOT / "windows" / "CursorTokenTray" / "CursorTokenTray.csproj").read_text(encoding="utf-8")
+        self.assertIn("<PublishSingleFile>true</PublishSingleFile>", csproj)
+        self.assertIn("<SelfContained>true</SelfContained>", csproj)
+        self.assertIn("<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>", csproj)
+        self.assertIn("<InvariantGlobalization>true</InvariantGlobalization>", csproj)
+        self.assertIn("<PublishTrimmed>true</PublishTrimmed>", csproj)

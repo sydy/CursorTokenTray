@@ -242,31 +242,18 @@ sealed class TrayContext : ApplicationContext
 
 static class Autostart
 {
+    static string StartupDir => Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+    static string LnkPath => Path.Combine(StartupDir, "CursorTokenTray.lnk");
+    static string VbsPath => Path.Combine(StartupDir, "CursorTokenTray.vbs");
+
     public static void Apply(bool enabled)
     {
-        var startup = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "CursorTokenTray.lnk");
-        if (!enabled)
-        {
-            try { File.Delete(startup); } catch { }
-            return;
-        }
+        foreach (var path in new[] { LnkPath, VbsPath, Path.Combine(StartupDir, "CursorTokenTray.cmd") })
+            try { File.Delete(path); } catch { }
+        if (!enabled) return;
         var exe = Environment.ProcessPath ?? Application.ExecutablePath;
-        try
-        {
-            var t = Type.GetTypeFromProgID("WScript.Shell");
-            if (t is null) return;
-            var shell = Activator.CreateInstance(t);
-            if (shell is null) return;
-            var shortcut = t.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, [startup]);
-            if (shortcut is null) return;
-            var st = shortcut.GetType();
-            st.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, shortcut, [exe]);
-            st.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, [Path.GetDirectoryName(exe) ?? ""]);
-            st.InvokeMember("WindowStyle", System.Reflection.BindingFlags.SetProperty, null, shortcut, [7]);
-            st.InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, shortcut, ["Cursor Token 剩余进度托盘"]);
-            st.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
-        }
-        catch { }
+        var quoted = exe.Replace("\"", "\"\"");
+        File.WriteAllText(VbsPath, $"CreateObject(\"Wscript.Shell\").Run \"\"\"{quoted}\"\"\", 0, False\r\n");
     }
 }
 

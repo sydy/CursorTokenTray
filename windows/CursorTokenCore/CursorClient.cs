@@ -46,7 +46,12 @@ public sealed class CursorClient
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (endMs > nowMs) endMs = nowMs;
         if (endMs < startMs) endMs = startMs.Value;
-        var body = JsonSerializer.Serialize(new { teamId = UsageParser.TeamId(snap.Raw), startDate = startMs.Value, endDate = endMs });
+        var body = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["teamId"] = UsageParser.TeamId(snap.Raw),
+            ["startDate"] = startMs.Value,
+            ["endDate"] = endMs,
+        });
         var payload = await RequestJson("POST", UsageParser.AggregatedEndpoint, token, body, timeout, ct);
         var parsed = UsageParser.ParseAggregatedUsage(payload, snap.AutoPercentUsed, snap.ApiPercentUsed);
         snap.ModelUsages = parsed.models;

@@ -77,11 +77,19 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Publish single-file exe
         run: |
-          dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist-win
+          dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=true -p:_SuppressWinFormsTrimError=true -p:InvariantGlobalization=true -p:DebugType=none -p:DebugSymbols=false -o dist-win-files
+          echo "---- largest published files ----"
+          pwsh -NoProfile -Command "Get-ChildItem dist-win-files -File | Sort-Object Length -Descending | Select-Object -First 15 | ForEach-Object { '{0,8:N2} MB  {1}' -f ($_.Length/1MB), $_.Name }"
+          dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:PublishTrimmed=true -p:_SuppressWinFormsTrimError=true -p:InvariantGlobalization=true -p:DebugType=none -p:DebugSymbols=false -o dist-win
+      - name: Report exe size
+        shell: pwsh
+        run: |
+          Get-ChildItem dist-win | ForEach-Object { '{0} {1:N2} MB' -f $_.Name, ($_.Length / 1MB) }
       - name: Zip onefile
         shell: pwsh
         run: |
           Compress-Archive -Path dist-win\CursorTokenTray.exe -DestinationPath CursorTokenTray-windows.zip -Force
+          '{0} {1:N2} MB' -f 'CursorTokenTray-windows.zip', ((Get-Item CursorTokenTray-windows.zip).Length / 1MB)
       - uses: actions/upload-artifact@v6
         if: github.event_name != 'pull_request'
         continue-on-error: true
