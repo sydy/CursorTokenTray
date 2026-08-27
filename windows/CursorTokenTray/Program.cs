@@ -107,10 +107,12 @@ sealed class TrayContext : ApplicationContext
         }
     }
 
+    sealed record RefreshOutcome(string Id, UsageSnapshot? Snap, string? Error, bool AuthError, string Stamp);
+
     async Task RefreshAll()
     {
-        var cfg = _config;
-        if (cfg.Accounts.Count == 0)
+        var targets = _config.Accounts.Select(a => (a.Id, a.Token, a.TokenDecryptFailed)).ToList();
+        if (targets.Count == 0)
         {
             _usage = null;
             _error = "未配置 Token，请打开设置粘贴";
@@ -118,45 +120,78 @@ sealed class TrayContext : ApplicationContext
             UpdateUi();
             return;
         }
-        var activeId = cfg.ActiveAccountId;
-        foreach (var acc in cfg.Accounts.OrderBy(a => a.Id == activeId ? 0 : 1).ToList())
+        var activeId = _config.ActiveAccountId;
+        var outcomes = new List<RefreshOutcome>();
+        foreach (var acc in targets.OrderBy(a => a.Id == activeId ? 0 : 1))
         {
-            if (string.IsNullOrWhiteSpace(acc.Token)) continue;
             var stamp = DateTime.Now.ToString("HH:mm:ss");
-            var isActive = acc.Id == activeId;
+            if (acc.TokenDecryptFailed || string.IsNullOrWhiteSpace(acc.Token))
+            {
+                outcomes.Add(new RefreshOutcome(acc.Id, null, TokenProtector.DecryptFailedMessage, false, stamp));
+                continue;
+            }
             try
             {
                 var snap = await _client.FetchUsageSummary(acc.Token, 20);
-                cfg.ApplySnapshot(acc.Id, snap.MembershipType, snap.RemainingPercent, "", stamp);
-                var live = cfg.Accounts.First(a => a.Id == acc.Id);
-                live.AuthErrorNotified = false;
-                foreach (var n in AlertLogic.Evaluate(cfg, live, snap))
-                    _icon.ShowBalloonTip(4000, n.Title, n.Body, ToolTipIcon.Info);
+                outcomes.Add(new RefreshOutcome(acc.Id, snap, null, false, stamp));
                 UsageHistory.Append(snap.RemainingPercent, snap.AutoPercentUsed, snap.ApiPercentUsed, accountId: acc.Id);
-                if (isActive) { _usage = snap; _error = null; _updated = stamp; }
             }
             catch (CursorApiException err)
             {
-                cfg.ApplySnapshot(acc.Id, error: err.Message, updatedAt: stamp);
-                var live = cfg.Accounts.FirstOrDefault(a => a.Id == acc.Id);
-                if (err.IsAuthError && live is not null && !live.AuthErrorNotified)
-                {
-                    if (cfg.NotifyEnabled)
-                        _icon.ShowBalloonTip(5000, "Token 需要更新", string.IsNullOrEmpty(live.DisplayLabel) ? err.Message : $"账号「{live.DisplayLabel}」：{err.Message}", ToolTipIcon.Warning);
-                    live.AuthErrorNotified = true;
-                }
-                if (isActive) { _usage = null; _error = err.Message; _updated = stamp; }
+                outcomes.Add(new RefreshOutcome(acc.Id, null, err.Message, err.IsAuthError, stamp));
             }
             catch (Exception ex)
             {
-                var msg = "刷新失败: " + ex.Message;
-                cfg.ApplySnapshot(acc.Id, error: msg, updatedAt: stamp);
-                if (isActive) { _usage = null; _error = msg; _updated = stamp; }
+                outcomes.Add(new RefreshOutcome(acc.Id, null, "刷新失败: " + ex.Message, false, stamp));
             }
         }
-        cfg.SyncLegacyFields();
+
+        var notices = new List<(string Title, string Body, bool Warn)>();
+        AppConfig cfg;
+        try
+        {
+            cfg = ConfigStore.Update(live =>
+            {
+                foreach (var o in outcomes)
+                {
+                    var acc = live.Accounts.FirstOrDefault(a => a.Id == o.Id);
+                    if (acc is null) continue;
+                    if (o.Snap is { } snap)
+                    {
+                        live.ApplySnapshot(o.Id, snap.MembershipType, snap.RemainingPercent, "", o.Stamp);
+                        acc.AuthErrorNotified = false;
+                        foreach (var n in AlertLogic.Evaluate(live, acc, snap))
+                            notices.Add((n.Title, n.Body, false));
+                    }
+                    else if (o.Error is not null)
+                    {
+                        live.ApplySnapshot(o.Id, error: o.Error, updatedAt: o.Stamp);
+                        if (o.AuthError && !acc.AuthErrorNotified)
+                        {
+                            acc.AuthErrorNotified = true;
+                            if (live.NotifyEnabled)
+                            {
+                                var body = string.IsNullOrEmpty(acc.DisplayLabel) ? o.Error : $"账号「{acc.DisplayLabel}」：{o.Error}";
+                                notices.Add(("Token 需要更新", body, true));
+                            }
+                        }
+                    }
+                }
+                live.SyncLegacyFields();
+            });
+        }
+        catch (Exception)
+        {
+            cfg = _config;
+        }
+
         _config = cfg;
-        ConfigStore.Save(cfg);
+        var active = outcomes.FirstOrDefault(o => o.Id == cfg.ActiveAccountId);
+        if (active?.Snap is { } activeSnap) { _usage = activeSnap; _error = null; _updated = active.Stamp; }
+        else if (active?.Error is not null) { _usage = null; _error = active.Error; _updated = active.Stamp; }
+        else if (cfg.Accounts.Count == 0) { _usage = null; _error = "未配置 Token，请打开设置粘贴"; _updated = null; }
+        foreach (var n in notices)
+            _icon.ShowBalloonTip(n.Warn ? 5000 : 4000, n.Title, n.Body, n.Warn ? ToolTipIcon.Warning : ToolTipIcon.Info);
         UpdateUi();
     }
 
@@ -227,7 +262,11 @@ sealed class TrayContext : ApplicationContext
     {
         var prevAuto = _config.AutostartEnabled;
         _config = cfg;
-        ConfigStore.Save(cfg);
+        try { ConfigStore.Save(cfg); }
+        catch (Exception)
+        {
+            _icon.ShowBalloonTip(4000, "保存失败", "无法写入配置（文件忙碌或加密失败），请稍后再试。", ToolTipIcon.Warning);
+        }
         if (prevAuto != cfg.AutostartEnabled) Autostart.Apply(cfg.AutostartEnabled);
         if (refresh) _refreshNow = true;
         UpdateUi();

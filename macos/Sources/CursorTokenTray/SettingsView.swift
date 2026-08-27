@@ -23,7 +23,7 @@ struct SettingsRootView: View {
         .padding(20)
         .frame(width: 520, height: 420)
         .onAppear {
-            tokenText = store.config.sessionToken
+            tokenText = ""
             intervalText = String(store.config.refreshIntervalMinutes)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
             if focusToken || store.focusToken {
@@ -48,7 +48,7 @@ struct SettingsRootView: View {
                 Button("重命名") { rename() }
                 Button("删除") { deleteAccount() }
             }
-            Text("添加账号（粘贴 Token，请勿分享）").font(.headline).padding(.top, 8)
+            Text("添加账号（粘贴 Token，请勿分享；已保存的不会显示）").font(.headline).padding(.top, 8)
             TextEditor(text: $tokenText)
                 .font(.system(.body, design: .monospaced))
                 .frame(height: 56)
@@ -156,6 +156,7 @@ struct SettingsRootView: View {
             store.applyConfig(cfg, refresh: true)
             hint = "已添加"
             store.importStatus = "已写入当前账号"
+            tokenText = ""
         } catch {
             hint = error.localizedDescription
         }
@@ -226,7 +227,7 @@ struct SettingsRootView: View {
                     activate: true
                 )
                 store.applyConfig(cfg, refresh: true)
-                tokenText = result.token
+                tokenText = ""
                 hint = "已导入"
             }
         }
@@ -256,7 +257,7 @@ struct SettingsRootView: View {
                     var cfg = store.config
                     _ = try? cfg.upsertAccount(token: result.token, membershipType: result.membershipType, remaining: result.remainingPercent, activate: true)
                     store.applyConfig(cfg, refresh: true)
-                    tokenText = result.token
+                    tokenText = ""
                     store.importStatus = result.message
                     hint = "已导入"
                 }

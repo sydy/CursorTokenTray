@@ -188,7 +188,7 @@ final class UsageParserFixtureTests: XCTestCase {
         cfg.alertNotifiedLevels = [20]
         cfg.authErrorNotified = true
         cfg.lowQuotaNotified = true
-        cfg = ConfigStore.normalize(ConfigStore.toDictionary(cfg))
+        cfg = ConfigStore.normalize(try ConfigStore.toDictionary(cfg))
         XCTAssertEqual(cfg.accounts.count, 1)
         XCTAssertEqual(cfg.accounts[0].id, idA)
         XCTAssertEqual(cfg.activeAccountId, idA)
@@ -295,11 +295,73 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertTrue(recent.contains { abs($0.remaining - 20) < 0.01 })
     }
 
-    func testTokenProtectorRoundtrip() {
+    func testTokenProtectorRoundtrip() throws {
         let token = "user_01PROT%3A%3Aaaa.bbb.ccc"
-        XCTAssertEqual(TokenProtector.unprotect(TokenProtector.protect(token)), token)
+        XCTAssertEqual(TokenProtector.unprotect(try TokenProtector.protect(token)), token)
         XCTAssertEqual(TokenProtector.unprotect("plain"), "plain")
-        XCTAssertEqual(TokenProtector.protect(""), "")
+        XCTAssertEqual(try TokenProtector.protect(""), "")
+        let blob = TokenProtector.prefix + Data([1, 2, 3, 4, 5, 6, 7, 8]).base64EncodedString()
+        let unpacked = TokenProtector.tryUnprotect(blob)
+        XCTAssertFalse(unpacked.ok)
+        XCTAssertEqual(unpacked.value, "")
+        XCTAssertEqual(TokenProtector.unprotect(blob), "")
+    }
+
+    func testEncryptedBlobIsNotUsedAsTokenAndIsPreserved() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blob = TokenProtector.prefix + Data("not-a-real-aes-payload".utf8).base64EncodedString()
+        let json = """
+        {
+          "session_token": "\(blob)",
+          "accounts": [{ "id": "user_01X", "token": "\(blob)", "label": "坏" }],
+          "active_account_id": "user_01X",
+          "refresh_interval_minutes": 10
+        }
+        """
+        try json.write(to: AppPaths.configPath(in: dir), atomically: true, encoding: .utf8)
+        let loaded = ConfigStore.load(from: dir)
+        XCTAssertTrue(loaded.decryptError)
+        XCTAssertEqual(loaded.accounts.count, 1)
+        XCTAssertTrue(loaded.accounts[0].tokenDecryptFailed)
+        XCTAssertEqual(loaded.accounts[0].token, "")
+        XCTAssertEqual(loaded.accounts[0].label, "坏")
+        XCTAssertEqual(loaded.accounts[0].lastError, TokenProtector.decryptFailedMessage)
+        ConfigStore.save(loaded, to: dir)
+        let disk = try String(contentsOf: AppPaths.configPath(in: dir), encoding: .utf8)
+        XCTAssertTrue(disk.contains(blob))
+    }
+
+    func testUpdateMergesOntoLatestDiskConfig() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let header = Data("{\"alg\":\"none\"}".utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        let payload = try JSONSerialization.data(withJSONObject: ["sub": "github|user_01SAVE"])
+        let p = payload.base64EncodedString().replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        let token = "user_01SAVE%3A%3A\(header).\(p).sig"
+        var cfg = AppConfig.default
+        cfg.refreshIntervalMinutes = 10
+        _ = try cfg.upsertAccount(token: token, label: "工作", activate: true)
+        ConfigStore.save(cfg, to: dir)
+
+        var settings = ConfigStore.load(from: dir)
+        settings.refreshIntervalMinutes = 15
+        ConfigStore.save(settings, to: dir)
+
+        let merged = ConfigStore.update(from: dir) { live in
+            XCTAssertEqual(live.refreshIntervalMinutes, 15)
+            live.applySnapshot(to: live.activeAccountId, remaining: 42)
+        }
+        XCTAssertEqual(merged.refreshIntervalMinutes, 15)
+        XCTAssertEqual(merged.activeAccount?.lastRemaining, 42)
+        let reloaded = ConfigStore.load(from: dir)
+        XCTAssertEqual(reloaded.refreshIntervalMinutes, 15)
+        XCTAssertEqual(reloaded.activeAccount?.lastRemaining, 42)
     }
 
     private func num(_ value: Any?) -> Double? {

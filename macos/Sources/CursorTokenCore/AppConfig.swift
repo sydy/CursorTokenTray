@@ -62,6 +62,8 @@ public struct Account: Equatable, Sendable, Codable {
     public var authErrorNotified: Bool
     public var exhaustionNotified: Bool
     public var lowQuotaNotified: Bool
+    public var tokenDecryptFailed: Bool
+    public var storedToken: String
 
     public init(
         id: String = "",
@@ -74,7 +76,9 @@ public struct Account: Equatable, Sendable, Codable {
         alertNotifiedLevels: [Int] = [],
         authErrorNotified: Bool = false,
         exhaustionNotified: Bool = false,
-        lowQuotaNotified: Bool = false
+        lowQuotaNotified: Bool = false,
+        tokenDecryptFailed: Bool = false,
+        storedToken: String = ""
     ) {
         self.id = id
         self.label = label
@@ -87,6 +91,8 @@ public struct Account: Equatable, Sendable, Codable {
         self.authErrorNotified = authErrorNotified
         self.exhaustionNotified = exhaustionNotified
         self.lowQuotaNotified = lowQuotaNotified
+        self.tokenDecryptFailed = tokenDecryptFailed
+        self.storedToken = storedToken
     }
 
     public var displayLabel: String {
@@ -136,6 +142,8 @@ public struct AppConfig: Equatable, Sendable {
     public var exhaustionNotified: Bool
     /// True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.
     public var loadError: Bool
+    public var decryptError: Bool
+    public var storedSessionToken: String
 
     public static let displayModes: Set<String> = ["ring", "number", "dot"]
 
@@ -154,7 +162,9 @@ public struct AppConfig: Equatable, Sendable {
         authErrorNotified: false,
         alertNotifiedLevels: [],
         exhaustionNotified: false,
-        loadError: false
+        loadError: false,
+        decryptError: false,
+        storedSessionToken: ""
     )
 
     public var activeAccount: Account? {
@@ -282,23 +292,7 @@ public enum ConfigStore {
     public static func load(from directory: URL? = nil) -> AppConfig {
         let dir = directory ?? AppPaths.configDirectory()
         AppPaths.ensureDirectory(dir)
-        return withLock(dir) {
-            let path = AppPaths.configPath(in: dir)
-            guard FileManager.default.fileExists(atPath: path.path) else {
-                let cfg = AppConfig.default
-                saveUnlocked(cfg, to: dir)
-                return cfg
-            }
-            guard let data = try? Data(contentsOf: path),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else {
-                quarantine(path)
-                var cfg = AppConfig.default
-                cfg.loadError = true
-                return cfg
-            }
-            return normalize(obj)
-        }
+        return withLock(dir) { loadUnlocked(from: dir) }
     }
 
     public static func save(_ cfg: AppConfig, to directory: URL? = nil) {
@@ -307,13 +301,48 @@ public enum ConfigStore {
         withLock(dir) { saveUnlocked(cfg, to: dir) }
     }
 
+    /// Reload from disk, apply `mutate`, and save under the same lock so a
+    /// long-running refresh cannot clobber settings saved in the meantime.
+    @discardableResult
+    public static func update(from directory: URL? = nil, mutate: (inout AppConfig) -> Void) -> AppConfig {
+        let dir = directory ?? AppPaths.configDirectory()
+        AppPaths.ensureDirectory(dir)
+        return withLock(dir) {
+            var cfg = loadUnlocked(from: dir)
+            if cfg.loadError && cfg.accounts.isEmpty { return cfg }
+            mutate(&cfg)
+            saveUnlocked(cfg, to: dir)
+            return cfg
+        }
+    }
+
+    static func loadUnlocked(from dir: URL) -> AppConfig {
+        let path = AppPaths.configPath(in: dir)
+        guard FileManager.default.fileExists(atPath: path.path) else {
+            let cfg = AppConfig.default
+            saveUnlocked(cfg, to: dir)
+            return cfg
+        }
+        guard let data = try? Data(contentsOf: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            quarantine(path)
+            var cfg = AppConfig.default
+            cfg.loadError = true
+            return cfg
+        }
+        return normalize(obj)
+    }
+
     static func saveUnlocked(_ cfg: AppConfig, to dir: URL) {
         if cfg.loadError && cfg.accounts.isEmpty { return }
         var normalized = cfg
         normalized.loadError = false
-        normalized = normalize(toDictionary(normalized))
-        let dict = toDictionary(normalized)
-        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) else { return }
+        guard let first = try? toDictionary(normalized) else { return }
+        normalized = normalize(first)
+        guard let dict = try? toDictionary(normalized),
+              let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
+        else { return }
         let path = AppPaths.configPath(in: dir)
         atomicWrite(data, to: path)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
@@ -359,7 +388,16 @@ public enum ConfigStore {
 
     public static func normalize(_ raw: [String: Any]) -> AppConfig {
         var cfg = AppConfig.default
-        if let v = raw["session_token"] as? String { cfg.sessionToken = TokenProtector.unprotect(v) }
+        if let v = raw["session_token"] as? String {
+            let result = TokenProtector.tryUnprotect(v)
+            if result.ok {
+                cfg.sessionToken = result.value
+            } else {
+                cfg.sessionToken = ""
+                cfg.decryptError = true
+                cfg.storedSessionToken = v
+            }
+        }
         if let v = raw["active_account_id"] as? String { cfg.activeAccountId = v }
         if let v = intValue(raw["refresh_interval_minutes"]) { cfg.refreshIntervalMinutes = max(1, v) }
         if let v = intValue(raw["low_quota_threshold"]) { cfg.lowQuotaThreshold = min(100, max(1, v)) }
@@ -382,6 +420,7 @@ public enum ConfigStore {
         }
         cfg.alertNotifiedLevels = parseIntList(raw["alert_notified_levels"])
         cfg.accounts = parseAccounts(raw["accounts"])
+        if cfg.accounts.contains(where: \.tokenDecryptFailed) { cfg.decryptError = true }
         cfg = normalizeAccounts(cfg, raw: raw)
         return cfg
     }
@@ -429,17 +468,25 @@ public enum ConfigStore {
     }
 
     static func sanitizeAccount(_ raw: [String: Any]) -> Account? {
-        let tokenRaw = TokenProtector.unprotect((raw["token"] as? String ?? "").trimmingCharacters(in: .whitespaces))
-        let token = (try? Token.normalize(tokenRaw)) ?? tokenRaw
-        if token.isEmpty { return nil }
+        let stored = (raw["token"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        let unpacked = TokenProtector.tryUnprotect(stored)
+        let decryptFailed = !unpacked.ok
+        let tokenRaw = unpacked.value
+        let token = decryptFailed ? "" : ((try? Token.normalize(tokenRaw)) ?? tokenRaw)
         var accountId = (raw["id"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-        if accountId.isEmpty { accountId = Token.accountId(from: token) }
+        if accountId.isEmpty, !token.isEmpty { accountId = Token.accountId(from: token) }
         if accountId.isEmpty { return nil }
+        if token.isEmpty && !decryptFailed { return nil }
         var acc = Account(id: accountId, token: token)
+        if decryptFailed {
+            acc.tokenDecryptFailed = true
+            acc.storedToken = stored
+            acc.lastError = TokenProtector.decryptFailedMessage
+        }
         acc.label = (raw["label"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         acc.membershipType = (raw["membershipType"] as? String ?? raw["membership_type"] as? String ?? "")
             .trimmingCharacters(in: .whitespaces)
-        acc.lastError = raw["last_error"] as? String ?? ""
+        if !decryptFailed { acc.lastError = raw["last_error"] as? String ?? "" }
         acc.updatedAt = raw["updated_at"] as? String ?? ""
         if let remaining = raw["last_remaining"] {
             if remaining is NSNull {
@@ -489,14 +536,22 @@ public enum ConfigStore {
         return false
     }
 
-    public static func toDictionary(_ cfg: AppConfig) -> [String: Any] {
+    public static func toDictionary(_ cfg: AppConfig) throws -> [String: Any] {
         [
-            "session_token": TokenProtector.protect(cfg.sessionToken),
-            "accounts": cfg.accounts.map { acc -> [String: Any] in
+            "session_token": try TokenProtector.diskToken(
+                plaintext: cfg.sessionToken,
+                storedRaw: cfg.storedSessionToken,
+                decryptFailed: cfg.decryptError && cfg.sessionToken.isEmpty
+            ),
+            "accounts": try cfg.accounts.map { acc -> [String: Any] in
                 var d: [String: Any] = [
                     "id": acc.id,
                     "label": acc.label,
-                    "token": TokenProtector.protect(acc.token),
+                    "token": try TokenProtector.diskToken(
+                        plaintext: acc.token,
+                        storedRaw: acc.storedToken,
+                        decryptFailed: acc.tokenDecryptFailed
+                    ),
                     "membership_type": acc.membershipType,
                     "last_error": acc.lastError,
                     "updated_at": acc.updatedAt,

@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace CursorTokenCore;
@@ -15,6 +17,9 @@ public sealed class Account
     public bool AuthErrorNotified { get; set; }
     public bool ExhaustionNotified { get; set; }
     public bool LowQuotaNotified { get; set; }
+    /// <summary>True when the on-disk <c>enc:v1:</c> blob could not be decrypted. <see cref="Token"/> is empty; <see cref="StoredToken"/> keeps the blob so a save cannot clobber it.</summary>
+    public bool TokenDecryptFailed { get; set; }
+    public string StoredToken { get; set; } = "";
 
     public string DisplayLabel
     {
@@ -60,6 +65,9 @@ public sealed class AppConfig
     public bool ExhaustionNotified { get; set; }
     /// <summary>True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.</summary>
     public bool LoadError { get; set; }
+    /// <summary>True when a stored <c>enc:v1:</c> session token could not be decrypted.</summary>
+    public bool DecryptError { get; set; }
+    public string StoredSessionToken { get; set; } = "";
 
     public Account? ActiveAccount =>
         Accounts.FirstOrDefault(a => a.Id == ActiveAccountId) ?? Accounts.FirstOrDefault();
@@ -185,39 +193,66 @@ public static class AppPaths
     }
 }
 
+public sealed class ConfigLockException : IOException
+{
+    public ConfigLockException() : base("无法获取配置文件锁，请稍后重试") { }
+}
+
 public static class ConfigStore
 {
+    const int LockWaitMs = 8000;
+
     public static AppConfig Load(string? directory = null)
     {
         var dir = AppPaths.ConfigDirectory(directory);
         Directory.CreateDirectory(dir);
-        return WithLock(dir, () =>
-        {
-            var path = AppPaths.ConfigPath(dir);
-            if (!File.Exists(path))
-            {
-                var fresh = new AppConfig();
-                SaveUnlocked(fresh, dir);
-                return fresh;
-            }
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                return Normalize(doc.RootElement);
-            }
-            catch
-            {
-                TryQuarantine(path);
-                return new AppConfig { LoadError = true };
-            }
-        });
+        return WithLock(dir, () => LoadUnlocked(dir), write: false);
     }
 
     public static void Save(AppConfig cfg, string? directory = null)
     {
         var dir = AppPaths.ConfigDirectory(directory);
         Directory.CreateDirectory(dir);
-        WithLock(dir, () => SaveUnlocked(cfg, dir));
+        WithLock(dir, () => { SaveUnlocked(cfg, dir); return 0; }, write: true);
+    }
+
+    /// <summary>
+    /// Reload from disk, apply <paramref name="mutate"/>, and save under the same lock
+    /// so a long-running refresh cannot clobber settings saved in the meantime.
+    /// </summary>
+    public static AppConfig Update(Action<AppConfig> mutate, string? directory = null)
+    {
+        var dir = AppPaths.ConfigDirectory(directory);
+        Directory.CreateDirectory(dir);
+        return WithLock(dir, () =>
+        {
+            var cfg = LoadUnlocked(dir);
+            if (cfg.LoadError && cfg.Accounts.Count == 0) return cfg;
+            mutate(cfg);
+            SaveUnlocked(cfg, dir);
+            return cfg;
+        }, write: true);
+    }
+
+    static AppConfig LoadUnlocked(string dir)
+    {
+        var path = AppPaths.ConfigPath(dir);
+        if (!File.Exists(path))
+        {
+            var fresh = new AppConfig();
+            SaveUnlocked(fresh, dir);
+            return fresh;
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return Normalize(doc.RootElement);
+        }
+        catch
+        {
+            TryQuarantine(path);
+            return new AppConfig { LoadError = true };
+        }
     }
 
     static void SaveUnlocked(AppConfig cfg, string dir)
@@ -229,11 +264,11 @@ public static class ConfigStore
         AtomicWrite(path, json);
     }
 
-    static T WithLock<T>(string dir, Func<T> body)
+    static T WithLock<T>(string dir, Func<T> body, bool write)
     {
         Directory.CreateDirectory(dir);
         var lockPath = Path.Combine(dir, "config.lock");
-        var until = DateTime.UtcNow.AddSeconds(8);
+        var until = DateTime.UtcNow.AddMilliseconds(LockWaitMs);
         while (true)
         {
             try
@@ -247,12 +282,11 @@ public static class ConfigStore
             }
             catch (IOException)
             {
+                if (write) throw new ConfigLockException();
                 return body();
             }
         }
     }
-
-    static void WithLock(string dir, Action body) => WithLock(dir, () => { body(); return 0; });
 
     static void AtomicWrite(string path, string contents)
     {
@@ -276,6 +310,25 @@ public static class ConfigStore
         {
             File.Move(tmp, path, true);
         }
+        RestrictToOwner(path);
+    }
+
+    static void RestrictToOwner(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            var user = WindowsIdentity.GetCurrent().User;
+            if (user is null) return;
+            var security = new FileSecurity();
+            security.SetAccessRuleProtection(true, false);
+            security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
+            new FileInfo(path).SetAccessControl(security);
+        }
+        catch
+        {
+            // ACL is best-effort; a saved config is still better than failing the write.
+        }
     }
 
     static void TryQuarantine(string path)
@@ -286,7 +339,18 @@ public static class ConfigStore
     public static AppConfig Normalize(JsonElement raw)
     {
         var cfg = new AppConfig();
-        if (raw.TryGetProperty("session_token", out var st)) cfg.SessionToken = TokenProtector.Unprotect(st.GetString() ?? "");
+        if (raw.TryGetProperty("session_token", out var st))
+        {
+            var stored = st.GetString() ?? "";
+            if (TokenProtector.TryUnprotect(stored, out var plain))
+                cfg.SessionToken = plain;
+            else
+            {
+                cfg.SessionToken = "";
+                cfg.DecryptError = true;
+                cfg.StoredSessionToken = stored;
+            }
+        }
         if (raw.TryGetProperty("active_account_id", out var aid)) cfg.ActiveAccountId = aid.GetString() ?? "";
         if (raw.TryGetProperty("refresh_interval_minutes", out var ri) && ri.TryGetInt32(out var riv)) cfg.RefreshIntervalMinutes = Math.Max(1, riv);
         if (raw.TryGetProperty("low_quota_threshold", out var lq) && lq.TryGetInt32(out var lqv)) cfg.LowQuotaThreshold = Math.Clamp(lqv, 1, 100);
@@ -308,6 +372,7 @@ public static class ConfigStore
             cfg.AlertThresholds = ParseThresholds(raw.TryGetProperty("alert_thresholds", out var at) ? at : default);
         cfg.AlertNotifiedLevels = ParseIntList(raw.TryGetProperty("alert_notified_levels", out var an) ? an : default);
         cfg.Accounts = ParseAccounts(raw);
+        if (cfg.Accounts.Any(a => a.TokenDecryptFailed)) cfg.DecryptError = true;
         return NormalizeAccounts(cfg, raw);
     }
 
@@ -369,19 +434,26 @@ public static class ConfigStore
 
     static Account? Sanitize(JsonElement raw)
     {
-        var tokenRaw = TokenProtector.Unprotect(Str(raw, "token"));
+        var stored = Str(raw, "token");
+        var decryptFailed = !TokenProtector.TryUnprotect(stored, out var tokenRaw);
         string token;
-        try { token = Token.Normalize(tokenRaw); } catch { token = tokenRaw.Trim(); }
-        if (token.Length == 0) return null;
+        try { token = decryptFailed ? "" : Token.Normalize(tokenRaw); } catch { token = tokenRaw.Trim(); }
         var id = Str(raw, "id").Trim();
-        if (id.Length == 0) id = Token.AccountId(token);
+        if (id.Length == 0 && token.Length > 0) id = Token.AccountId(token);
         if (id.Length == 0) return null;
+        if (token.Length == 0 && !decryptFailed) return null;
         var acc = new Account { Id = id, Token = token };
+        if (decryptFailed)
+        {
+            acc.TokenDecryptFailed = true;
+            acc.StoredToken = stored;
+            acc.LastError = TokenProtector.DecryptFailedMessage;
+        }
         acc.Label = Str(raw, "label").Trim();
         var membership = Str(raw, "membership_type");
         if (membership.Length == 0) membership = Str(raw, "membershipType");
         acc.MembershipType = membership.Trim();
-        acc.LastError = Str(raw, "last_error");
+        if (!decryptFailed) acc.LastError = Str(raw, "last_error");
         acc.UpdatedAt = Str(raw, "updated_at");
         if (raw.TryGetProperty("last_remaining", out var lr) && lr.ValueKind is JsonValueKind.Number)
             acc.LastRemaining = Numbers.Round2(lr.GetDouble());
@@ -406,12 +478,12 @@ public static class ConfigStore
 
     static object ToDict(AppConfig cfg) => new
     {
-        session_token = TokenProtector.Protect(cfg.SessionToken),
+        session_token = TokenProtector.DiskToken(cfg.SessionToken, cfg.StoredSessionToken, cfg.DecryptError && string.IsNullOrEmpty(cfg.SessionToken)),
         accounts = cfg.Accounts.Select(a => new Dictionary<string, object?>
         {
             ["id"] = a.Id,
             ["label"] = a.Label,
-            ["token"] = TokenProtector.Protect(a.Token),
+            ["token"] = TokenProtector.DiskToken(a.Token, a.StoredToken, a.TokenDecryptFailed),
             ["membership_type"] = a.MembershipType,
             ["last_remaining"] = a.LastRemaining,
             ["last_error"] = a.LastError,
