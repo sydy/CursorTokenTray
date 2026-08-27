@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from cursor_api import UsageSnapshot, format_token_count
+from cursor_api import (
+    UsageSnapshot,
+    format_membership_type,
+    format_spend_range,
+    format_token_count,
+)
 
 
 def format_summary_text(
@@ -23,10 +28,15 @@ def format_summary_text(
     tokens = ""
     if usage.total_tokens:
         tokens = f"消耗 {format_token_count(usage.total_tokens)} Token | "
+    spend = ""
+    if usage.shows_amount():
+        spend = f"金额 {format_spend_range(usage.used_cents, usage.limit_cents)} | "
     plan = format_plan_caption(usage.membership_type, account_label)
+    if usage.is_unlimited:
+        plan = f"{plan} · 不限量"
     return (
         f"剩余 {usage.remaining_percent:.1f}% | {plan} | "
-        f"{tokens}First-party {auto} | API {api} | 预计可用 {est} | 更新 {updated_at or '—'}"
+        f"{spend}{tokens}First-party {auto} | API {api} | 预计可用 {est} | 更新 {updated_at or '—'}"
     )
 
 
@@ -72,11 +82,16 @@ def status_pill_text(remaining: float | None, *, error: bool = False) -> str:
 
 
 def format_plan_caption(membership: str | None, account_label: str | None = None) -> str:
-    name = (membership or "").strip() or "—"
-    if name != "—" and "套餐" not in name:
-        name = f"{name} 套餐"
+    raw = (membership or "").strip()
+    if not raw:
+        name = "—"
+    else:
+        name = format_membership_type(raw)
+        if "套餐" not in name:
+            name = f"{name} 套餐"
     label = (account_label or "").strip()
-    if label and label.lower() not in {name.lower(), (membership or "").strip().lower()}:
+    known = {name.lower(), raw.lower(), format_membership_type(raw).lower()}
+    if label and label.lower() not in known:
         if name == "—":
             return label
         return f"{label} · {name}"
@@ -115,14 +130,50 @@ def build_status_lines(
     if usage is None:
         return [("状态", "等待刷新…")]
 
-    rows: list[tuple[str, str]] = [
-        ("剩余", f"{usage.remaining_percent:.1f}%（已用 {usage.used_percent:.1f}%）"),
-    ]
+    rows: list[tuple[str, str]] = []
+    if usage.is_unlimited:
+        rows.append(("剩余", "不限量"))
+    elif usage.shows_amount():
+        rows.append(
+            (
+                "剩余",
+                f"{usage.remaining_percent:.1f}%（{format_spend_range(usage.used_cents, usage.limit_cents)}）",
+            )
+        )
+    else:
+        rows.append(("剩余", f"{usage.remaining_percent:.1f}%（已用 {usage.used_percent:.1f}%）"))
     label = (account_label or "").strip()
-    memb = (usage.membership_type or "").strip()
+    memb = format_membership_type(usage.membership_type) if usage.membership_type else ""
     if label and label.lower() != memb.lower():
         rows.append(("账号", label))
-    rows.append(("计划", memb))
+    plan = memb or "—"
+    if usage.is_unlimited:
+        plan = f"{plan} · 不限量"
+    rows.append(("计划", plan))
+    if usage.shows_amount():
+        rows.append(("金额", format_spend_range(usage.used_cents, usage.limit_cents)))
+    if (
+        usage.pooled_used_cents is not None
+        and usage.pooled_limit_cents is not None
+        and usage.pooled_limit_cents > 0
+        and (
+            usage.used_cents != usage.pooled_used_cents
+            or usage.limit_cents != usage.pooled_limit_cents
+        )
+    ):
+        rows.append(("团队额度", format_spend_range(usage.pooled_used_cents, usage.pooled_limit_cents)))
+    if (
+        usage.on_demand_used_cents is not None
+        and usage.on_demand_limit_cents is not None
+        and usage.on_demand_limit_cents > 0
+        and (
+            usage.used_cents != usage.on_demand_used_cents
+            or usage.limit_cents != usage.on_demand_limit_cents
+        )
+    ):
+        rows.append(
+            ("按需用量", format_spend_range(usage.on_demand_used_cents, usage.on_demand_limit_cents))
+        )
     if usage.total_tokens:
         rows.append(("消耗 Token", format_token_count(usage.total_tokens)))
     if usage.auto_percent_used is not None or usage.api_percent_used is not None:

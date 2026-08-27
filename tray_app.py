@@ -22,9 +22,10 @@ from accounts import (
 )
 from config import APP_NAME, load_config, save_config
 from cursor_api import (
-    BILLING_URL,
     CursorApiError,
     UsageSnapshot,
+    dashboard_menu_label,
+    dashboard_url_for,
     fetch_usage_summary,
     is_auth_error_message,
 )
@@ -79,7 +80,10 @@ class TrayApp:
         return pystray.Menu(
             pystray.MenuItem("显示状态", self._action_open_status, default=True),
             pystray.MenuItem("立即刷新", self._action_refresh),
-            pystray.MenuItem("打开用量账单", self._action_open_spending),
+            pystray.MenuItem(
+                lambda _item: dashboard_menu_label(self.usage),
+                self._action_open_spending,
+            ),
             pystray.MenuItem("切换账号", pystray.Menu(lambda: tuple(self._account_menu_items()))),
             pystray.MenuItem("导入 Token…", self._action_open_settings_focus),
             pystray.MenuItem("设置…", self._action_open_settings),
@@ -372,7 +376,7 @@ class TrayApp:
         self._refresh_event.set()
 
     def _action_open_spending(self, _icon=None, _item=None) -> None:
-        webbrowser.open(BILLING_URL)
+        webbrowser.open(dashboard_url_for(self.usage))
 
     def _open_settings(self, *, focus_token: bool = False, start_import: bool = False) -> None:
         if IS_MAC:

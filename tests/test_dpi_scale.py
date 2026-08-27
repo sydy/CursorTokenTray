@@ -226,6 +226,8 @@ class IdleMemoryTests(unittest.TestCase):
         self.assertEqual(got.remaining_percent, 80.0)
         self.assertEqual(got.total_tokens, 1234)
         self.assertEqual(got.model_usages[0].name, "auto")
+        self.assertEqual(got.billing_mode, "percent")
+        self.assertFalse(got.is_unlimited)
         self.assertIsNone(err)
         self.assertEqual(updated, "12:00:00")
 

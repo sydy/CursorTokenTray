@@ -16,8 +16,28 @@ from urllib.request import Request, urlopen
 CURSOR_BASE = "https://cursor.com"
 USAGE_ENDPOINTS = ("/api/usage-summary", "/api/dashboard/usage-summary")
 AGGREGATED_USAGE_ENDPOINT = "/api/dashboard/get-aggregated-usage-events"
+USAGE_URL = "https://cursor.com/dashboard/usage"
 SPENDING_URL = "https://cursor.com/dashboard/spending"
 BILLING_URL = "https://cursor.com/dashboard/billing"
+
+# 企业 / 团队套餐：Dashboard 只有 Usage 页，额度按金额（美分）计费
+_TEAM_MEMBERSHIPS = frozenset(
+    {"enterprise", "enterprise_trial", "team", "teams", "business"}
+)
+_MEMBERSHIP_LABELS = {
+    "pro": "Pro",
+    "pro_plus": "Pro+",
+    "pro+": "Pro+",
+    "ultra": "Ultra",
+    "free": "Free",
+    "hobby": "Hobby",
+    "enterprise": "Enterprise",
+    "enterprise_trial": "Enterprise",
+    "team": "Team",
+    "teams": "Team",
+    "business": "Business",
+    "unpaid": "Free",
+}
 
 # Dashboard Included Usage：tier 2 = Cursor 模型，其余为其他模型
 CURSOR_MODEL_TIER = 2
@@ -64,9 +84,111 @@ class UsageSnapshot:
     raw: dict[str, Any]
     total_tokens: int | None = None
     model_usages: tuple[ModelTokenUsage, ...] = ()
+    # percent：个人套餐按 included usage 百分比；amount：企业/团队按金额
+    billing_mode: str = "percent"
+    used_cents: float | None = None
+    limit_cents: float | None = None
+    remaining_cents: float | None = None
+    on_demand_used_cents: float | None = None
+    on_demand_limit_cents: float | None = None
+    pooled_used_cents: float | None = None
+    pooled_limit_cents: float | None = None
+    limit_type: str = ""
+    is_unlimited: bool = False
+
+    def is_team_account(self) -> bool:
+        return is_team_membership(self.membership_type, self.limit_type)
+
+    def shows_amount(self) -> bool:
+        if self.used_cents is None or self.limit_cents is None or self.limit_cents <= 0:
+            return False
+        return self.billing_mode == "amount" or self.is_team_account()
+
+    def dashboard_url(self) -> str:
+        return dashboard_url_for(self)
 
 
 AUTH_ERROR_MESSAGE = "Token 已过期或无效，请重新粘贴 WorkosCursorSessionToken"
+
+
+def format_membership_type(raw: str | None) -> str:
+    key = (raw or "").strip()
+    if not key:
+        return "未知"
+    return _MEMBERSHIP_LABELS.get(key.lower(), key)
+
+
+def is_team_membership(membership: str | None, limit_type: str | None = None) -> bool:
+    if (limit_type or "").strip().lower() == "team":
+        return True
+    return (membership or "").strip().lower() in _TEAM_MEMBERSHIPS
+
+
+def dashboard_url_for(
+    usage: UsageSnapshot | None = None,
+    *,
+    membership: str = "",
+    limit_type: str = "",
+) -> str:
+    if usage is not None:
+        membership = usage.membership_type
+        limit_type = usage.limit_type
+    if is_team_membership(membership, limit_type):
+        return USAGE_URL
+    return BILLING_URL
+
+
+def dashboard_menu_label(
+    usage: UsageSnapshot | None = None,
+    *,
+    membership: str = "",
+    limit_type: str = "",
+) -> str:
+    if usage is not None:
+        membership = usage.membership_type
+        limit_type = usage.limit_type
+    if is_team_membership(membership, limit_type):
+        return "打开用量"
+    return "打开用量账单"
+
+
+def dashboard_button_label(
+    usage: UsageSnapshot | None = None,
+    *,
+    membership: str = "",
+    limit_type: str = "",
+) -> str:
+    if usage is not None:
+        membership = usage.membership_type
+        limit_type = usage.limit_type
+    if is_team_membership(membership, limit_type):
+        return "用量"
+    return "账单"
+
+
+def dashboard_link_label(usage: UsageSnapshot | None = None) -> str:
+    if usage is not None and usage.is_team_account():
+        return "查看用量 →"
+    return "查看用量账单 →"
+
+
+def format_usd_cents(cents: float | int | None) -> str:
+    """Cursor Dashboard 金额以美分为单位。"""
+    if cents is None:
+        return "—"
+    try:
+        dollars = float(cents) / 100.0
+    except (TypeError, ValueError):
+        return "—"
+    if dollars < 0:
+        dollars = 0.0
+    if abs(dollars - round(dollars)) < 0.005:
+        return f"${int(round(dollars))}"
+    return f"${dollars:.2f}"
+
+
+def format_spend_range(used_cents: float | None, limit_cents: float | None) -> str:
+    return f"{format_usd_cents(used_cents)} / {format_usd_cents(limit_cents)}"
 
 
 def is_auth_error_message(message: str | None) -> bool:
@@ -267,11 +389,12 @@ def attach_aggregated_tokens(
     if end_ms < start_ms:
         end_ms = start_ms
 
+    team_id = _team_id_from_payload(snapshot.raw)
     payload = _request_json(
         "POST",
         AGGREGATED_USAGE_ENDPOINT,
         token,
-        body={"teamId": -1, "startDate": start_ms, "endDate": end_ms},
+        body={"teamId": team_id, "startDate": start_ms, "endDate": end_ms},
         timeout=timeout,
     )
     models, total = parse_aggregated_usage(
@@ -338,26 +461,93 @@ def format_token_count(count: int | float | None) -> str:
 
 
 def parse_usage_summary(payload: dict[str, Any]) -> UsageSnapshot:
-    individual = payload.get("individualUsage") or {}
-    plan = individual.get("plan") or {}
+    individual = _as_dict(payload.get("individualUsage"))
+    team = _as_dict(payload.get("teamUsage"))
+    plan = _as_dict(individual.get("plan"))
+    overall = _as_dict(individual.get("overall"))
+    pooled = _as_dict(team.get("pooled"))
+    individual_od = _as_dict(individual.get("onDemand"))
+    team_od = _as_dict(team.get("onDemand"))
 
     auto = _as_float(plan.get("autoPercentUsed"))
     api = _as_float(plan.get("apiPercentUsed"))
     total = _as_float(plan.get("totalPercentUsed"))
+    if auto is None:
+        auto = _percent_from_display_message(payload.get("autoModelSelectedDisplayMessage"))
+    if api is None:
+        api = _percent_from_display_message(payload.get("namedModelSelectedDisplayMessage"))
 
-    used_percent = total
-    if used_percent is None:
-        used_percent = auto
-    if used_percent is None:
-        used = _as_float(plan.get("used"))
-        limit = _as_float(plan.get("limit"))
-        if used is not None and limit and limit > 0:
-            used_percent = min(100.0, max(0.0, used / limit * 100.0))
-    if used_percent is None:
+    membership = format_membership_type(
+        str(payload.get("membershipType") or payload.get("plan") or "")
+    )
+    limit_type = str(payload.get("limitType") or "").strip()
+    is_unlimited = bool(payload.get("isUnlimited"))
+
+    plan_meter = _spend_meter(plan)
+    plan_meter_breakdown = _spend_meter(plan, allow_breakdown=True)
+    overall_meter = _spend_meter(overall)
+    pooled_meter = _spend_meter(pooled)
+    od_block = individual_od if _on_demand_enabled(individual_od) else team_od
+    if not _on_demand_enabled(od_block) and _on_demand_enabled(team_od):
+        od_block = team_od
+    od_meter = _spend_meter(od_block) if _on_demand_enabled(od_block) else None
+
+    billing_mode = "percent"
+    used_cents: float | None = None
+    limit_cents: float | None = None
+    remaining_cents: float | None = None
+    used_percent: float | None = None
+
+    if is_unlimited:
         used_percent = 0.0
+    elif total is not None:
+        used_percent = total
+        meter = _meter_with_limit(plan_meter) or _meter_with_limit(overall_meter)
+        if meter:
+            used_cents, limit_cents, remaining_cents = meter
+    elif auto is not None or api is not None:
+        used_percent = max(p for p in (auto, api) if p is not None)
+        meter = _meter_with_limit(plan_meter) or _meter_with_limit(overall_meter)
+        if meter:
+            used_cents, limit_cents, remaining_cents = meter
+    else:
+        picked_source = ""
+        for meter, source in (
+            (overall_meter, "overall"),
+            (plan_meter, "plan"),
+            (plan_meter_breakdown, "plan"),
+            (pooled_meter, "pooled"),
+            (od_meter, "on_demand"),
+        ):
+            picked = _meter_with_limit(meter)
+            if picked is None:
+                continue
+            used_cents, limit_cents, remaining_cents = picked
+            used_percent = min(100.0, max(0.0, used_cents / limit_cents * 100.0))
+            picked_source = source
+            break
+        if used_percent is None:
+            used_percent = 0.0
+        elif picked_source in {"overall", "pooled", "on_demand"} or is_team_membership(
+            membership, limit_type
+        ):
+            billing_mode = "amount"
+        else:
+            # 个人套餐只有 plan.used/limit、没有百分比：沿用比例，不当美元
+            used_cents = None
+            limit_cents = None
+            remaining_cents = None
+            billing_mode = "percent"
+
+    if used_cents is None:
+        fallback = _meter_with_limit(overall_meter) or _meter_with_limit(pooled_meter)
+        if fallback:
+            used_cents, limit_cents, remaining_cents = fallback
 
     used_percent = min(100.0, max(0.0, float(used_percent)))
     remaining_percent = min(100.0, max(0.0, 100.0 - used_percent))
+    if remaining_cents is None and used_cents is not None and limit_cents is not None:
+        remaining_cents = max(0.0, limit_cents - used_cents)
 
     cycle_start = payload.get("billingCycleStart") or payload.get("startOfMonth")
     cycle_end = payload.get("billingCycleEnd")
@@ -365,7 +555,12 @@ def parse_usage_summary(payload: dict[str, Any]) -> UsageSnapshot:
     days_elapsed = _days_since(cycle_start)
     estimated = _estimate_usable_days(used_percent, remaining_percent, days_elapsed)
 
-    membership = str(payload.get("membershipType") or payload.get("plan") or "未知")
+    pooled_used = pooled_limit = None
+    if pooled_meter:
+        pooled_used, pooled_limit, _ = pooled_meter
+    od_used = od_limit = None
+    if od_meter:
+        od_used, od_limit, _ = od_meter
 
     return UsageSnapshot(
         used_percent=round(used_percent, 1),
@@ -380,6 +575,16 @@ def parse_usage_summary(payload: dict[str, Any]) -> UsageSnapshot:
         days_elapsed=None if days_elapsed is None else round(days_elapsed, 2),
         estimated_usable_days=estimated,
         raw=payload,
+        billing_mode=billing_mode,
+        used_cents=used_cents,
+        limit_cents=limit_cents,
+        remaining_cents=remaining_cents,
+        on_demand_used_cents=None if od_used is None else od_used,
+        on_demand_limit_cents=None if od_limit is None else od_limit,
+        pooled_used_cents=pooled_used,
+        pooled_limit_cents=pooled_limit,
+        limit_type=limit_type,
+        is_unlimited=is_unlimited,
     )
 
 
@@ -444,6 +649,10 @@ def _request_json(
         raise CursorApiError("接口返回非 JSON") from err
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _as_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
@@ -458,6 +667,79 @@ def _as_int(value: Any) -> int | None:
     if num is None:
         return None
     return int(round(num))
+
+
+def _on_demand_enabled(block: dict[str, Any] | None) -> bool:
+    if not isinstance(block, dict) or not block:
+        return False
+    if "enabled" in block:
+        return bool(block.get("enabled"))
+    return _spend_meter(block) is not None
+
+
+def _spend_meter(
+    block: dict[str, Any] | None,
+    *,
+    allow_breakdown: bool = False,
+) -> tuple[float, float, float | None] | None:
+    if not isinstance(block, dict) or not block:
+        return None
+    used = _as_float(block.get("used"))
+    limit = _as_float(block.get("limit"))
+    remaining = _as_float(block.get("remaining"))
+    if (limit is None or limit <= 0) and allow_breakdown:
+        breakdown = _as_dict(block.get("breakdown"))
+        limit = _as_float(breakdown.get("total"))
+    if used is None and remaining is not None and limit is not None:
+        used = max(0.0, limit - remaining)
+    if used is None or limit is None:
+        return None
+    return used, limit, remaining
+
+
+def _meter_with_limit(
+    meter: tuple[float, float, float | None] | None,
+) -> tuple[float, float, float | None] | None:
+    if meter is None:
+        return None
+    used, limit, remaining = meter
+    if limit is None or limit <= 0:
+        return None
+    return used, limit, remaining
+
+
+def _percent_from_display_message(message: Any) -> float | None:
+    text = str(message or "")
+    idx = text.find("%")
+    if idx <= 0:
+        return None
+    before = text[:idx]
+    start = 0
+    for i, ch in enumerate(before):
+        if ch.isdigit() or ch == ".":
+            continue
+        start = i + 1
+    raw = before[start:].strip()
+    if not raw:
+        return None
+    value = _as_float(raw)
+    if value is None:
+        return None
+    return min(100.0, max(0.0, value))
+
+
+def _team_id_from_payload(payload: dict[str, Any] | None) -> int:
+    if not isinstance(payload, dict):
+        return -1
+    for key in ("teamId", "owningTeam"):
+        n = _as_int(payload.get(key))
+        if n is not None and n > 0:
+            return n
+    team = _as_dict(payload.get("teamUsage"))
+    n = _as_int(team.get("teamId") or team.get("id"))
+    if n is not None and n > 0:
+        return n
+    return -1
 
 
 def _iso_to_ms(iso_value: Any) -> int | None:

@@ -73,6 +73,16 @@ def _usage_to_dict(usage: UsageSnapshot) -> dict[str, Any]:
         "days_elapsed": usage.days_elapsed,
         "estimated_usable_days": usage.estimated_usable_days,
         "total_tokens": usage.total_tokens,
+        "billing_mode": usage.billing_mode,
+        "used_cents": usage.used_cents,
+        "limit_cents": usage.limit_cents,
+        "remaining_cents": usage.remaining_cents,
+        "on_demand_used_cents": usage.on_demand_used_cents,
+        "on_demand_limit_cents": usage.on_demand_limit_cents,
+        "pooled_used_cents": usage.pooled_used_cents,
+        "pooled_limit_cents": usage.pooled_limit_cents,
+        "limit_type": usage.limit_type,
+        "is_unlimited": usage.is_unlimited,
         "model_usages": [
             {
                 "name": item.name,
@@ -120,6 +130,16 @@ def _usage_from_dict(data: dict[str, Any]) -> UsageSnapshot | None:
             raw={},
             total_tokens=_opt_int(data.get("total_tokens")),
             model_usages=tuple(models),
+            billing_mode=str(data.get("billing_mode") or "percent"),
+            used_cents=_opt_float(data.get("used_cents")),
+            limit_cents=_opt_float(data.get("limit_cents")),
+            remaining_cents=_opt_float(data.get("remaining_cents")),
+            on_demand_used_cents=_opt_float(data.get("on_demand_used_cents")),
+            on_demand_limit_cents=_opt_float(data.get("on_demand_limit_cents")),
+            pooled_used_cents=_opt_float(data.get("pooled_used_cents")),
+            pooled_limit_cents=_opt_float(data.get("pooled_limit_cents")),
+            limit_type=str(data.get("limit_type") or ""),
+            is_unlimited=bool(data.get("is_unlimited")),
         )
     except (TypeError, ValueError):
         return None
