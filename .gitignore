@@ -19,3 +19,10 @@ Thumbs.db
 desktop.ini
 .DS_Store
 _preview_out/
+
+macos/.build/
+macos/.swiftpm/
+windows/**/bin/
+windows/**/obj/
+windows/**/TestResults/
+*.user

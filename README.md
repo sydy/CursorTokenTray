@@ -17,67 +17,89 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 多档额度告警（默认 50/20/5）与耗尽风险通知
 - **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警
 - 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
-- 中文设置窗口（Windows 为系统控件，macOS 为 AppKit；账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
+- 中文设置窗口（Windows 为 WinForms，macOS 为 SwiftUI；账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
 - 默认每 10 分钟刷新（可配置）
-- 开机自启（默认开启；Windows 写 Startup 快捷方式，macOS 写 LaunchAgent）
+- 开机自启（默认开启；Windows 写 Startup 快捷方式，macOS 用 `SMAppService` / LaunchAgent）
 
 悬浮框字段顺序示例：剩余 → 计划 → 金额（企业）→ 明细 → 重置 → **预计可用** → 趋势 → 更新时间。  
 预计可用按本周期已用比例与已过天数估算，并与重置日对比提示「可撑过本周期」或「可能提前耗尽」。企业 / 团队账号打开 [用量页](https://cursor.com/dashboard/usage)，个人账号仍打开账单页。
 
 ## 环境
 
-- Windows 10/11 或 macOS 11+
-- Python 3.10+（开发运行）或已打包的 `.exe` / `.app`
+- Windows 10/11 或 **macOS 13+**
+- 发布包为原生程序：Windows 是 .NET 8 单文件 exe，macOS 是 Swift 菜单栏 `.app`
+- 配置兼容旧版 Python 工具：仍读写同一份 `config.json`
+
+仓库里的 Python 源码保留作对照与夹具基准，**日常请用下面的原生工程**。
 
 ## 开发运行
 
-### Windows
-
-双击 **`快速启动.bat`** 即可后台启动（无黑框）。
-
-或手动运行：
+### Windows（C# / .NET 8）
 
 ```powershell
-python -m pip install -r requirements.txt
-python main.py
+dotnet run --project windows/CursorTokenTray/CursorTokenTray.csproj -c Release
 ```
 
-建议用 `pythonw main.py` 运行，不弹出控制台窗口。
+核心解析单测（不含 WinForms）：
 
-### macOS
+```powershell
+dotnet test windows/CursorTokenCore.Tests/CursorTokenCore.Tests.csproj
+```
 
-双击 **`快速启动.command`**，或：
+### macOS（Swift）
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 main.py
+swift run --package-path macos CursorTokenTray
 ```
 
-图标会出现在屏幕右上角菜单栏。首次从 Chrome 导入 Cookie 时，系统可能弹出钥匙串授权，请点「允许」。
+或打包成 `.app`：
 
-本地运行日志：`~/Library/Logs/CursorTokenTray.log`（`快速启动.command` 也会把 stdout/stderr 追加进去）。出问题请先看这份日志。
+```bash
+./macos/scripts/package_app.sh
+open macos/dist/CursorTokenTray.app
+```
+
+核心解析单测：
+
+```bash
+swift test --package-path macos
+```
+
+图标会出现在屏幕右上角菜单栏。首次从 Safari 导入 Cookie 时，如读不到请到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。
+
+本地运行日志：`~/Library/Logs/CursorTokenTray.log`。
+
+夹具（Python / Swift / C# 共用）在 `fixtures/`。
 
 ## 使用已打包版本
 
 ### Windows
 
-1. 双击 **`build.bat`**（需已安装 Python）生成 `dist\CursorTokenTray.exe`
-2. 运行 `dist\CursorTokenTray.exe`
+1. 从 [Releases / Latest](https://github.com/sydy/CursorTokenTray/releases/tag/latest) 下载 `CursorTokenTray-windows.zip`
+2. 解压运行 `CursorTokenTray.exe`
 3. 可将该 exe 拷到任意位置使用；开机自启会指向该 exe
+
+本地发布：
+
+```powershell
+dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist
+```
 
 ### macOS
 
-1. 运行 **`./build_mac.sh`**（需已安装 Python 3）生成 `dist/CursorTokenTray.app`
-2. 将 `.app` 拖到「应用程序」
-3. 开机自启会指向该 app 内的可执行文件
+1. 下载 `CursorTokenTray-macos.zip`，将 `.app` 拖到「应用程序」
+2. 开机自启会注册本机登录项（`SMAppService`）
+
+本地打包：`./macos/scripts/package_app.sh`
 
 ## GitHub Actions 自动编译
 
 仓库使用 **GitHub Actions**（`.github/workflows/build.yml`）在每次推送 / PR 时：
 
-1. 在 Ubuntu 跑单元测试
-2. 在 `windows-latest` 打出 `CursorTokenTray-windows.zip`（单文件 exe）
-3. 在 `macos-latest` 打出 `CursorTokenTray-macos.zip`（`.app`）
+1. 在 Ubuntu 跑 Python 夹具测试与 C# 核心测试
+2. 在 `macos-latest` 跑 Swift 测试
+3. 在 `windows-latest` 打出 `CursorTokenTray-windows.zip`（.NET 8 单文件 exe）
+4. 在 `macos-latest` 打出 `CursorTokenTray-macos.zip`（Swift `.app`）
 
 合入 `main` 后可在两处下载程序包：
 
@@ -118,7 +140,7 @@ macOS：`~/Library/Application Support/CursorTokenTray/config.json`
 ## 说明
 
 - 圆环颜色：剩余 &gt;50% 绿，20–50% 黄，&lt;20% 红
-- Windows：托盘、右键菜单、状态飞出层、设置都在**同一个进程**里用 Win32 原生接口完成（`Shell_NotifyIcon` + 系统菜单 + 分层窗口），不依赖 Tk / CustomTkinter，也不再为点击另起子进程。若图标在溢出区，可拖到任务栏常显
+- Windows：托盘、右键菜单、状态飞出层、设置都在**同一个 .NET 8 进程**里用 WinForms 完成（`NotifyIcon` + 系统菜单），不依赖 Python / Tk。若图标在溢出区，可拖到任务栏常显
 - 这是 **macOS 菜单栏**应用，不是 iOS；没有 Dock 图标，圆环在屏幕**最上方**菜单栏右侧（Wi‑Fi / 控制中心旁边），并带剩余百分比文字
 - macOS：若看不到图标，点菜单栏「•••」或「控制中心」展开隐藏项；也可在「活动监视器」结束 CursorTokenTray 后重新打开
 - 首次打开若立刻提示「已在后台运行」，多半是旧进程还在，先在活动监视器里退出再启动

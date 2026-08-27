@@ -1,0 +1,45 @@
+{
+  "account_ids": [
+    {
+      "token": "user_01ABC%3A%3AeyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFBQkMifQ.sig",
+      "id": "user_01ABC"
+    },
+    {
+      "token": "eyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFYWVoifQ.sig",
+      "id": "user_01XYZ"
+    },
+    {
+      "token": "not-a-jwt-token-value",
+      "id": "tok_b6d6a39fb66d71d0"
+    }
+  ],
+  "variants_jwt": {
+    "input": "eyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFWQVIifQ.sig",
+    "variants": [
+      "user_01VAR%3A%3AeyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFWQVIifQ.sig",
+      "eyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFWQVIifQ.sig",
+      "user_01VAR::eyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFWQVIifQ.sig",
+      "github|user_01VAR%3A%3AeyJhbGciOiJub25lIn0.eyJzdWIiOiAiZ2l0aHVifHVzZXJfMDFWQVIifQ.sig"
+    ]
+  },
+  "normalize": [
+    {
+      "input": "  user_01X%3A%3Aabc  ",
+      "output": "user_01X%3A%3Aabc"
+    },
+    {
+      "input": "WorkosCursorSessionToken=tok123; other=1",
+      "output": "tok123"
+    },
+    {
+      "input": "user::jwt.part.sig",
+      "output": "user%3A%3Ajwt.part.sig"
+    }
+  ],
+  "normalize_errors": [
+    {
+      "input": "user_01ABC%3A%3A�",
+      "message_contains": "解密失败"
+    }
+  ]
+}

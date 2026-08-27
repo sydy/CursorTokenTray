@@ -1,0 +1,41 @@
+[
+  {
+    "payload": {
+      "aggregations": [
+        {
+          "modelIntent": "auto",
+          "inputTokens": 100,
+          "outputTokens": 50,
+          "totalCents": 10,
+          "tier": 2
+        },
+        {
+          "modelIntent": "gpt-4",
+          "inputTokens": 200,
+          "outputTokens": 20,
+          "totalCents": 40,
+          "tier": 1
+        }
+      ]
+    },
+    "auto_percent": 80.0,
+    "api_percent": 20.0,
+    "total": 370,
+    "models": [
+      {
+        "name": "auto",
+        "tokens": 150,
+        "cents": 10.0,
+        "tier": 2,
+        "usage_percent": 80.0
+      },
+      {
+        "name": "gpt-4",
+        "tokens": 220,
+        "cents": 40.0,
+        "tier": 1,
+        "usage_percent": 20.0
+      }
+    ]
+  }
+]

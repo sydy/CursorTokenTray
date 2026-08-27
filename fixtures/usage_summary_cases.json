@@ -1,0 +1,324 @@
+[
+  {
+    "name": "personal_ultra",
+    "payload": {
+      "billingCycleStart": "2026-07-04T00:35:51.000Z",
+      "billingCycleEnd": "2026-08-04T00:35:51.000Z",
+      "membershipType": "ultra",
+      "limitType": "user",
+      "isUnlimited": false,
+      "autoModelSelectedDisplayMessage": "You've used 98% of your included total usage",
+      "namedModelSelectedDisplayMessage": "You've used 100% of your included API usage",
+      "individualUsage": {
+        "plan": {
+          "enabled": true,
+          "used": 40000,
+          "limit": 40000,
+          "remaining": 0,
+          "autoPercentUsed": 98.109,
+          "apiPercentUsed": 100,
+          "totalPercentUsed": 98.5128
+        },
+        "onDemand": {
+          "enabled": false,
+          "used": 0,
+          "limit": null,
+          "remaining": null
+        }
+      },
+      "teamUsage": {}
+    },
+    "expected": {
+      "used_percent": 98.5,
+      "remaining_percent": 1.5,
+      "auto_percent_used": 98.1,
+      "api_percent_used": 100.0,
+      "total_percent_used": 98.5,
+      "membership_type": "Ultra",
+      "billing_mode": "percent",
+      "used_cents": 40000.0,
+      "limit_cents": 40000.0,
+      "remaining_cents": 0.0,
+      "on_demand_used_cents": null,
+      "on_demand_limit_cents": null,
+      "pooled_used_cents": null,
+      "pooled_limit_cents": null,
+      "limit_type": "user",
+      "is_unlimited": false,
+      "is_team_account": false,
+      "shows_amount": false,
+      "dashboard_url": "https://cursor.com/dashboard/billing",
+      "dashboard_button_label": "账单",
+      "dashboard_menu_label": "打开用量账单",
+      "dashboard_link_label": "查看用量账单 →"
+    }
+  },
+  {
+    "name": "enterprise_overall",
+    "payload": {
+      "billingCycleStart": "2026-07-01T00:00:00.000Z",
+      "billingCycleEnd": "2026-08-01T00:00:00.000Z",
+      "membershipType": "enterprise",
+      "limitType": "team",
+      "isUnlimited": false,
+      "individualUsage": {
+        "overall": {
+          "enabled": true,
+          "used": 7384,
+          "limit": 10000,
+          "remaining": 2616
+        }
+      },
+      "teamUsage": {
+        "onDemand": {
+          "enabled": true,
+          "used": 0,
+          "limit": null,
+          "remaining": null
+        },
+        "pooled": {
+          "enabled": true,
+          "used": 12725135,
+          "limit": 28122000,
+          "remaining": 15396865
+        }
+      }
+    },
+    "expected": {
+      "used_percent": 73.8,
+      "remaining_percent": 26.2,
+      "auto_percent_used": null,
+      "api_percent_used": null,
+      "total_percent_used": null,
+      "membership_type": "Enterprise",
+      "billing_mode": "amount",
+      "used_cents": 7384.0,
+      "limit_cents": 10000.0,
+      "remaining_cents": 2616.0,
+      "on_demand_used_cents": null,
+      "on_demand_limit_cents": null,
+      "pooled_used_cents": 12725135.0,
+      "pooled_limit_cents": 28122000.0,
+      "limit_type": "team",
+      "is_unlimited": false,
+      "is_team_account": true,
+      "shows_amount": true,
+      "dashboard_url": "https://cursor.com/dashboard/usage",
+      "dashboard_button_label": "用量",
+      "dashboard_menu_label": "打开用量",
+      "dashboard_link_label": "查看用量 →"
+    }
+  },
+  {
+    "name": "enterprise_plan_percent",
+    "payload": {
+      "billingCycleStart": "2026-03-01T00:00:00.000Z",
+      "billingCycleEnd": "2026-04-01T00:00:00.000Z",
+      "membershipType": "enterprise",
+      "limitType": "team",
+      "isUnlimited": false,
+      "autoModelSelectedDisplayMessage": "You've used 7% of your included total usage",
+      "namedModelSelectedDisplayMessage": "You've used 7% of your included API usage",
+      "individualUsage": {
+        "plan": {
+          "enabled": true,
+          "used": 0,
+          "limit": 0,
+          "remaining": 0,
+          "breakdown": {
+            "included": 0,
+            "bonus": 300,
+            "total": 300
+          },
+          "autoPercentUsed": 0,
+          "apiPercentUsed": 6.9,
+          "totalPercentUsed": 6.9
+        },
+        "onDemand": {
+          "enabled": false,
+          "used": 0,
+          "limit": 0,
+          "remaining": 0
+        }
+      },
+      "teamUsage": {
+        "onDemand": {
+          "enabled": true,
+          "used": 0,
+          "limit": 10000,
+          "remaining": 10000
+        }
+      }
+    },
+    "expected": {
+      "used_percent": 6.9,
+      "remaining_percent": 93.1,
+      "auto_percent_used": 0.0,
+      "api_percent_used": 6.9,
+      "total_percent_used": 6.9,
+      "membership_type": "Enterprise",
+      "billing_mode": "percent",
+      "used_cents": null,
+      "limit_cents": null,
+      "remaining_cents": null,
+      "on_demand_used_cents": 0.0,
+      "on_demand_limit_cents": 10000.0,
+      "pooled_used_cents": null,
+      "pooled_limit_cents": null,
+      "limit_type": "team",
+      "is_unlimited": false,
+      "is_team_account": true,
+      "shows_amount": false,
+      "dashboard_url": "https://cursor.com/dashboard/usage",
+      "dashboard_button_label": "用量",
+      "dashboard_menu_label": "打开用量",
+      "dashboard_link_label": "查看用量 →"
+    }
+  },
+  {
+    "name": "enterprise_display_only",
+    "payload": {
+      "billingCycleEnd": "2026-08-04T00:35:51.000Z",
+      "membershipType": "team",
+      "isUnlimited": false,
+      "autoModelSelectedDisplayMessage": "You've used 42% of your included total usage",
+      "namedModelSelectedDisplayMessage": "You've used 15% of your included API usage",
+      "teamUsage": {
+        "onDemand": {
+          "enabled": true
+        }
+      }
+    },
+    "expected": {
+      "used_percent": 42.0,
+      "remaining_percent": 58.0,
+      "auto_percent_used": 42.0,
+      "api_percent_used": 15.0,
+      "total_percent_used": null,
+      "membership_type": "Team",
+      "billing_mode": "percent",
+      "used_cents": null,
+      "limit_cents": null,
+      "remaining_cents": null,
+      "on_demand_used_cents": null,
+      "on_demand_limit_cents": null,
+      "pooled_used_cents": null,
+      "pooled_limit_cents": null,
+      "limit_type": "",
+      "is_unlimited": false,
+      "is_team_account": true,
+      "shows_amount": false,
+      "dashboard_url": "https://cursor.com/dashboard/usage",
+      "dashboard_button_label": "用量",
+      "dashboard_menu_label": "打开用量",
+      "dashboard_link_label": "查看用量 →"
+    }
+  },
+  {
+    "name": "enterprise_unlimited",
+    "payload": {
+      "billingCycleEnd": "2026-08-04T00:00:00Z",
+      "membershipType": "enterprise",
+      "isUnlimited": true
+    },
+    "expected": {
+      "used_percent": 0.0,
+      "remaining_percent": 100.0,
+      "auto_percent_used": null,
+      "api_percent_used": null,
+      "total_percent_used": null,
+      "membership_type": "Enterprise",
+      "billing_mode": "percent",
+      "used_cents": null,
+      "limit_cents": null,
+      "remaining_cents": null,
+      "on_demand_used_cents": null,
+      "on_demand_limit_cents": null,
+      "pooled_used_cents": null,
+      "pooled_limit_cents": null,
+      "limit_type": "",
+      "is_unlimited": true,
+      "is_team_account": true,
+      "shows_amount": false,
+      "dashboard_url": "https://cursor.com/dashboard/usage",
+      "dashboard_button_label": "用量",
+      "dashboard_menu_label": "打开用量",
+      "dashboard_link_label": "查看用量 →"
+    }
+  },
+  {
+    "name": "enterprise_pooled_only",
+    "payload": {
+      "membershipType": "enterprise",
+      "limitType": "team",
+      "teamUsage": {
+        "pooled": {
+          "enabled": true,
+          "used": 3479810,
+          "limit": 60000000,
+          "remaining": 56520190
+        }
+      }
+    },
+    "expected": {
+      "used_percent": 5.8,
+      "remaining_percent": 94.2,
+      "auto_percent_used": null,
+      "api_percent_used": null,
+      "total_percent_used": null,
+      "membership_type": "Enterprise",
+      "billing_mode": "amount",
+      "used_cents": 3479810.0,
+      "limit_cents": 60000000.0,
+      "remaining_cents": 56520190.0,
+      "on_demand_used_cents": null,
+      "on_demand_limit_cents": null,
+      "pooled_used_cents": 3479810.0,
+      "pooled_limit_cents": 60000000.0,
+      "limit_type": "team",
+      "is_unlimited": false,
+      "is_team_account": true,
+      "shows_amount": true,
+      "dashboard_url": "https://cursor.com/dashboard/usage",
+      "dashboard_button_label": "用量",
+      "dashboard_menu_label": "打开用量",
+      "dashboard_link_label": "查看用量 →"
+    }
+  },
+  {
+    "name": "legacy_plan_ratio",
+    "payload": {
+      "membershipType": "pro",
+      "individualUsage": {
+        "plan": {
+          "used": 25,
+          "limit": 100
+        }
+      }
+    },
+    "expected": {
+      "used_percent": 25.0,
+      "remaining_percent": 75.0,
+      "auto_percent_used": null,
+      "api_percent_used": null,
+      "total_percent_used": null,
+      "membership_type": "Pro",
+      "billing_mode": "percent",
+      "used_cents": null,
+      "limit_cents": null,
+      "remaining_cents": null,
+      "on_demand_used_cents": null,
+      "on_demand_limit_cents": null,
+      "pooled_used_cents": null,
+      "pooled_limit_cents": null,
+      "limit_type": "",
+      "is_unlimited": false,
+      "is_team_account": false,
+      "shows_amount": false,
+      "dashboard_url": "https://cursor.com/dashboard/billing",
+      "dashboard_button_label": "账单",
+      "dashboard_menu_label": "打开用量账单",
+      "dashboard_link_label": "查看用量账单 →"
+    }
+  }
+]
