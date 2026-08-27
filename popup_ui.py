@@ -82,14 +82,21 @@ class PopupManager:
         self._host_menu: _VectorMenu | None = None
         self._host_closed = threading.Event()
         self._status_win = None
+        self._on_ui_ready: Callable[[], None] | None = None
         # 托盘空闲时不创建 Tk/CTk。隐藏 CTk() 默认 maxsize=1_000_000，
         # 在 Windows 上会提交十几 GB 虚拟内存，工作集却很小。
 
     def bind_tray_icon(self, icon) -> None:
         self._tray_icon = icon
 
+    def _is_ui_thread(self) -> bool:
+        return self._ui_thread is not None and threading.current_thread() is self._ui_thread
+
     def _start_ui_thread(self) -> None:
         if IS_MAC:
+            return
+        # 子进程 run_blocking 已经在当前线程跑 Tk；绝不能 join 自己。
+        if self._is_ui_thread():
             return
         if self._ui_thread is not None and self._ui_thread.is_alive():
             if self.tk_root is not None:
@@ -100,6 +107,19 @@ class PopupManager:
         self._ui_thread = t
         t.start()
         self._ui_ready.wait(timeout=5.0)
+
+    def run_blocking(self, on_ready: Callable[[], None] | None = None) -> None:
+        """在当前线程跑 Tk。
+
+        飞出层 / 菜单子进程必须走这里：Windows 上若主线程卡在 Event.wait()、
+        Tk 在后台线程，窗口不会出现，托盘点击就像完全没反应。
+        """
+        if IS_MAC:
+            return
+        app_log("popup ui run_blocking on main thread")
+        self._on_ui_ready = on_ready
+        self._ui_thread = threading.current_thread()
+        self._ui_loop()
 
     def _ui_loop(self) -> None:
         root: tk.Tk | None = None
@@ -132,8 +152,27 @@ class PopupManager:
 
             pump()
             self._ui_ready.set()
+            on_ready = self._on_ui_ready
+            self._on_ui_ready = None
+            if on_ready is not None:
+                try:
+                    on_ready()
+                except Exception as exc:
+                    app_log(f"popup on_ready failed: {exc}")
+            if (
+                on_ready is not None
+                and root is not None
+                and not self.status_visible
+                and not self.menu_visible
+            ):
+                app_log("popup ready but no window, quitting")
+                try:
+                    root.quit()
+                except tk.TclError:
+                    pass
             root.mainloop()
-        except Exception:
+        except Exception as exc:
+            app_log(f"popup ui loop failed: {exc}")
             self._ui_ready.set()
         finally:
             with self._lock:
@@ -362,6 +401,10 @@ class PopupManager:
                     self._kind = "menu"
 
             if not self._run_on_ui(work, timeout=3.0):
+                app_log("show_menu: ui thread did not run work")
+                return
+            # 主线程正在跑 Tk 时不能 wait：那会挡住 mainloop，菜单永远出不来。
+            if self._is_ui_thread():
                 return
             closed.wait(timeout=300.0)
 
@@ -1669,7 +1712,6 @@ def run_status_main() -> int:
     usage, err, updated = read_status_snapshot()
     state = {"usage": usage, "err": err, "updated": updated}
     hist, burn = _history_payload()
-    closed = threading.Event()
     mgr = PopupManager()
 
     def _push(next_usage, next_err, next_updated) -> None:
@@ -1728,24 +1770,26 @@ def run_status_main() -> int:
     if usage is None and err is None:
         threading.Thread(target=on_refresh, daemon=True, name="status-boot-refresh").start()
 
-    mgr.show_status(
-        usage=usage,
-        error_message=err,
-        updated_at=updated,
-        from_hover=False,
-        on_closed=closed.set,
-        actions=StatusActions(
-            on_open_settings=lambda: open_settings_async(focus_token=True, start_import=True),
-            on_refresh=on_refresh,
-            on_open_spending=lambda: __import__("webbrowser").open(
-                dashboard_url_for(state.get("usage"))
+    def start() -> None:
+        app_log("status popup showing")
+        mgr.show_status(
+            usage=usage,
+            error_message=err,
+            updated_at=updated,
+            from_hover=False,
+            actions=StatusActions(
+                on_open_settings=lambda: open_settings_async(focus_token=True, start_import=True),
+                on_refresh=on_refresh,
+                on_open_spending=lambda: __import__("webbrowser").open(
+                    dashboard_url_for(state.get("usage"))
+                ),
+                on_copy_summary=on_copy,
             ),
-            on_copy_summary=on_copy,
-        ),
-        history_values=hist,
-        daily_burn=burn,
-    )
-    closed.wait(timeout=3600)
+            history_values=hist,
+            daily_burn=burn,
+        )
+
+    mgr.run_blocking(start)
     return 0
 
 
@@ -1794,7 +1838,12 @@ def run_menu_main() -> int:
             MenuAction("quit", "退出", "quit", lambda: None, danger=True),
         ]
     )
-    mgr.show_menu(actions, on_pick=chosen.append)
+
+    def start() -> None:
+        app_log("menu popup showing")
+        mgr.show_menu(actions, on_pick=chosen.append)
+
+    mgr.run_blocking(start)
     key = chosen[0] if chosen else ""
     sys.stdout.write(key)
     sys.stdout.flush()
