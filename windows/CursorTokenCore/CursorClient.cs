@@ -10,7 +10,7 @@ public sealed class CursorClient
     public CursorClient(HttpClient? http = null)
     {
         _http = http ?? new HttpClient();
-        _http.Timeout = TimeSpan.FromSeconds(30);
+        _http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<UsageSnapshot> FetchUsageSummary(string sessionToken, double timeout = 30, CancellationToken ct = default)
@@ -60,29 +60,51 @@ public sealed class CursorClient
 
     async Task<JsonBag> RequestJson(string method, string endpoint, string token, string? body, double timeout, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(new HttpMethod(method), UsageParser.CursorBase + endpoint);
-        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        req.Headers.TryAddWithoutValidation("Cookie", $"{Token.CookieName}={token}");
-        req.Headers.TryAddWithoutValidation("Origin", "https://cursor.com");
-        req.Headers.TryAddWithoutValidation("Referer", "https://cursor.com/dashboard");
-        req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 CursorTokenTray/1.0");
-        if (body is not null) req.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeout));
-        HttpResponseMessage resp;
-        try { resp = await _http.SendAsync(req, cts.Token); }
-        catch (Exception ex) { throw new CursorApiException("网络错误: " + ex.Message); }
-        var status = (int)resp.StatusCode;
-        var text = await resp.Content.ReadAsStringAsync(ct);
-        if (status is 401 or 403) throw new CursorApiException(CursorApiException.AuthMessage, status);
-        if (status >= 400)
+        Exception? last = null;
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            var safe = new string(text.Take(200).Select(ch => ch <= 127 ? ch : '?').ToArray());
-            throw new CursorApiException(string.IsNullOrEmpty(safe) ? $"HTTP {status}" : $"HTTP {status}: {safe}", status);
+            using var req = new HttpRequestMessage(new HttpMethod(method), UsageParser.CursorBase + endpoint);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            req.Headers.TryAddWithoutValidation("Cookie", $"{Token.CookieName}={token}");
+            req.Headers.TryAddWithoutValidation("Origin", "https://cursor.com");
+            req.Headers.TryAddWithoutValidation("Referer", "https://cursor.com/dashboard");
+            req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 CursorTokenTray/1.0");
+            if (body is not null) req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(timeout));
+            HttpResponseMessage resp;
+            try { resp = await _http.SendAsync(req, cts.Token); }
+            catch (Exception ex)
+            {
+                last = new CursorApiException("网络错误: " + ex.Message);
+                if (attempt == 2) throw last;
+                await Task.Delay(250 << attempt, ct);
+                continue;
+            }
+            using (resp)
+            {
+            var status = (int)resp.StatusCode;
+            var text = await resp.Content.ReadAsStringAsync(ct);
+            if (status is 401 or 403) throw new CursorApiException(CursorApiException.AuthMessage, status);
+            if (status is 404 or 405) throw new CursorApiException($"HTTP {status}", status);
+            if (status == 429 || status >= 500)
+            {
+                last = new CursorApiException($"HTTP {status}", status);
+                if (attempt == 2) throw last;
+                await Task.Delay(250 << attempt, ct);
+                continue;
+            }
+            if (status >= 400)
+            {
+                var safe = new string(text.Take(200).Select(ch => ch <= 127 ? ch : '?').ToArray());
+                throw new CursorApiException(string.IsNullOrEmpty(safe) ? $"HTTP {status}" : $"HTTP {status}: {safe}", status);
+            }
+            if (string.IsNullOrEmpty(text)) return JsonBag.Null;
+            try { return JsonBag.Parse(text); }
+            catch { throw new CursorApiException("接口返回非 JSON"); }
+            }
         }
-        if (string.IsNullOrEmpty(text)) return JsonBag.Null;
-        try { return JsonBag.Parse(text); }
-        catch { throw new CursorApiException("接口返回非 JSON"); }
+        throw last ?? new CursorApiException("网络错误");
     }
 }
 
@@ -109,7 +131,7 @@ public static class SessionImporter
         prefer ??= DefaultPreferBrowsers();
         var candidates = FindCandidates(only).ToList();
         if (candidates.Count == 0)
-            return new ImportResult(false, Message: "未找到可用 Cookie。请先登录 Cursor 应用或 Firefox，也可手动粘贴 WorkosCursorSessionToken。");
+            return new ImportResult(false, Message: "未找到可用 Cookie。Windows 可从 Cursor 应用或 Firefox 导入；Chrome / Edge 因系统加密无法读取，请改用 Firefox 或手动粘贴 WorkosCursorSessionToken。");
         var order = prefer.Select((b, i) => (b, i)).ToDictionary(x => x.b, x => x.i);
         candidates = candidates.OrderByDescending(c => c.LastUpdate).ThenBy(c => order.GetValueOrDefault(c.Browser, 99)).ToList();
         var skip = skipTokens ?? [];
@@ -235,9 +257,11 @@ public static class SessionImporter
     public static List<(string host, string value, long last)> ReadFirefoxCookies(string dbPath)
     {
         var rows = new List<(string, string, long)>();
+        var tmpDir = Path.Combine(Path.GetTempPath(), "ctt_ff_" + Guid.NewGuid().ToString("N"));
         try
         {
-            var tmp = Path.Combine(Path.GetTempPath(), "ctt_ff_" + Guid.NewGuid().ToString("N") + ".sqlite");
+            Directory.CreateDirectory(tmpDir);
+            var tmp = Path.Combine(tmpDir, "cookies.sqlite");
             File.Copy(dbPath, tmp, true);
             foreach (var suffix in new[] { "-wal", "-shm" })
             {
@@ -255,13 +279,12 @@ public static class SessionImporter
             using var r = cmd.ExecuteReader();
             while (r.Read())
                 rows.Add((r.GetString(0), r.GetString(1), r.IsDBNull(2) ? 0 : r.GetInt64(2)));
-            try { File.Delete(tmp); } catch { }
-            foreach (var suffix in new[] { "-wal", "-shm" })
-            {
-                try { File.Delete(tmp + suffix); } catch { }
-            }
         }
         catch { }
+        finally
+        {
+            try { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); } catch { }
+        }
         return rows;
     }
 }

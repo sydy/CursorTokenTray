@@ -2,21 +2,15 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-echo [1/3] 安装依赖...
-python -m pip install -r requirements.txt pyinstaller -q
+echo Python / PyInstaller 打包已弃用。请改用 .NET 8：
+echo   dotnet publish windows\CursorTokenTray\CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist
+echo.
+where dotnet >nul 2>&1
 if errorlevel 1 (
-  echo pip 安装失败
+  echo 未找到 dotnet，请先安装 .NET 8 SDK。
   exit /b 1
 )
-
-echo [2/3] 打包 onefile...
-python -m PyInstaller --noconfirm CursorTokenTray.spec
-if errorlevel 1 (
-  echo 打包失败
-  exit /b 1
-)
-
-echo [3/3] 完成
+dotnet publish windows\CursorTokenTray\CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist
+if errorlevel 1 exit /b 1
 echo 产物: %~dp0dist\CursorTokenTray.exe
-echo 运行: dist\CursorTokenTray.exe
 pause

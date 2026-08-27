@@ -58,6 +58,8 @@ public sealed class AppConfig
     public bool AuthErrorNotified { get; set; }
     public List<int> AlertNotifiedLevels { get; set; } = [];
     public bool ExhaustionNotified { get; set; }
+    /// <summary>True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.</summary>
+    public bool LoadError { get; set; }
 
     public Account? ActiveAccount =>
         Accounts.FirstOrDefault(a => a.Id == ActiveAccountId) ?? Accounts.FirstOrDefault();
@@ -189,40 +191,102 @@ public static class ConfigStore
     {
         var dir = AppPaths.ConfigDirectory(directory);
         Directory.CreateDirectory(dir);
-        var path = AppPaths.ConfigPath(dir);
-        if (!File.Exists(path))
+        return WithLock(dir, () =>
         {
-            var fresh = new AppConfig();
-            Save(fresh, dir);
-            return fresh;
-        }
-        try
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            return Normalize(doc.RootElement);
-        }
-        catch
-        {
-            return new AppConfig();
-        }
+            var path = AppPaths.ConfigPath(dir);
+            if (!File.Exists(path))
+            {
+                var fresh = new AppConfig();
+                SaveUnlocked(fresh, dir);
+                return fresh;
+            }
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                return Normalize(doc.RootElement);
+            }
+            catch
+            {
+                TryQuarantine(path);
+                return new AppConfig { LoadError = true };
+            }
+        });
     }
 
     public static void Save(AppConfig cfg, string? directory = null)
     {
         var dir = AppPaths.ConfigDirectory(directory);
         Directory.CreateDirectory(dir);
+        WithLock(dir, () => SaveUnlocked(cfg, dir));
+    }
+
+    static void SaveUnlocked(AppConfig cfg, string dir)
+    {
+        if (cfg.LoadError && cfg.Accounts.Count == 0) return;
+        cfg.LoadError = false;
         var path = AppPaths.ConfigPath(dir);
         var json = JsonSerializer.Serialize(ToDict(cfg), new JsonSerializerOptions { WriteIndented = true });
+        AtomicWrite(path, json);
+    }
+
+    static T WithLock<T>(string dir, Func<T> body)
+    {
+        Directory.CreateDirectory(dir);
+        var lockPath = Path.Combine(dir, "config.lock");
+        var until = DateTime.UtcNow.AddSeconds(8);
+        while (true)
+        {
+            try
+            {
+                using var fs = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                return body();
+            }
+            catch (IOException) when (DateTime.UtcNow < until)
+            {
+                Thread.Sleep(25);
+            }
+            catch (IOException)
+            {
+                return body();
+            }
+        }
+    }
+
+    static void WithLock(string dir, Action body) => WithLock(dir, () => { body(); return 0; });
+
+    static void AtomicWrite(string path, string contents)
+    {
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, json);
-        File.Copy(tmp, path, true);
-        File.Delete(tmp);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(contents);
+        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+        {
+            fs.Write(bytes, 0, bytes.Length);
+            fs.Flush(true);
+        }
+        if (File.Exists(path))
+        {
+            try { File.Replace(tmp, path, null); }
+            catch
+            {
+                File.Copy(tmp, path, true);
+                try { File.Delete(tmp); } catch { }
+            }
+        }
+        else
+        {
+            File.Move(tmp, path, true);
+        }
+    }
+
+    static void TryQuarantine(string path)
+    {
+        try { File.Copy(path, path + ".corrupt", true); } catch { }
     }
 
     public static AppConfig Normalize(JsonElement raw)
     {
         var cfg = new AppConfig();
-        if (raw.TryGetProperty("session_token", out var st)) cfg.SessionToken = st.GetString() ?? "";
+        if (raw.TryGetProperty("session_token", out var st)) cfg.SessionToken = TokenProtector.Unprotect(st.GetString() ?? "");
         if (raw.TryGetProperty("active_account_id", out var aid)) cfg.ActiveAccountId = aid.GetString() ?? "";
         if (raw.TryGetProperty("refresh_interval_minutes", out var ri) && ri.TryGetInt32(out var riv)) cfg.RefreshIntervalMinutes = Math.Max(1, riv);
         if (raw.TryGetProperty("low_quota_threshold", out var lq) && lq.TryGetInt32(out var lqv)) cfg.LowQuotaThreshold = Math.Clamp(lqv, 1, 100);
@@ -305,7 +369,7 @@ public static class ConfigStore
 
     static Account? Sanitize(JsonElement raw)
     {
-        var tokenRaw = Str(raw, "token");
+        var tokenRaw = TokenProtector.Unprotect(Str(raw, "token"));
         string token;
         try { token = Token.Normalize(tokenRaw); } catch { token = tokenRaw.Trim(); }
         if (token.Length == 0) return null;
@@ -342,12 +406,12 @@ public static class ConfigStore
 
     static object ToDict(AppConfig cfg) => new
     {
-        session_token = cfg.SessionToken,
+        session_token = TokenProtector.Protect(cfg.SessionToken),
         accounts = cfg.Accounts.Select(a => new Dictionary<string, object?>
         {
             ["id"] = a.Id,
             ["label"] = a.Label,
-            ["token"] = a.Token,
+            ["token"] = TokenProtector.Protect(a.Token),
             ["membership_type"] = a.MembershipType,
             ["last_remaining"] = a.LastRemaining,
             ["last_error"] = a.LastError,

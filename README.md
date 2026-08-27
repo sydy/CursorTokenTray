@@ -19,7 +19,7 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
 - 中文设置窗口（Windows 为 WinForms，macOS 为 SwiftUI；账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
 - 默认每 10 分钟刷新（可配置）
-- 开机自启（默认开启；Windows 写 Startup 快捷方式，macOS 用 `SMAppService` / LaunchAgent）
+- 开机自启（默认开启；Windows 写当前用户注册表 `Run` 项，macOS 用 `SMAppService` / LaunchAgent）
 
 悬浮框字段顺序示例：剩余 → 计划 → 金额（企业）→ 明细 → 重置 → **预计可用** → 趋势 → 更新时间。  
 预计可用按本周期已用比例与已过天数估算，并与重置日对比提示「可撑过本周期」或「可能提前耗尽」。企业 / 团队账号打开 [用量页](https://cursor.com/dashboard/usage)，个人账号仍打开账单页。
@@ -30,7 +30,9 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 发布包为原生程序：Windows 是 .NET 8 单文件 exe，macOS 是 Swift 菜单栏 `.app`
 - 配置兼容旧版 Python 工具：仍读写同一份 `config.json`
 
-仓库里的 Python 源码保留作对照与夹具基准，**日常请用下面的原生工程**。
+仓库里的 Python 源码仅作夹具对照与历史实现，**已弃用**。`快速启动.bat` / `快速启动.command` / `build.bat` / `build_mac.sh` 会提示并转向原生工程。日常请用下面的原生程序。
+
+配置里的 Session Token 在磁盘上加密保存：Windows 用当前用户 DPAPI，macOS 用钥匙串里的 AES-GCM 包装密钥。旧版明文 `config.json` 会在下次保存时自动升级；若回退到更早的原生版本，需要重新导入 Token。
 
 ## 开发运行
 
@@ -130,9 +132,9 @@ PR 不上传制品。打 `v*` 标签（例如 `v1.0.0`）会创建正式 GitHub 
 
 若浏览器里已经登录，可直接点 **仅导入 Cookie**。同一浏览器通常只能登录一个 Cursor 账号；要加第二个号，请先在浏览器换号登录再导入，或手动粘贴另一个 Token。
 
-**Windows**：优先 Firefox；Chrome / Edge 部分新版可能启用 App-Bound Cookie 加密导致无法读取。
+**Windows**：可从 **Cursor 应用**或 **Firefox** 导入。Chrome / Edge 使用 App-Bound Cookie 加密，本工具无法读取，请改用 Firefox 或手动粘贴。
 
-**macOS**：优先 Safari / Firefox。Safari 若读不到，到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。Chrome 系仍会尝试钥匙串解密，失败时请改用 Safari / Firefox。
+**macOS**：优先 Cursor 应用、Safari / Firefox。Safari 若读不到，到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。设置窗会检测权限并提供跳转。Chrome 系仍会尝试钥匙串解密，失败时请改用 Safari / Firefox。
 
 ### 方式二：手动粘贴
 

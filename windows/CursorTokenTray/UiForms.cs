@@ -77,13 +77,21 @@ sealed class FlyoutForm : Form
         if (history is not null) _spark.Values = history;
     }
 
-    public void PopupNearTray()
+    public void PopupNear(Point anchor)
     {
-        var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 800, 600);
-        Location = new Point(screen.Right - Width - 12, screen.Bottom - Height - 12);
+        var screen = Screen.FromPoint(anchor).WorkingArea;
+        var x = anchor.X - Width;
+        var y = anchor.Y - Height - 12;
+        if (x < screen.Left + 8) x = screen.Left + 8;
+        if (x + Width > screen.Right - 8) x = screen.Right - Width - 8;
+        if (y < screen.Top + 8) y = Math.Min(anchor.Y + 12, screen.Bottom - Height - 8);
+        if (y + Height > screen.Bottom - 8) y = screen.Bottom - Height - 8;
+        Location = new Point(Math.Max(screen.Left, x), Math.Max(screen.Top, y));
         Show();
         Activate();
     }
+
+    public void PopupNearTray() => PopupNear(Cursor.Position);
 }
 
 sealed class SettingsForm : Form
@@ -101,11 +109,13 @@ sealed class SettingsForm : Form
     readonly Action<AppConfig> _onSaved;
     readonly Func<string?, Task<ImportResult>> _import;
 
+    bool _importing;
+
     public SettingsForm(AppConfig cfg, Action<AppConfig> onSaved, Func<string?, Task<ImportResult>> import, bool startImport)
     {
         _cfg = cfg; _onSaved = onSaved; _import = import;
         Text = "Cursor Token 设置";
-        Width = 520; Height = 560;
+        Width = 520; Height = 600;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -125,7 +135,17 @@ sealed class SettingsForm : Form
         var ff = new Button { Text = "Firefox 登录", Left = 300, Top = y, Width = 110 };
         Controls.Add(cur); Controls.Add(add); Controls.Add(ff);
         y += 40; _status.Left = 20; _status.Top = y; Controls.Add(_status);
-        y += 50;
+        y += 36;
+        Controls.Add(new Label
+        {
+            Text = "Windows 可从 Cursor 应用或 Firefox 导入；Chrome / Edge 因系统加密无法读取。",
+            Left = 20,
+            Top = y,
+            Width = 460,
+            Height = 32,
+            ForeColor = Color.DimGray,
+        });
+        y += 36;
         Controls.Add(new Label { Text = "刷新间隔（分钟）", Left = 20, Top = y, AutoSize = true });
         _interval.Left = 200; _interval.Top = y - 4; Controls.Add(_interval);
         y += 32;
@@ -188,7 +208,9 @@ sealed class SettingsForm : Form
         if (startImport) BeginInvoke(async () => await DoImport("cursor-app"));
     }
 
-    public void FocusToken() { _token.Focus(); }
+    public void FocusToken() { _token.Focus(); _token.SelectAll(); }
+
+    public void StartImport() => BeginInvoke(async () => await DoImport("cursor-app"));
 
     void LoadFrom(AppConfig cfg)
     {
@@ -220,13 +242,19 @@ sealed class SettingsForm : Form
 
     async Task DoImport(string? prefer)
     {
+        if (_importing) return;
+        _importing = true;
         _status.Text = "正在导入…";
-        var result = await _import(prefer);
-        _status.Text = result.Message;
-        if (!result.Ok) return;
-        _cfg.UpsertAccount(result.Token, membershipType: result.MembershipType, remaining: result.RemainingPercent, activate: true);
-        _token.Text = result.Token;
-        Persist(false);
+        try
+        {
+            var result = await _import(prefer);
+            _status.Text = result.Message;
+            if (!result.Ok) return;
+            _cfg.UpsertAccount(result.Token, membershipType: result.MembershipType, remaining: result.RemainingPercent, activate: true);
+            _token.Text = result.Token;
+            Persist(false);
+        }
+        finally { _importing = false; }
     }
 
     void Persist(bool _)

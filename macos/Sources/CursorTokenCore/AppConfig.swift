@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 public enum AppPaths {
     public static let appSupportName = "CursorTokenTray"
@@ -131,6 +134,8 @@ public struct AppConfig: Equatable, Sendable {
     public var authErrorNotified: Bool
     public var alertNotifiedLevels: [Int]
     public var exhaustionNotified: Bool
+    /// True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.
+    public var loadError: Bool
 
     public static let displayModes: Set<String> = ["ring", "number", "dot"]
 
@@ -148,7 +153,8 @@ public struct AppConfig: Equatable, Sendable {
         lowQuotaNotified: false,
         authErrorNotified: false,
         alertNotifiedLevels: [],
-        exhaustionNotified: false
+        exhaustionNotified: false,
+        loadError: false
     )
 
     public var activeAccount: Account? {
@@ -276,34 +282,84 @@ public enum ConfigStore {
     public static func load(from directory: URL? = nil) -> AppConfig {
         let dir = directory ?? AppPaths.configDirectory()
         AppPaths.ensureDirectory(dir)
-        let path = AppPaths.configPath(in: dir)
-        guard let data = try? Data(contentsOf: path),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            let cfg = AppConfig.default
-            save(cfg, to: directory)
-            return cfg
+        return withLock(dir) {
+            let path = AppPaths.configPath(in: dir)
+            guard FileManager.default.fileExists(atPath: path.path) else {
+                let cfg = AppConfig.default
+                saveUnlocked(cfg, to: dir)
+                return cfg
+            }
+            guard let data = try? Data(contentsOf: path),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                quarantine(path)
+                var cfg = AppConfig.default
+                cfg.loadError = true
+                return cfg
+            }
+            return normalize(obj)
         }
-        return normalize(obj)
     }
 
     public static func save(_ cfg: AppConfig, to directory: URL? = nil) {
         let dir = directory ?? AppPaths.configDirectory()
         AppPaths.ensureDirectory(dir)
-        let path = AppPaths.configPath(in: dir)
+        withLock(dir) { saveUnlocked(cfg, to: dir) }
+    }
+
+    static func saveUnlocked(_ cfg: AppConfig, to dir: URL) {
+        if cfg.loadError && cfg.accounts.isEmpty { return }
         var normalized = cfg
+        normalized.loadError = false
         normalized = normalize(toDictionary(normalized))
         let dict = toDictionary(normalized)
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) else { return }
+        let path = AppPaths.configPath(in: dir)
+        atomicWrite(data, to: path)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+    }
+
+    @discardableResult
+    static func withLock<T>(_ directory: URL, _ body: () -> T) -> T {
+        AppPaths.ensureDirectory(directory)
+        #if canImport(Darwin)
+        let lockURL = directory.appendingPathComponent("config.lock")
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o600)
+        if fd >= 0 {
+            flock(fd, LOCK_EX)
+            defer {
+                flock(fd, LOCK_UN)
+                close(fd)
+            }
+            return body()
+        }
+        #endif
+        return body()
+    }
+
+    static func atomicWrite(_ data: Data, to path: URL) {
         let tmp = path.appendingPathExtension("tmp")
-        try? data.write(to: tmp, options: .atomic)
-        try? FileManager.default.removeItem(at: path)
-        try? FileManager.default.moveItem(at: tmp, to: path)
+        do {
+            try data.write(to: tmp, options: [.atomic])
+            if FileManager.default.fileExists(atPath: path.path) {
+                _ = try FileManager.default.replaceItemAt(path, withItemAt: tmp)
+            } else {
+                try FileManager.default.moveItem(at: tmp, to: path)
+            }
+        } catch {
+            try? data.write(to: path, options: [.atomic])
+        }
+    }
+
+    static func quarantine(_ path: URL) {
+        let dest = path.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.copyItem(at: path, to: dest)
     }
 
     public static func normalize(_ raw: [String: Any]) -> AppConfig {
         var cfg = AppConfig.default
-        if let v = raw["session_token"] as? String { cfg.sessionToken = v }
+        if let v = raw["session_token"] as? String { cfg.sessionToken = TokenProtector.unprotect(v) }
         if let v = raw["active_account_id"] as? String { cfg.activeAccountId = v }
         if let v = intValue(raw["refresh_interval_minutes"]) { cfg.refreshIntervalMinutes = max(1, v) }
         if let v = intValue(raw["low_quota_threshold"]) { cfg.lowQuotaThreshold = min(100, max(1, v)) }
@@ -373,7 +429,7 @@ public enum ConfigStore {
     }
 
     static func sanitizeAccount(_ raw: [String: Any]) -> Account? {
-        let tokenRaw = (raw["token"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        let tokenRaw = TokenProtector.unprotect((raw["token"] as? String ?? "").trimmingCharacters(in: .whitespaces))
         let token = (try? Token.normalize(tokenRaw)) ?? tokenRaw
         if token.isEmpty { return nil }
         var accountId = (raw["id"] as? String ?? "").trimmingCharacters(in: .whitespaces)
@@ -435,12 +491,12 @@ public enum ConfigStore {
 
     public static func toDictionary(_ cfg: AppConfig) -> [String: Any] {
         [
-            "session_token": cfg.sessionToken,
+            "session_token": TokenProtector.protect(cfg.sessionToken),
             "accounts": cfg.accounts.map { acc -> [String: Any] in
                 var d: [String: Any] = [
                     "id": acc.id,
                     "label": acc.label,
-                    "token": acc.token,
+                    "token": TokenProtector.protect(acc.token),
                     "membership_type": acc.membershipType,
                     "last_error": acc.lastError,
                     "updated_at": acc.updatedAt,

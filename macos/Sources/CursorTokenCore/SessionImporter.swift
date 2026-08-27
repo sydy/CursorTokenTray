@@ -228,6 +228,7 @@ public enum SessionImporter {
         #if canImport(SQLite3)
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("cursor_tray_ffcookies_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tmp.path)
         defer { try? FileManager.default.removeItem(at: tmp) }
         let dst = tmp.appendingPathComponent("cookies.sqlite")
         try? FileManager.default.copyItem(at: dbPath, to: dst)
@@ -471,7 +472,7 @@ public enum SessionImporter {
         let prefer = preferBrowsers ?? defaultPreferBrowsers()
         var candidates = findSessionCandidates(onlyBrowsers: onlyBrowsers, cursorPaths: cursorPaths, firefoxRoots: firefoxRoots)
         if candidates.isEmpty {
-            return ImportResult(ok: false, message: "未找到可用 Cookie。请先登录 Cursor 应用，或在 Safari / Firefox 登录 cursor.com 后再导入。也可手动粘贴 WorkosCursorSessionToken。")
+            return ImportResult(ok: false, message: "未找到可用 Cookie。请先登录 Cursor 应用，或在 Safari / Firefox 登录 cursor.com 后再导入。也可手动粘贴 WorkosCursorSessionToken。若 Safari 读不到，请在系统设置中为本应用打开完全磁盘访问权限。")
         }
         let order = Dictionary(uniqueKeysWithValues: prefer.enumerated().map { ($1, $0) })
         candidates.sort { a, b in
