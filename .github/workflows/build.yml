@@ -78,10 +78,15 @@ jobs:
       - name: Publish single-file exe
         run: |
           dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist-win
+      - name: Report exe size
+        shell: pwsh
+        run: |
+          Get-ChildItem dist-win | ForEach-Object { '{0} {1:N2} MB' -f $_.Name, ($_.Length / 1MB) }
       - name: Zip onefile
         shell: pwsh
         run: |
           Compress-Archive -Path dist-win\CursorTokenTray.exe -DestinationPath CursorTokenTray-windows.zip -Force
+          '{0} {1:N2} MB' -f 'CursorTokenTray-windows.zip', ((Get-Item CursorTokenTray-windows.zip).Length / 1MB)
       - uses: actions/upload-artifact@v6
         if: github.event_name != 'pull_request'
         continue-on-error: true
