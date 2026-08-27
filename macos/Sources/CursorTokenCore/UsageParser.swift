@@ -129,7 +129,7 @@ public struct UsageSnapshot: Equatable {
     }
 
     public var showsAmount: Bool {
-        guard let used = usedCents, let limit = limitCents, limit > 0 else { return false }
+        guard usedCents != nil, let limit = limitCents, limit > 0 else { return false }
         return billingMode == "amount" || isTeamAccount
     }
 
@@ -321,7 +321,7 @@ public enum UsageParser {
             }
         }
 
-        var used = clampPercent(usedPercent ?? 0)
+        let used = clampPercent(usedPercent ?? 0)
         let remaining = clampPercent(100.0 - used)
         if remainingCents == nil, let u = usedCents, let l = limitCents {
             remainingCents = max(0, l - u)
@@ -500,7 +500,6 @@ public enum UsageParser {
         if models.isEmpty { return [] }
         let centsSum = models.reduce(0.0) { $0 + $1.cents }
         let tokensSum = models.reduce(0) { $0 + $1.tokens }
-        let cat = categoryPercent ?? 0
         return models.map { model in
             var share = 0.0
             if centsSum > 1e-6 {

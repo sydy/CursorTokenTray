@@ -34,7 +34,8 @@ final class AppStore: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         loopRefresh()
         if config.sessionToken.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
                 self.openSettings(focusToken: true)
             }
         }

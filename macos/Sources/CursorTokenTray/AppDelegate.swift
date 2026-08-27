@@ -3,8 +3,9 @@ import CursorTokenCore
 import SwiftUI
 
 @main
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let store = AppStore()
+    private(set) var store: AppStore!
     var statusItem: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,12 +19,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        let store = AppStore()
+        self.store = store
         statusItem = StatusItemController(store: store)
         store.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        store.stop()
+        store?.stop()
         InstanceLock.release()
     }
 }

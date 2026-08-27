@@ -20,7 +20,7 @@ final class StatusItemController: NSObject {
         item.button?.toolTip = "Cursor Token 剩余进度"
         render()
         cancellable = store.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.render() }
+            Task { @MainActor in self?.render() }
         }
     }
 

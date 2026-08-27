@@ -217,7 +217,7 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
             icon = win.convertToScreen(button.convert(button.bounds, to: nil))
         }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        var origin = popupOrigin(icon: icon, popup: size, visible: screen)
+        let origin = popupOrigin(icon: icon, popup: size, visible: screen)
         window.setFrame(NSRect(origin: origin, size: size), display: true)
     }
 
@@ -241,11 +241,12 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
     func installMonitor() {
         removeMonitor()
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, let window = self.window, window.isVisible else { return }
             let loc = event.locationInWindow
-            // global events use screen coords in locationInWindow
-            if !window.frame.contains(NSPoint(x: loc.x, y: loc.y)) {
-                DispatchQueue.main.async { self.close() }
+            Task { @MainActor in
+                guard let self, let window = self.window, window.isVisible else { return }
+                if !window.frame.contains(loc) {
+                    self.close()
+                }
             }
         }
     }

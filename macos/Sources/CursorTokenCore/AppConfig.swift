@@ -280,7 +280,7 @@ public enum ConfigStore {
         guard let data = try? Data(contentsOf: path),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            var cfg = AppConfig.default
+            let cfg = AppConfig.default
             save(cfg, to: directory)
             return cfg
         }
