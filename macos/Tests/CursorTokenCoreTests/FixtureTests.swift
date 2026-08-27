@@ -5,12 +5,16 @@ import XCTest
 enum Fixtures {
     static func data(_ name: String) throws -> Data {
         var dir = URL(fileURLWithPath: #filePath)
+        var candidates: [URL] = []
         for _ in 0..<12 {
             dir.deleteLastPathComponent()
-            let candidate = dir.appendingPathComponent("fixtures").appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                return try Data(contentsOf: candidate)
-            }
+            candidates.append(dir.appendingPathComponent("fixtures").appendingPathComponent(name))
+        }
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        candidates.append(cwd.appendingPathComponent("fixtures").appendingPathComponent(name))
+        candidates.append(cwd.appendingPathComponent("../fixtures").appendingPathComponent(name))
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path) {
+            return try Data(contentsOf: candidate)
         }
         throw NSError(domain: "Fixtures", code: 1, userInfo: [NSLocalizedDescriptionKey: "missing \(name)"])
     }
@@ -18,6 +22,10 @@ enum Fixtures {
     static func json(_ name: String) throws -> Any {
         try JSONSerialization.jsonObject(with: data(name))
     }
+}
+
+private func json(_ name: String) throws -> Any {
+    try Fixtures.json(name)
 }
 
 final class UsageParserFixtureTests: XCTestCase {
@@ -29,45 +37,45 @@ final class UsageParserFixtureTests: XCTestCase {
             let payload = try JSONValue.parse(payloadData)
             let snap = UsageParser.parseUsageSummary(payload)
             let expected = cse["expected"] as! [String: Any]
-            XCTAssertEqual(snap.usedPercent, expected["used_percent"] as! Double, accuracy: 0.0001, name)
-            XCTAssertEqual(snap.remainingPercent, expected["remaining_percent"] as! Double, accuracy: 0.0001, name)
-            XCTAssertEqual(opt(snap.autoPercentUsed), opt(expected["auto_percent_used"] as? Double), name)
-            XCTAssertEqual(opt(snap.apiPercentUsed), opt(expected["api_percent_used"] as? Double), name)
-            XCTAssertEqual(opt(snap.totalPercentUsed), opt(expected["total_percent_used"] as? Double), name)
-            XCTAssertEqual(snap.membershipType, expected["membership_type"] as? String, name)
-            XCTAssertEqual(snap.billingMode, expected["billing_mode"] as? String, name)
+            XCTAssertEqual(snap.usedPercent, try XCTUnwrap(num(expected["used_percent"])), accuracy: 0.0001, name)
+            XCTAssertEqual(snap.remainingPercent, try XCTUnwrap(num(expected["remaining_percent"])), accuracy: 0.0001, name)
+            XCTAssertEqual(opt(snap.autoPercentUsed), opt(num(expected["auto_percent_used"])), name)
+            XCTAssertEqual(opt(snap.apiPercentUsed), opt(num(expected["api_percent_used"])), name)
+            XCTAssertEqual(opt(snap.totalPercentUsed), opt(num(expected["total_percent_used"])), name)
+            XCTAssertEqual(snap.membershipType, str(expected["membership_type"]), name)
+            XCTAssertEqual(snap.billingMode, str(expected["billing_mode"]), name)
             XCTAssertEqual(opt(snap.usedCents), opt(num(expected["used_cents"])), name)
             XCTAssertEqual(opt(snap.limitCents), opt(num(expected["limit_cents"])), name)
             XCTAssertEqual(opt(snap.pooledUsedCents), opt(num(expected["pooled_used_cents"])), name)
             XCTAssertEqual(opt(snap.pooledLimitCents), opt(num(expected["pooled_limit_cents"])), name)
             XCTAssertEqual(opt(snap.onDemandUsedCents), opt(num(expected["on_demand_used_cents"])), name)
             XCTAssertEqual(opt(snap.onDemandLimitCents), opt(num(expected["on_demand_limit_cents"])), name)
-            XCTAssertEqual(snap.limitType, expected["limit_type"] as? String ?? "", name)
-            XCTAssertEqual(snap.isUnlimited, expected["is_unlimited"] as? Bool, name)
-            XCTAssertEqual(snap.isTeamAccount, expected["is_team_account"] as? Bool, name)
-            XCTAssertEqual(snap.showsAmount, expected["shows_amount"] as? Bool, name)
-            XCTAssertEqual(snap.dashboardURL, expected["dashboard_url"] as? String, name)
-            XCTAssertEqual(UsageParser.dashboardButtonLabel(snap), expected["dashboard_button_label"] as? String, name)
-            XCTAssertEqual(UsageParser.dashboardMenuLabel(snap), expected["dashboard_menu_label"] as? String, name)
-            XCTAssertEqual(UsageParser.dashboardLinkLabel(snap), expected["dashboard_link_label"] as? String, name)
+            XCTAssertEqual(snap.limitType, str(expected["limit_type"]), name)
+            XCTAssertEqual(snap.isUnlimited, bool(expected["is_unlimited"]), name)
+            XCTAssertEqual(snap.isTeamAccount, bool(expected["is_team_account"]), name)
+            XCTAssertEqual(snap.showsAmount, bool(expected["shows_amount"]), name)
+            XCTAssertEqual(snap.dashboardURL, str(expected["dashboard_url"]), name)
+            XCTAssertEqual(UsageParser.dashboardButtonLabel(snap), str(expected["dashboard_button_label"]), name)
+            XCTAssertEqual(UsageParser.dashboardMenuLabel(snap), str(expected["dashboard_menu_label"]), name)
+            XCTAssertEqual(UsageParser.dashboardLinkLabel(snap), str(expected["dashboard_link_label"]), name)
         }
     }
 
     func testTokenCases() throws {
         let root = try XCTUnwrap(try json("token_cases.json") as? [String: Any])
         for row in root["account_ids"] as! [[String: Any]] {
-            XCTAssertEqual(Token.accountId(from: row["token"] as! String), row["id"] as? String)
+            XCTAssertEqual(Token.accountId(from: str(row["token"])), str(row["id"]))
         }
         let variants = root["variants_jwt"] as! [String: Any]
-        let got = Token.variants(variants["input"] as! String)
-        XCTAssertEqual(got, variants["variants"] as? [String])
+        let got = Token.variants(str(variants["input"]))
+        XCTAssertEqual(got, stringArray(variants["variants"]))
         for row in root["normalize"] as! [[String: Any]] {
-            XCTAssertEqual(try Token.normalize(row["input"] as! String), row["output"] as? String)
+            XCTAssertEqual(try Token.normalize(str(row["input"])), str(row["output"]))
         }
         for row in root["normalize_errors"] as! [[String: Any]] {
-            XCTAssertThrowsError(try Token.normalize(row["input"] as! String)) { err in
+            XCTAssertThrowsError(try Token.normalize(str(row["input"]))) { err in
                 let msg = (err as? CursorAPIError)?.message ?? ""
-                XCTAssertTrue(msg.contains(row["message_contains"] as! String), msg)
+                XCTAssertTrue(msg.contains(str(row["message_contains"])), msg)
             }
         }
     }
@@ -75,30 +83,30 @@ final class UsageParserFixtureTests: XCTestCase {
     func testFormatCases() throws {
         let root = try XCTUnwrap(try json("format_cases.json") as? [String: Any])
         for row in root["membership"] as! [[String: Any]] {
-            XCTAssertEqual(UsageParser.formatMembershipType(row["input"] as? String), row["output"] as? String)
+            XCTAssertEqual(UsageParser.formatMembershipType(row["input"] as? String), str(row["output"]))
         }
         for row in root["usd"] as! [[String: Any]] {
-            XCTAssertEqual(UsageParser.formatUSDCents(num(row["cents"])), row["output"] as? String)
+            XCTAssertEqual(UsageParser.formatUSDCents(num(row["cents"])), str(row["output"]))
         }
         for row in root["spend_range"] as! [[String: Any]] {
             XCTAssertEqual(
                 UsageParser.formatSpendRange(used: num(row["used"]), limit: num(row["limit"])),
-                row["output"] as? String
+                str(row["output"])
             )
         }
         for row in root["token_count"] as! [[String: Any]] {
-            XCTAssertEqual(UsageParser.formatTokenCount(num(row["n"])), row["output"] as? String)
+            XCTAssertEqual(UsageParser.formatTokenCount(num(row["n"])), str(row["output"]))
         }
         for row in root["plan_caption"] as! [[String: Any]] {
             XCTAssertEqual(
                 StatusText.formatPlanCaption(row["membership"] as? String, accountLabel: row["label"] as? String),
-                row["output"] as? String
+                str(row["output"])
             )
         }
         for row in root["status_pill"] as! [[String: Any]] {
             XCTAssertEqual(
-                StatusText.statusPillText(num(row["remaining"]), error: row["error"] as? Bool ?? false),
-                row["output"] as? String
+                StatusText.statusPillText(num(row["remaining"]), error: bool(row["error"])),
+                str(row["output"])
             )
         }
         let usageRoot = try XCTUnwrap(try json("usage_summary_cases.json") as? [[String: Any]])
@@ -118,16 +126,16 @@ final class UsageParserFixtureTests: XCTestCase {
         let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: cse["payload"] as Any))
         let parsed = UsageParser.parseAggregatedUsage(
             payload,
-            autoPercent: cse["auto_percent"] as? Double,
-            apiPercent: cse["api_percent"] as? Double
+            autoPercent: num(cse["auto_percent"]),
+            apiPercent: num(cse["api_percent"])
         )
-        XCTAssertEqual(parsed.total, cse["total"] as? Int)
+        XCTAssertEqual(parsed.total, int(cse["total"]) ?? -1)
         let models = cse["models"] as! [[String: Any]]
         XCTAssertEqual(parsed.models.count, models.count)
         for (got, exp) in zip(parsed.models, models) {
-            XCTAssertEqual(got.name, exp["name"] as? String)
-            XCTAssertEqual(got.tokens, exp["tokens"] as? Int)
-            XCTAssertEqual(got.tier, exp["tier"] as? Int)
+            XCTAssertEqual(got.name, str(exp["name"]))
+            XCTAssertEqual(got.tokens, int(exp["tokens"]) ?? -1)
+            XCTAssertEqual(got.tier, int(exp["tier"]) ?? -1)
             XCTAssertEqual(opt(got.usagePercent), opt(num(exp["usage_percent"])))
         }
     }
@@ -232,6 +240,26 @@ final class UsageParserFixtureTests: XCTestCase {
         if let d = value as? Double { return d }
         if let i = value as? Int { return Double(i) }
         return nil
+    }
+
+    private func int(_ value: Any?) -> Int? {
+        num(value).map { Int($0.rounded()) }
+    }
+
+    private func bool(_ value: Any?) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        return false
+    }
+
+    private func str(_ value: Any?) -> String {
+        value as? String ?? ""
+    }
+
+    private func stringArray(_ value: Any?) -> [String] {
+        if let arr = value as? [String] { return arr }
+        if let arr = value as? [Any] { return arr.compactMap { $0 as? String } }
+        return []
     }
 
     private func opt(_ value: Double?) -> String {
