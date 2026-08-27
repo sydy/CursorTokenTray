@@ -20,8 +20,7 @@ from cursor_api import (
     is_auth_error_message,
 )
 from icon_renderer import create_idle_icon, create_progress_icon
-from platform_util import IS_MAC, app_log, copy_text
-from status_text import format_summary_text
+from platform_util import IS_MAC, app_log
 import usage_history
 
 if IS_MAC:
@@ -31,9 +30,6 @@ if IS_MAC:
     from macos_menubar import show_status as show_macos_status
     from macos_menubar import update_status as update_macos_status
     from macos_settings import show_settings
-else:
-    from popup_ui import MenuAction, PopupManager, StatusActions
-    from settings_ui import SettingsWindow
 
 
 class TrayApp:
@@ -45,16 +41,9 @@ class TrayApp:
         self._stop = threading.Event()
         self._refresh_event = threading.Event()
         self._lock = threading.Lock()
-        # Windows：设置窗挂到唯一 popup-ui Tk 线程。
+        # Windows：设置 / 飞出层 / 菜单都是短命子进程。托盘不 import CTk。
         # macOS：托盘进程不导入 settings_ui / Tk。
-        self.popups = None if IS_MAC else PopupManager()
-        self.settings = None if IS_MAC else SettingsWindow(
-            on_saved=self._on_config_saved,
-            ui=self.popups,
-        )
         self._worker: threading.Thread | None = None
-        self._suppress_status_closed_resume = False
-        self._status_opening = False
         self._icon_key: tuple | None = None
 
         # Windows：隐藏 default 供左键，右键走自定义矢量菜单。
@@ -84,8 +73,6 @@ class TrayApp:
             "",
             menu=menu,
         )
-        if self.popups is not None:
-            self.popups.bind_tray_icon(self.icon)
 
     def run(self) -> None:
         try:
@@ -142,73 +129,43 @@ class TrayApp:
         app_log(f"icon ready, open settings in {delay}s (no token)")
         threading.Timer(delay, lambda: self._open_settings(focus_token=True)).start()
 
-    def _status_actions(self):
-        return StatusActions(
-            on_open_settings=self._action_open_settings_focus,
-            on_refresh=self._action_refresh,
-            on_open_spending=self._action_open_spending,
-            on_copy_summary=self._copy_summary,
-        )
-
-    def _history_payload(self) -> tuple[list[float], float | None]:
-        points = usage_history.load_recent(7)
-        values = [p.remaining for p in points]
-        burn = usage_history.daily_avg_burn(7)
-        return values, burn
-
     def _on_tray_right_click(self) -> None:
-        if self.popups is None:
-            return
-        if self.popups.menu_visible or getattr(self, "_menu_opening", False):
+        if getattr(self, "_menu_opening", False):
             return
         self._menu_opening = True
         watcher = getattr(self.icon, "_hover_watcher", None)
         if watcher is not None:
             watcher.pause()
-        self._suppress_status_closed_resume = True
-
-        def _after_menu_closed() -> None:
-            self._menu_opening = False
-            self._suppress_status_closed_resume = False
-            if watcher is not None:
-                watcher.notify_closed()
-                watcher.resume()
 
         def open_menu() -> None:
             try:
-                self.popups.cancel_hover_close()
-                if not self.popups.close_and_wait(2.5):
-                    return
-                actions = self._vector_menu_actions()
-                # 设置窗已挂到同一 Tk 线程，勿再 show_menu_on_host：
-                # 宿主 Toplevel 没有 _tray_popup_gen，菜单会被 _watch_gen 立刻关掉
-                self.popups.show_menu(actions)
-            except Exception:
-                pass
+                from popup_launch import run_menu_and_pick
+
+                key = run_menu_and_pick()
+                self._dispatch_menu_action(key)
+            except Exception as exc:
+                app_log(f"tray menu failed: {exc}")
             finally:
-                _after_menu_closed()
+                self._menu_opening = False
+                if watcher is not None:
+                    watcher.notify_closed()
+                    watcher.resume()
 
         threading.Thread(target=open_menu, daemon=True, name="tray-menu").start()
 
-    def _vector_menu_actions(self) -> list[MenuAction]:
-        return [
-            MenuAction("status", "显示状态", "status", self._action_open_status),
-            MenuAction("refresh", "立即刷新", "refresh", self._action_refresh),
-            MenuAction("web", "打开用量账单", "web", self._action_open_spending),
-            MenuAction("import", "导入 Token…", "settings", self._action_open_settings_focus),
-            MenuAction("settings", "设置…", "settings", self._action_open_settings),
-            MenuAction("sep", "", "", lambda: None),
-            MenuAction("quit", "退出", "quit", self._action_quit, danger=True),
-        ]
-
-    def _on_status_closed(self) -> None:
-        self._status_opening = False
-        if self._suppress_status_closed_resume:
-            return
-        watcher = getattr(self.icon, "_hover_watcher", None)
-        if watcher is not None:
-            watcher.notify_closed()
-            watcher.resume()
+    def _dispatch_menu_action(self, key: str | None) -> None:
+        if key == "status":
+            self._open_status_bg()
+        elif key == "refresh":
+            self._action_refresh()
+        elif key == "web":
+            self._action_open_spending()
+        elif key == "import":
+            self._open_settings(focus_token=True, start_import=True)
+        elif key == "settings":
+            self._open_settings(focus_token=False)
+        elif key == "quit":
+            self._action_quit()
 
     def _open_status_bg(self) -> None:
         if IS_MAC:
@@ -224,37 +181,10 @@ class TrayApp:
                 on_open_settings=self._action_open_settings,
             )
             return
-        self.popups.cancel_hover_close()
-        if self.popups is None:
-            return
-        if self._status_opening or self.popups.status_visible or self.popups.busy:
-            return
-        if self.popups.menu_visible:
-            return
-        self._status_opening = True
-        watcher = getattr(self.icon, "_hover_watcher", None)
-        if watcher is not None:
-            watcher.pause()
-            watcher.notify_opened()
-        try:
-            hist, burn = self._history_payload()
-            usage, err, updated = self._ui_snapshot()
-            self.popups.show_status(
-                usage=usage,
-                error_message=err,
-                updated_at=updated,
-                from_hover=False,
-                on_closed=self._on_status_closed,
-                actions=self._status_actions(),
-                history_values=hist,
-                daily_burn=burn,
-            )
-        except Exception:
-            self._status_opening = False
-            if watcher is not None:
-                watcher.notify_closed()
-                watcher.resume()
-            raise
+        from popup_launch import open_status_async
+
+        self._write_status_snapshot()
+        open_status_async()
 
     def stop(self) -> None:
         """先请求 pystray 退出；只有消息循环不返回时才 os._exit。"""
@@ -273,14 +203,12 @@ class TrayApp:
             except Exception:
                 pass
 
-        if self.popups is not None:
-            try:
-                self.popups.close_and_wait(1.5)
-            except Exception:
-                try:
-                    self.popups.close()
-                except Exception:
-                    pass
+        try:
+            from popup_launch import close_popup_processes
+
+            close_popup_processes()
+        except Exception:
+            pass
 
         if IS_MAC:
             self._quit_macos()
@@ -371,8 +299,13 @@ class TrayApp:
                 on_saved=self._on_config_saved,
             )
             return
-        assert self.settings is not None
-        self.settings.open(focus_token=focus_token, start_import=start_import)
+        from settings_launch import open_settings_async
+
+        open_settings_async(
+            on_saved=self._on_config_saved,
+            focus_token=focus_token,
+            start_import=start_import,
+        )
 
     def _action_open_settings(self, _icon=None, _item=None) -> None:
         if IS_MAC:
@@ -394,11 +327,12 @@ class TrayApp:
             watcher = getattr(self.icon, "_hover_watcher", None)
             if watcher is not None:
                 watcher.pause()
-            if self.popups is not None:
-                try:
-                    self.popups.close()
-                except Exception:
-                    pass
+            try:
+                from popup_launch import close_popup_processes
+
+                close_popup_processes()
+            except Exception:
+                pass
             if watcher is not None:
                 watcher.notify_closed()
             try:
@@ -427,36 +361,11 @@ class TrayApp:
                 self.stop()
             return
 
-        # Windows：稍延后，让矢量菜单 Tk 先收尾，避免与 icon.stop 打架
         def _later() -> None:
-            time.sleep(0.2)
+            time.sleep(0.05)
             self.stop()
 
         threading.Thread(target=_later, daemon=True).start()
-
-    def _copy_summary(self) -> None:
-        usage, err, updated = self._ui_snapshot()
-        text = format_summary_text(usage, err, updated)
-        if IS_MAC:
-            if copy_text(text):
-                app_log("copied summary via pbcopy")
-            return
-
-        def _clip() -> None:
-            root = self.popups.tk_root
-            if root is None:
-                return
-            try:
-                root.clipboard_clear()
-                root.clipboard_append(text)
-                root.update_idletasks()
-            except Exception:
-                pass
-
-        try:
-            self.popups.run_on_ui(_clip, wait=False)
-        except Exception:
-            pass
 
     def _on_config_saved(self, cfg: dict[str, Any]) -> None:
         """设置已写入磁盘后回调：立刻换托盘图标；Token 变更才触发联网刷新。
@@ -717,17 +626,18 @@ class TrayApp:
             if key != self._icon_key:
                 self._icon_key = key
                 self.icon.icon = image
-            try:
-                self.icon.title = ""
-            except Exception:
-                pass
+            if getattr(self.icon, "title", "") != "":
+                try:
+                    self.icon.title = ""
+                except Exception:
+                    pass
+            self._write_status_snapshot()
 
-        if self.popups is not None:
-            hist, burn = self._history_payload()
-            self.popups.update_status(
-                usage=usage,
-                error_message=err,
-                updated_at=updated,
-                history_values=hist,
-                daily_burn=burn,
-            )
+    def _write_status_snapshot(self) -> None:
+        usage, err, updated = self._ui_snapshot()
+        try:
+            from usage_snapshot import write_status_snapshot
+
+            write_status_snapshot(usage=usage, error_message=err, updated_at=updated)
+        except Exception:
+            pass

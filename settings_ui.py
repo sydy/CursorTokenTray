@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
 from typing import Any, Callable
@@ -827,6 +828,35 @@ class SettingsWindow:
                 root.after(400, lambda: run_import(open_browser=True))
             except tk.TclError:
                 run_import(open_browser=True)
+
+        # 开着过夜不会泄漏式暴涨，但会一直占着一套 CTk。无操作 30 分钟就关，进程退出。
+        SETTINGS_IDLE_CLOSE_SEC = 30 * 60
+        last_input = {"t": time.monotonic()}
+
+        def _note_input(_e=None) -> None:
+            last_input["t"] = time.monotonic()
+
+        def _idle_watch() -> None:
+            try:
+                if importing["value"]:
+                    last_input["t"] = time.monotonic()
+                elif time.monotonic() - last_input["t"] >= SETTINGS_IDLE_CLOSE_SEC:
+                    app_log("settings idle timeout, closing")
+                    _close_window()
+                    return
+                root.after(30_000, _idle_watch)
+            except tk.TclError:
+                pass
+
+        for seq in ("<Motion>", "<Key>", "<Button>", "<MouseWheel>"):
+            try:
+                root.bind_all(seq, _note_input, add="+")
+            except tk.TclError:
+                pass
+        try:
+            root.after(30_000, _idle_watch)
+        except tk.TclError:
+            pass
 
         if owns_loop:
             try:

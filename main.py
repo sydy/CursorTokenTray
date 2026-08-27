@@ -6,6 +6,7 @@ import atexit
 import sys
 
 from platform_util import IS_MAC, IS_WIN, app_log, install_crash_logging, show_already_running
+from popup_launch import is_popup_process, popup_mode
 from settings_launch import is_settings_process
 
 
@@ -33,6 +34,15 @@ def main() -> int:
         from settings_ui import run_settings_main
 
         return run_settings_main()
+
+    if is_popup_process():
+        if not IS_WIN:
+            app_log("popup process is Windows-only")
+            return 1
+        app_log(f"enter popup process mode={popup_mode()}")
+        from popup_ui import run_menu_main, run_status_main
+
+        return run_menu_main() if popup_mode() == "menu" else run_status_main()
 
     if IS_MAC:
         try:
