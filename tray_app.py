@@ -42,10 +42,9 @@ class TrayApp:
         self._stop = threading.Event()
         self._refresh_event = threading.Event()
         self._lock = threading.Lock()
-        # Windows：设置/飞出层按需再 import CTk。过夜不用就不要让 Tk 常驻。
+        # Windows：设置走独立进程；飞出层用时再建 Tk。过夜托盘不持有 CTk。
         # macOS：托盘进程不导入 settings_ui / Tk。
         self.popups = None
-        self.settings = None
         self._worker: threading.Thread | None = None
         self._suppress_status_closed_resume = False
         self._status_opening = False
@@ -80,17 +79,12 @@ class TrayApp:
         )
 
     def _ensure_windows_ui(self):
-        """第一次点飞出层/菜单/设置才加载 CustomTkinter。"""
+        """第一次点飞出层/右键菜单才加载 CustomTkinter。设置不走这条路径。"""
         if IS_MAC or self.popups is not None:
             return self.popups
         from popup_ui import PopupManager
-        from settings_ui import SettingsWindow
 
-        self.popups = PopupManager(is_ui_busy=lambda: bool(self.settings and self.settings.is_open))
-        self.settings = SettingsWindow(
-            on_saved=self._on_config_saved,
-            ui=self.popups,
-        )
+        self.popups = PopupManager()
         self.popups.bind_tray_icon(self.icon)
         return self.popups
 
@@ -384,9 +378,13 @@ class TrayApp:
                 on_saved=self._on_config_saved,
             )
             return
-        self._ensure_windows_ui()
-        assert self.settings is not None
-        self.settings.open(focus_token=focus_token, start_import=start_import)
+        from settings_launch import open_settings_async
+
+        open_settings_async(
+            on_saved=self._on_config_saved,
+            focus_token=focus_token,
+            start_import=start_import,
+        )
 
     def _action_open_settings(self, _icon=None, _item=None) -> None:
         if IS_MAC:
@@ -751,22 +749,3 @@ class TrayApp:
                 history_values=hist,
                 daily_burn=burn,
             )
-        elif not IS_MAC:
-            self._maybe_release_idle_memory()
-
-    def _maybe_release_idle_memory(self) -> None:
-        """后台刷新后：没有飞出层/设置就压缩工作集，避免过夜数字不掉。"""
-        if IS_MAC:
-            return
-        if self.popups is not None and (
-            self.popups.status_visible or self.popups.menu_visible or self.popups.busy
-        ):
-            return
-        if self.settings is not None and self.settings.is_open:
-            return
-        try:
-            from win_memory import release_idle_memory
-
-            release_idle_memory()
-        except Exception:
-            pass

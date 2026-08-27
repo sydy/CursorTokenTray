@@ -51,14 +51,10 @@ class StatusActions:
     on_copy_summary: Callable[[], None] | None = None
 
 
-# 飞出层/设置关掉后还让 Tk 活着，过夜工作集会停在白天高峰。
-IDLE_TK_RELEASE_SEC = 45.0
-
-
 class PopupManager:
-    """状态飞出层管理：单一 Tk 线程承载 Toplevel；空闲后拆掉，避免过夜占内存。"""
+    """飞出层/菜单：用时建一个隐藏 tk.Tk，关掉立刻拆掉。托盘进程不常驻 Tk。"""
 
-    def __init__(self, is_ui_busy: Callable[[], bool] | None = None) -> None:
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._show_lock = threading.Lock()
         self._cmd_queue: queue.Queue[
@@ -72,8 +68,6 @@ class PopupManager:
         self._kind: str | None = None
         self._status_hwnd = 0
         self._hover_close_gen = 0
-        self._idle_gen = 0
-        self._is_ui_busy = is_ui_busy
         self._tray_icon = None
         self._status_card: _StatusCard | None = None
         self._popup_menu: _VectorMenu | None = None
@@ -89,9 +83,10 @@ class PopupManager:
     def _start_ui_thread(self) -> None:
         if IS_MAC:
             return
-        self.cancel_idle_release()
-        if self._ui_thread is not None and self._ui_thread.is_alive() and self.tk_root is not None:
-            return
+        if self._ui_thread is not None and self._ui_thread.is_alive():
+            if self.tk_root is not None:
+                return
+            self._ui_thread.join(timeout=1.5)
         self._ui_ready.clear()
         t = threading.Thread(target=self._ui_loop, daemon=True, name="popup-ui")
         self._ui_thread = t
@@ -165,15 +160,11 @@ class PopupManager:
         *,
         wait: bool = True,
         timeout: float = 3.0,
-        start: bool = True,
     ) -> bool:
         if IS_MAC:
             app_log("run_on_ui skipped: macOS tray has no Tk")
             return False
-        if start:
-            self._start_ui_thread()
-        elif self._ui_thread is None or not self._ui_thread.is_alive() or self.tk_root is None:
-            return False
+        self._start_ui_thread()
         if self._ui_thread is not None and threading.current_thread() is self._ui_thread:
             fn()
             return True
@@ -414,7 +405,7 @@ class PopupManager:
                 self._popup_menu = None
             if self._status_card is None and self._host_menu is None and self._popup_menu is None:
                 self._kind = None
-        self.schedule_idle_release()
+        self._drop_tk_root_if_idle()
 
     def _on_status_closed(self, card: _StatusCard) -> None:
         with self._lock:
@@ -424,65 +415,21 @@ class PopupManager:
                 self._status_win = None
             if self._status_card is None and self._host_menu is None and self._popup_menu is None:
                 self._kind = None
-        self.schedule_idle_release()
-
-    def cancel_idle_release(self) -> None:
-        """用户又打开飞出层/设置时，取消待拆的 Tk。"""
-        self._idle_gen += 1
-
-    def schedule_idle_release(self, delay_sec: float | None = None) -> None:
-        """窗口都关掉一段时间后拆掉隐藏 Tk，再把工作集还给系统。"""
-        if IS_MAC:
-            return
-        self._idle_gen += 1
-        gen = self._idle_gen
-        delay = IDLE_TK_RELEASE_SEC if delay_sec is None else max(0.0, float(delay_sec))
-
-        def _later() -> None:
-            if gen != self._idle_gen:
-                return
-            if self._ui_still_needed():
-                return
-            if self.tk_root is None:
-                self._release_idle_memory(force=True)
-                return
-
-            def _do() -> None:
-                if gen != self._idle_gen or self._ui_still_needed():
-                    return
-                self._teardown_root()
-
-            if not self._run_on_ui(_do, wait=False, start=False):
-                self._release_idle_memory(force=True)
-
-        threading.Timer(delay, _later).start()
+        self._drop_tk_root_if_idle()
 
     def _ui_still_needed(self) -> bool:
-        if self.status_visible or self.menu_visible or self.busy:
-            return True
-        if self._is_ui_busy is None:
-            return False
-        try:
-            return bool(self._is_ui_busy())
-        except Exception:
-            return False
+        return self.status_visible or self.menu_visible or self.busy
 
-    def _teardown_root(self) -> None:
-        """在 Tk 线程里结束 mainloop 并销毁隐藏根窗口。"""
-        self._close_popups_unlocked(notify=False)
+    def _drop_tk_root_if_idle(self) -> None:
+        """窗口都关掉后立刻结束 Tk，不要靠压缩工作集装睡。"""
+        if self._ui_still_needed():
+            return
         with self._lock:
             root = self._root
             self._root = None
-            self._status_card = None
-            self._popup_menu = None
-            self._host_menu = None
-            self._kind = None
-            self._status_hwnd = 0
-            self._status_win = None
         if root is None:
-            self._release_idle_memory(force=True)
             return
-        app_log("idle: teardown hidden Tk root")
+        app_log("drop hidden Tk root")
         try:
             root.quit()
         except tk.TclError:
@@ -490,16 +437,6 @@ class PopupManager:
         try:
             root.destroy()
         except tk.TclError:
-            pass
-        self._release_idle_memory(force=True)
-
-    @staticmethod
-    def _release_idle_memory(*, force: bool = False) -> None:
-        try:
-            from win_memory import release_idle_memory
-
-            release_idle_memory(force=force)
-        except Exception:
             pass
 
     def close_host_menu(self) -> None:
@@ -549,7 +486,9 @@ class PopupManager:
         self._hover_close_gen += 1
 
     def close(self) -> None:
-        """请求关闭飞出层与弹出菜单。"""
+        """请求关闭飞出层与弹出菜单。没有 Tk 就不用再拉起。"""
+        if self.tk_root is None:
+            return
         self._run_on_ui(lambda: self._close_popups_unlocked(notify=True), wait=False)
 
     def _close_popups_unlocked(self, *, notify: bool) -> None:
@@ -587,9 +526,12 @@ class PopupManager:
                     pass
         if menu is not None and not getattr(menu, "_closing", False):
             menu._close()
+        self._drop_tk_root_if_idle()
 
     def close_and_wait(self, timeout: float = 2.0) -> bool:
         """关闭并等待 UI 线程完成销毁，避免叠层冲突。"""
+        if self.tk_root is None and not self.status_visible and not self.menu_visible:
+            return True
         self.close_host_menu()
         self._closing.set()
         try:

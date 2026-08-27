@@ -168,40 +168,23 @@ class IdleMemoryTests(unittest.TestCase):
         self.assertNotIn("from popup_ui import", header)
         self.assertNotIn("from settings_ui import", header)
         self.assertIn("def _ensure_windows_ui", text)
-        self.assertIn("def _maybe_release_idle_memory", text)
-        apply = text.split("def _apply_ui")[1].split("def _maybe_release_idle_memory")[0]
+        self.assertIn("open_settings_async", text)
+        apply = text.split("def _apply_ui")[1]
         self.assertIn("status_visible", apply)
 
-    def test_popup_manager_can_teardown_idle_tk(self) -> None:
+    def test_popup_manager_drops_tk_when_idle(self) -> None:
         text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
-        self.assertIn("def schedule_idle_release", text)
-        self.assertIn("def _teardown_root", text)
-        self.assertIn("IDLE_TK_RELEASE_SEC", text)
-        self.assertIn("start=False", text)
+        self.assertIn("def _drop_tk_root_if_idle", text)
+        self.assertNotIn("EmptyWorkingSet", text)
+        self.assertNotIn("IDLE_TK_RELEASE_SEC", text)
 
-    def test_settings_close_schedules_idle_release(self) -> None:
+    def test_settings_ui_does_not_keep_tray_tk(self) -> None:
         text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
-        self.assertIn("schedule_idle_release", text)
-
-    def test_ui_still_needed_respects_settings(self) -> None:
-        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
-        self.assertIn("def _ui_still_needed", text)
-        self.assertIn("self._is_ui_busy", text)
-        self.assertIn("status_visible or self.menu_visible or self.busy", text)
-        self.assertIn("def cancel_idle_release", text)
-
-    def test_release_idle_memory_safe_and_throttled(self) -> None:
-        from win_memory import release_idle_memory, trim_working_set
-
-        if sys.platform != "win32":
-            self.assertFalse(trim_working_set())
-        self.assertTrue(release_idle_memory(force=True))
-        self.assertFalse(release_idle_memory(force=False))
-        self.assertTrue(release_idle_memory(force=True))
+        self.assertNotIn("schedule_idle_release", text)
 
     def test_windows_spec_keeps_lazy_ui_modules(self) -> None:
         text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
-        for name in ("popup_ui", "settings_ui", "win_memory", "customtkinter"):
+        for name in ("popup_ui", "settings_ui", "customtkinter"):
             self.assertIn(f"'{name}'", text)
 
     def test_pr_builds_skip_artifact_upload(self) -> None:

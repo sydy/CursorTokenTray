@@ -485,7 +485,10 @@ class NativeSettingsGuardTests(unittest.TestCase):
     def test_tray_opens_settings_in_process(self) -> None:
         text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
         self.assertIn("from macos_settings import show_settings", text)
-        self.assertNotIn("open_settings_async", text)
+        opener = text.split("def _open_settings")[1].split("def _action_open_settings")[0]
+        self.assertIn("show_settings(", opener)
+        self.assertIn("open_settings_async", opener)
+        self.assertLess(opener.index("show_settings("), opener.index("open_settings_async"))
 
     def test_quit_closes_settings_on_main_thread(self) -> None:
         tray = (ROOT / "tray_app.py").read_text(encoding="utf-8")
