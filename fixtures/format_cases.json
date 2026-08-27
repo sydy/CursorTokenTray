@@ -1,0 +1,117 @@
+{
+  "membership": [
+    {
+      "input": "enterprise",
+      "output": "Enterprise"
+    },
+    {
+      "input": "pro_plus",
+      "output": "Pro+"
+    },
+    {
+      "input": "ultra",
+      "output": "Ultra"
+    }
+  ],
+  "usd": [
+    {
+      "cents": 7384,
+      "output": "$73.84"
+    },
+    {
+      "cents": 10000,
+      "output": "$100"
+    },
+    {
+      "cents": 0,
+      "output": "$0"
+    },
+    {
+      "cents": 71,
+      "output": "$0.71"
+    }
+  ],
+  "spend_range": [
+    {
+      "used": 7384,
+      "limit": 10000,
+      "output": "$73.84 / $100"
+    },
+    {
+      "used": 71,
+      "limit": 10000,
+      "output": "$0.71 / $100"
+    }
+  ],
+  "token_count": [
+    {
+      "n": 12345,
+      "output": "1.2万"
+    },
+    {
+      "n": 10000,
+      "output": "1.0万"
+    },
+    {
+      "n": 100000000,
+      "output": "1.0亿"
+    },
+    {
+      "n": 50,
+      "output": "50"
+    }
+  ],
+  "plan_caption": [
+    {
+      "membership": "pro",
+      "label": null,
+      "output": "Pro 套餐"
+    },
+    {
+      "membership": "Pro 套餐",
+      "label": null,
+      "output": "Pro 套餐"
+    },
+    {
+      "membership": "Pro",
+      "label": "公司",
+      "output": "公司 · Pro 套餐"
+    }
+  ],
+  "status_pill": [
+    {
+      "remaining": 63.1,
+      "error": false,
+      "output": "状态良好"
+    },
+    {
+      "remaining": 40,
+      "error": false,
+      "output": "略偏低"
+    },
+    {
+      "remaining": 10,
+      "error": false,
+      "output": "额度紧张"
+    },
+    {
+      "remaining": 0,
+      "error": false,
+      "output": "已耗尽"
+    },
+    {
+      "remaining": null,
+      "error": true,
+      "output": "异常"
+    }
+  ],
+  "status_lines_enterprise": {
+    "剩余": "26.2%（$73.84 / $100）",
+    "计划": "Enterprise",
+    "金额": "$73.84 / $100",
+    "团队额度": "$127251.35 / $281220",
+    "重置": "8月1日（还剩 0 天）",
+    "预计可用": "约 20.3 天  ·  可撑过本周期",
+    "更新": "12:00"
+  }
+}
