@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec — onedir，无控制台
+# PyInstaller spec — onefile，无控制台
+#
+# 资源走 sys._MEIPASS。飞出层 / 设置是短命子进程，会再启动同一份 exe。
+# 单文件启动时解到临时目录，关掉进程后由 bootloader 清理。
 
 block_cipher = None
 
@@ -55,13 +58,17 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='CursorTokenTray',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -69,15 +76,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/app_icon.ico',
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='CursorTokenTray',
 )

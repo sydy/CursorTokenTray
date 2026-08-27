@@ -69,10 +69,10 @@ jobs:
         run: python assets/gen_app_icon.py
       - name: PyInstaller
         run: python -m PyInstaller --noconfirm CursorTokenTray.spec
-      - name: Zip onedir
+      - name: Zip onefile
         shell: pwsh
         run: |
-          Compress-Archive -Path dist\CursorTokenTray -DestinationPath CursorTokenTray-windows.zip -Force
+          Compress-Archive -Path dist\CursorTokenTray.exe -DestinationPath CursorTokenTray-windows.zip -Force
       # PR 不上传。合入 main 会上传；配额尚未重算时忽略失败，避免把已经编过的 job 打红。
       - uses: actions/upload-artifact@v6
         if: github.event_name != 'pull_request'
