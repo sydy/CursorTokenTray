@@ -30,6 +30,7 @@ a = Analysis(
         'popup_ui',
         'popup_launch',
         'usage_snapshot',
+        'accounts',
         'settings_ui',
         'ui_ctk',
         'win11_settings',

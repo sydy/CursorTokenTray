@@ -111,7 +111,13 @@ def run_menu_and_pick() -> str | None:
             pass
         return None
     key = (out or b"").decode("utf-8", errors="replace").strip()
-    return key if key in MENU_ACTIONS else None
+    if not key:
+        return None
+    if key in MENU_ACTIONS:
+        return key
+    if key.startswith("switch:") and key.split(":", 1)[1].strip():
+        return key
+    return None
 
 
 def close_popup_processes() -> None:

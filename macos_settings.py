@@ -16,6 +16,7 @@ from settings_launch import settings_flags
 
 try:
     from AppKit import (  # type: ignore[import-not-found]
+        NSAlert,
         NSApp,
         NSApplication,
         NSApplicationActivationPolicyAccessory,
@@ -53,7 +54,7 @@ except ImportError:  # Linux CI
 
 _CONTROLLER = None
 _PENDING_MAIN: list[Any] = []
-_PAGE_H = 300.0
+_PAGE_H = 360.0
 _PANE_ACCOUNT = "account"
 _PANE_NOTIFY = "notify"
 _PANE_MENU = "menubar"
@@ -350,8 +351,10 @@ class SettingsController(NSObject):
         self._page = "account"
         self._extras_open = False
         self._modes = [("ring", "圆环百分比"), ("number", "纯数字"), ("dot", "仅色点")]
+        self._account_ids: list[str] = []
+        self._switching_account = False
 
-        width, height = 520.0, 364.0
+        width, height = 520.0, 64.0 + _PAGE_H
         style = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
@@ -369,7 +372,7 @@ class SettingsController(NSObject):
         self.window.setDelegate_(self)
         view = self.window.contentView()
 
-        page_h = 300.0
+        page_h = _PAGE_H
         self.pageAccount = NSView.alloc().initWithFrame_(NSMakeRect(0, 64, width, page_h))
         self.pageNotify = NSView.alloc().initWithFrame_(NSMakeRect(0, 64, width, page_h))
         self.pageMenu = NSView.alloc().initWithFrame_(NSMakeRect(0, 64, width, page_h))
@@ -378,12 +381,22 @@ class SettingsController(NSObject):
         view.addSubview_(self.pageMenu)
 
         acc = self.pageAccount
-        _label(acc, "会话 Token（请勿分享）", 28, _py(20, 18), 360, 18, 13)
-        self.tokenField = _field(acc, str(cfg.get("session_token") or ""), 28, _py(44, 28), 464, 28)
-        _label(acc, "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。", 28, _py(80, 16), 464, 16, 11)
-        self.btnCursor = _button(acc, "从 Cursor 导入", b"cursorImport:", self, 28, _py(112, 32), 160, 32)
-        self.btnMore = _link_button(acc, "其他导入方式 ▸", b"toggleExtras:", self, 28, _py(156, 22), 160)
-        self.extraBox = NSView.alloc().initWithFrame_(NSMakeRect(28, _py(184, 36), 464, 36))
+        _label(acc, "当前账号", 28, _py(16, 18), 200, 18, 13)
+        self.accountPopup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(28, _py(38, 26), 464, 26), False
+        )
+        self.accountPopup.setTarget_(self)
+        self.accountPopup.setAction_(b"changeAccount:")
+        acc.addSubview_(self.accountPopup)
+        self.accountHint = _label(acc, "", 28, _py(70, 16), 464, 16, 11)
+        self.btnRename = _button(acc, "重命名", b"renameAccount:", self, 28, _py(94, 28), 80, 28)
+        self.btnDelete = _button(acc, "删除", b"deleteAccount:", self, 116, _py(94, 28), 80, 28)
+        _label(acc, "添加账号（粘贴 Token，请勿分享）", 28, _py(136, 18), 360, 18, 13)
+        self.tokenField = _field(acc, str(cfg.get("session_token") or ""), 28, _py(158, 28), 464, 28)
+        self.btnCursor = _button(acc, "从 Cursor 导入", b"cursorImport:", self, 28, _py(196, 32), 140, 32)
+        self.btnAddToken = _button(acc, "添加此 Token", b"addToken:", self, 176, _py(196, 32), 130, 32)
+        self.btnMore = _link_button(acc, "其他导入方式 ▸", b"toggleExtras:", self, 28, _py(236, 22), 160)
+        self.extraBox = NSView.alloc().initWithFrame_(NSMakeRect(28, _py(260, 36), 464, 36))
         acc.addSubview_(self.extraBox)
         self.btnSafari = _button(self.extraBox, "Safari 登录", b"safariImport:", self, 0, 4, 110)
         self.btnFirefox = _button(self.extraBox, "Firefox 登录", b"firefoxImport:", self, 118, 4, 120)
@@ -391,7 +404,8 @@ class SettingsController(NSObject):
         self.btnCancelImp = _button(self.extraBox, "取消等待", b"cancelImport:", self, 374, 4, 90)
         self.btnCancelImp.setEnabled_(False)
         self.extraBox.setHidden_(True)
-        self.status = _label(acc, "", 28, _py(232, 36), 464, 36, 12)
+        self.status = _label(acc, "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。", 28, _py(308, 36), 464, 36, 12)
+        self._reload_accounts_ui(cfg)
 
         ntf = self.pageNotify
         _label(ntf, "刷新与通知", 28, _py(20, 22), 300, 22, 16)
@@ -509,6 +523,128 @@ class SettingsController(NSObject):
         except Exception:
             pass
 
+    def _reload_accounts_ui(self, cfg: dict[str, Any] | None = None) -> None:
+        from accounts import display_label, format_account_caption, list_accounts
+        from config import load_config
+
+        if cfg is None:
+            cfg = load_config()
+        accounts = list_accounts(cfg)
+        active_id = str(cfg.get("active_account_id") or "")
+        self._account_ids = [str(a.get("id") or "") for a in accounts]
+        self._switching_account = True
+        try:
+            self.accountPopup.removeAllItems()
+            if not accounts:
+                self.accountPopup.addItemWithTitle_("暂无账号")
+                self.accountPopup.setEnabled_(False)
+                self.accountHint.setStringValue_("请导入或粘贴 Token 添加账号。")
+                self.btnRename.setEnabled_(False)
+                self.btnDelete.setEnabled_(False)
+            else:
+                self.accountPopup.setEnabled_(True)
+                self.btnRename.setEnabled_(True)
+                self.btnDelete.setEnabled_(True)
+                select = 0
+                for i, acc in enumerate(accounts):
+                    title = display_label(acc)
+                    remaining = acc.get("last_remaining")
+                    if remaining is not None:
+                        try:
+                            title = f"{title}  ({float(remaining):.0f}%)"
+                        except (TypeError, ValueError):
+                            pass
+                    self.accountPopup.addItemWithTitle_(title)
+                    if str(acc.get("id") or "") == active_id:
+                        select = i
+                self.accountPopup.selectItemAtIndex_(select)
+                current = accounts[select] if 0 <= select < len(accounts) else accounts[0]
+                self.accountHint.setStringValue_(format_account_caption(current, is_active=True))
+        finally:
+            self._switching_account = False
+
+    def changeAccount_(self, _sender=None) -> None:
+        if self._switching_account:
+            return
+        from accounts import set_active_account
+        from config import load_config, save_config
+
+        idx = int(self.accountPopup.indexOfSelectedItem())
+        ids = list(getattr(self, "_account_ids", []) or [])
+        if idx < 0 or idx >= len(ids):
+            return
+        cfg = load_config()
+        if not set_active_account(cfg, ids[idx]):
+            return
+        save_config(cfg)
+        self._reload_accounts_ui(cfg)
+        self._notify_saved(cfg)
+        self.status.setStringValue_("已切换当前账号")
+
+    def renameAccount_(self, _sender=None) -> None:
+        from accounts import display_label, find_account, rename_account
+        from config import load_config, save_config
+
+        cfg = load_config()
+        aid = str(cfg.get("active_account_id") or "")
+        acc = find_account(cfg, aid)
+        if acc is None:
+            return
+        name = _prompt_text("重命名账号", "备注名称（例如 个人、公司）", str(acc.get("label") or display_label(acc)))
+        if name is None:
+            return
+        rename_account(cfg, aid, name)
+        save_config(cfg)
+        self._reload_accounts_ui(cfg)
+        self._notify_saved(cfg)
+
+    def deleteAccount_(self, _sender=None) -> None:
+        from accounts import display_label, find_account, remove_account
+        from config import load_config, save_config
+
+        cfg = load_config()
+        aid = str(cfg.get("active_account_id") or "")
+        acc = find_account(cfg, aid)
+        if acc is None:
+            return
+        if not _confirm("删除账号", f"确定删除「{display_label(acc)}」？不会退出 Cursor，只是从本工具移除。"):
+            return
+        remove_account(cfg, aid)
+        save_config(cfg)
+        self.tokenField.setStringValue_("")
+        self._reload_accounts_ui(cfg)
+        self._notify_saved(cfg)
+
+    def addToken_(self, _sender=None) -> None:
+        from accounts import upsert_account
+        from config import load_config, save_config
+        from cursor_api import CursorApiError, normalize_workos_token
+
+        raw = self.tokenField.stringValue().strip()
+        if not raw:
+            show_error_alert("添加账号", "请先粘贴 Token。")
+            return
+        try:
+            token = normalize_workos_token(raw)
+        except CursorApiError as err:
+            show_error_alert("添加账号", str(err))
+            return
+        self.tokenField.setStringValue_(token)
+        cfg = load_config()
+        _, created = upsert_account(cfg, token, activate=True)
+        save_config(cfg)
+        self._reload_accounts_ui(cfg)
+        self._notify_saved(cfg)
+        self.status.setStringValue_("已添加账号。" if created else "已更新已有账号。")
+
+    def _notify_saved(self, cfg: dict[str, Any]) -> None:
+        cb = getattr(self, "_on_saved", None)
+        if cb:
+            try:
+                cb(cfg)
+            except Exception as exc:
+                app_log(f"on_saved failed: {exc}")
+
     def focusTokenField(self) -> None:
         try:
             self.window.makeFirstResponder_(self.tokenField)
@@ -571,9 +707,10 @@ class SettingsController(NSObject):
         idle = not busy
         for btn in (
             getattr(self, "btnCursor", None),
+            getattr(self, "btnAddToken", None),
             getattr(self, "btnSafari", None),
             getattr(self, "btnFirefox", None),
-            self.btnCookie,
+            getattr(self, "btnCookie", None),
         ):
             if btn is not None:
                 btn.setEnabled_(idle)
@@ -598,12 +735,15 @@ class SettingsController(NSObject):
             error = None
             try:
                 from browser_auth import import_and_validate, start_browser_login_and_import
+                from accounts import existing_token_variants
+                from config import load_config
 
                 def on_progress(text: str) -> None:
                     message = text
                     _on_main(lambda: self.status.setStringValue_(message))
 
                 cancel = lambda: self._cancel_import
+                skip = existing_token_variants(load_config())
                 if open_browser:
                     result = start_browser_login_and_import(
                         timeout_sec=180.0,
@@ -616,9 +756,16 @@ class SettingsController(NSObject):
 
                     result = import_and_validate(
                         prefer_browsers=_default_prefer_browsers(prefer) if prefer else None,
+                        skip_tokens=skip or None,
                         should_cancel=cancel,
                         on_progress=on_progress,
                     )
+                    if skip and result is not None and not result.ok and result.message != "已取消":
+                        result = import_and_validate(
+                            prefer_browsers=_default_prefer_browsers(prefer) if prefer else None,
+                            should_cancel=cancel,
+                            on_progress=on_progress,
+                        )
             except Exception as exc:  # noqa: BLE001
                 error = exc
             done_result, done_error = result, error
@@ -637,8 +784,22 @@ class SettingsController(NSObject):
             return
         if result.ok:
             self.tokenField.setStringValue_(result.token)
-            self.status.setStringValue_(result.message)
-            self._save()
+            from accounts import upsert_account
+            from config import load_config, save_config
+
+            cfg = load_config()
+            _, created = upsert_account(
+                cfg,
+                result.token,
+                membership_type=str(getattr(result, "membership_type", "") or "") or None,
+                remaining=getattr(result, "remaining_percent", None),
+                activate=True,
+            )
+            save_config(cfg)
+            self._reload_accounts_ui(cfg)
+            self._notify_saved(cfg)
+            prefix = "已添加账号。" if created else "已更新已有账号。"
+            self.status.setStringValue_(f"{prefix}{result.message}")
             return
         short = (result.message or "导入失败").split("\n")[0]
         self.status.setStringValue_(short)
@@ -646,11 +807,19 @@ class SettingsController(NSObject):
             show_error_alert("导入失败", result.message)
 
     def _save(self) -> bool:
+        from accounts import list_accounts, upsert_account
         from config import load_config, save_config
-        from cursor_api import normalize_workos_token
+        from cursor_api import CursorApiError, normalize_workos_token
 
-        token = normalize_workos_token(self.tokenField.stringValue().strip())
-        self.tokenField.setStringValue_(token)
+        raw_token = self.tokenField.stringValue().strip()
+        token = ""
+        if raw_token:
+            try:
+                token = normalize_workos_token(raw_token)
+            except CursorApiError as err:
+                show_error_alert("错误", str(err))
+                return False
+            self.tokenField.setStringValue_(token)
         try:
             interval = int(self.intervalField.stringValue().strip())
         except ValueError:
@@ -672,12 +841,15 @@ class SettingsController(NSObject):
         mode_idx = int(self.modePopup.indexOfSelectedItem())
         display_mode = self._modes[mode_idx][0] if 0 <= mode_idx < len(self._modes) else "ring"
         new_cfg = load_config()
-        old_token = str(new_cfg.get("session_token") or "").strip()
         old_thr = list(new_cfg.get("alert_thresholds") or [])
         if parsed != old_thr:
             new_cfg["alert_notified_levels"] = []
             new_cfg["low_quota_notified"] = False
-        new_cfg["session_token"] = token
+            for acc in list_accounts(new_cfg):
+                acc["alert_notified_levels"] = []
+                acc["low_quota_notified"] = False
+        if token:
+            upsert_account(new_cfg, token, activate=True)
         new_cfg["refresh_interval_minutes"] = interval
         new_cfg["alert_thresholds"] = parsed
         new_cfg["low_quota_threshold"] = min(parsed) if parsed else 20
@@ -685,21 +857,50 @@ class SettingsController(NSObject):
         new_cfg["notify_exhaustion_risk"] = bool(self.exhaustBox.state())
         new_cfg["tray_display_mode"] = display_mode
         new_cfg["autostart_enabled"] = bool(self.autostartBox.state())
-        if token != old_token:
-            new_cfg["auth_error_notified"] = False
         save_config(new_cfg)
+        self._reload_accounts_ui(new_cfg)
         app_log("native settings saved")
-        cb = getattr(self, "_on_saved", None)
-        if cb:
-            try:
-                cb(new_cfg)
-            except Exception as exc:
-                app_log(f"on_saved failed: {exc}")
+        self._notify_saved(new_cfg)
         return True
 
 
 def _py(from_top: float, height: float) -> float:
     return _PAGE_H - from_top - height
+
+
+def _confirm(title: str, message: str) -> bool:
+    if not _HAS_APPKIT:
+        return False
+    try:
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        alert.addButtonWithTitle_("确定")
+        alert.addButtonWithTitle_("取消")
+        return int(alert.runModal()) == 1000
+    except Exception as exc:
+        app_log(f"confirm alert failed: {exc}")
+        return False
+
+
+def _prompt_text(title: str, message: str, initial: str) -> str | None:
+    if not _HAS_APPKIT:
+        return None
+    try:
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 280, 24))
+        field.setStringValue_(initial)
+        alert.setAccessoryView_(field)
+        alert.addButtonWithTitle_("确定")
+        alert.addButtonWithTitle_("取消")
+        if int(alert.runModal()) != 1000:
+            return None
+        return str(field.stringValue() or "")
+    except Exception as exc:
+        app_log(f"prompt alert failed: {exc}")
+        return None
 
 
 def _link_button(parent, title: str, action, target, x: float, y: float, w: float, h: float = 22):

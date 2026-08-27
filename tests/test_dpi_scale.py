@@ -185,7 +185,7 @@ class IdleMemoryTests(unittest.TestCase):
 
     def test_windows_spec_keeps_child_ui_modules(self) -> None:
         text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
-        for name in ("popup_ui", "popup_launch", "usage_snapshot", "settings_ui", "customtkinter"):
+        for name in ("popup_ui", "popup_launch", "usage_snapshot", "accounts", "settings_ui", "customtkinter"):
             self.assertIn(f"'{name}'", text)
 
     def test_usage_snapshot_roundtrip(self) -> None:

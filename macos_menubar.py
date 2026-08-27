@@ -184,6 +184,7 @@ def show_status(
     on_refresh: Callable[[], None] | None = None,
     on_open_spending: Callable[[], None] | None = None,
     on_open_settings: Callable[[], None] | None = None,
+    account_label: str | None = None,
     **_unused: Any,
 ) -> None:
     """打开或切换状态明细面板。可从菜单回调或后台线程调用。"""
@@ -201,6 +202,7 @@ def show_status(
                 on_refresh=on_refresh,
                 on_open_spending=on_open_spending,
                 on_open_settings=on_open_settings,
+                account_label=account_label,
             )
         except Exception as exc:  # noqa: BLE001
             app_log(f"show status failed: {exc}")
@@ -215,6 +217,7 @@ def update_status(
     usage: Any = None,
     error_message: str | None = None,
     updated_at: str | None = None,
+    account_label: str | None = None,
     **_unused: Any,
 ) -> None:
     ctrl = _STATUS
@@ -228,7 +231,7 @@ def update_status(
 
     def apply() -> None:
         try:
-            ctrl.apply_data(usage, error_message, updated_at)
+            ctrl.apply_data(usage, error_message, updated_at, account_label=account_label)
         except Exception as exc:
             app_log(f"update status failed: {exc}")
 
@@ -701,6 +704,7 @@ def _present(
     on_refresh: Callable[[], None] | None,
     on_open_spending: Callable[[], None] | None,
     on_open_settings: Callable[[], None] | None,
+    account_label: str | None = None,
 ) -> None:
     global _STATUS
     ctrl = _STATUS
@@ -722,8 +726,9 @@ def _present(
     ctrl._on_open_spending = on_open_spending
     ctrl._on_open_settings = on_open_settings
     ctrl._icon = icon
+    ctrl._account_label = account_label or ""
     ctrl.build()
-    ctrl.apply_data(usage, error_message, updated_at)
+    ctrl.apply_data(usage, error_message, updated_at, account_label=account_label)
     _STATUS = ctrl
     _front_panel(ctrl.window)
     _position_panel(ctrl.window, icon)
@@ -987,6 +992,8 @@ class StatusController(NSObject):
             self._on_open_settings = None
         if not hasattr(self, "_icon"):
             self._icon = None
+        if not hasattr(self, "_account_label"):
+            self._account_label = ""
 
         try:
             from AppKit import NSPanel, NSWindowStyleMaskNonactivatingPanel
@@ -1041,8 +1048,17 @@ class StatusController(NSObject):
                 pass
         self._host = host
 
-    def apply_data(self, usage, error_message: str | None, updated_at: str | None) -> None:
+    def apply_data(
+        self,
+        usage,
+        error_message: str | None,
+        updated_at: str | None,
+        account_label: str | None = None,
+    ) -> None:
         from cursor_api import format_token_count
+
+        if account_label is not None:
+            self._account_label = account_label
 
         view = self._host
         for sub in list(view.subviews()):
@@ -1061,7 +1077,10 @@ class StatusController(NSObject):
             _label(view, "%", 168, _y(54, 20), 28, 20, 14, secondary=True)
             _label(
                 view,
-                format_plan_caption(getattr(usage, "membership_type", "")),
+                format_plan_caption(
+                    getattr(usage, "membership_type", ""),
+                    getattr(self, "_account_label", "") or None,
+                ),
                 24,
                 _y(88, 18),
                 180,

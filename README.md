@@ -15,7 +15,8 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 近 7 日剩余趋势折线与日均消耗
 - Token 过期检测、一键打开设置并聚焦 Token 输入框
 - 多档额度告警（默认 50/20/5）与耗尽风险通知
-- 中文设置窗口（Token、刷新间隔、告警、通知、显示模式、开机自启）
+- **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警
+- 中文设置窗口（账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
 - 默认每 10 分钟刷新（可配置）
 - 开机自启（默认开启；Windows 写 Startup 快捷方式，macOS 写 LaunchAgent）
 
@@ -88,9 +89,9 @@ python3 main.py
 1. 托盘 / 菜单栏右键 → **设置…**
 2. 优先点 **从 Cursor 导入**（读取本机已登录的 Cursor 应用，不依赖浏览器 Cookie）
 3. 若未登录 Cursor 应用，再点 **Safari 登录** / **Firefox 登录**，在对应浏览器登录 [cursor.com](https://cursor.com/dashboard)
-4. 工具会校验用量并写入 Token
+4. 工具会校验用量并写入 Token（已有同一账号则更新，新账号会加入列表并切换为当前）
 
-若浏览器里已经登录，可直接点 **仅导入 Cookie**。
+若浏览器里已经登录，可直接点 **仅导入 Cookie**。同一浏览器通常只能登录一个 Cursor 账号；要加第二个号，请先在浏览器换号登录再导入，或手动粘贴另一个 Token。
 
 **Windows**：优先 Firefox；Chrome / Edge 部分新版可能启用 App-Bound Cookie 加密导致无法读取。
 
@@ -107,7 +108,7 @@ python3 main.py
 
 Windows：`%APPDATA%\CursorTokenTray\config.json`  
 macOS：`~/Library/Application Support/CursorTokenTray/config.json`  
-用量历史：同目录 `usage_history.jsonl`
+用量历史：同目录 `usage_history.<账号ID>.jsonl`（旧版单文件 `usage_history.jsonl` 会在首次启动时归到当时那个账号）
 
 ## 说明
 

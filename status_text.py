@@ -11,6 +11,7 @@ def format_summary_text(
     usage: UsageSnapshot | None,
     error_message: str | None,
     updated_at: str | None,
+    account_label: str | None = None,
 ) -> str:
     if error_message:
         return f"状态: {error_message} | 更新 {updated_at or '—'}"
@@ -22,8 +23,9 @@ def format_summary_text(
     tokens = ""
     if usage.total_tokens:
         tokens = f"消耗 {format_token_count(usage.total_tokens)} Token | "
+    plan = format_plan_caption(usage.membership_type, account_label)
     return (
-        f"剩余 {usage.remaining_percent:.1f}% | 计划 {usage.membership_type} | "
+        f"剩余 {usage.remaining_percent:.1f}% | {plan} | "
         f"{tokens}First-party {auto} | API {api} | 预计可用 {est} | 更新 {updated_at or '—'}"
     )
 
@@ -69,13 +71,16 @@ def status_pill_text(remaining: float | None, *, error: bool = False) -> str:
     return "状态良好"
 
 
-def format_plan_caption(membership: str | None) -> str:
+def format_plan_caption(membership: str | None, account_label: str | None = None) -> str:
     name = (membership or "").strip() or "—"
-    if name == "—":
-        return "—"
-    if "套餐" in name:
-        return name
-    return f"{name} 套餐"
+    if name != "—" and "套餐" not in name:
+        name = f"{name} 套餐"
+    label = (account_label or "").strip()
+    if label and label.lower() not in {name.lower(), (membership or "").strip().lower()}:
+        if name == "—":
+            return label
+        return f"{label} · {name}"
+    return name
 
 
 def format_estimate_caption(usage: UsageSnapshot) -> str:
@@ -102,6 +107,7 @@ def build_status_lines(
     usage: UsageSnapshot | None,
     error_message: str | None,
     updated_at: str | None = None,
+    account_label: str | None = None,
 ) -> list[tuple[str, str]]:
     """状态明细行（Windows 飞出层 / macOS 原生面板共用）。"""
     if error_message:
@@ -111,8 +117,12 @@ def build_status_lines(
 
     rows: list[tuple[str, str]] = [
         ("剩余", f"{usage.remaining_percent:.1f}%（已用 {usage.used_percent:.1f}%）"),
-        ("计划", usage.membership_type),
     ]
+    label = (account_label or "").strip()
+    memb = (usage.membership_type or "").strip()
+    if label and label.lower() != memb.lower():
+        rows.append(("账号", label))
+    rows.append(("计划", memb))
     if usage.total_tokens:
         rows.append(("消耗 Token", format_token_count(usage.total_tokens)))
     if usage.auto_percent_used is not None or usage.api_percent_used is not None:
