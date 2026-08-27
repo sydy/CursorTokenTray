@@ -419,6 +419,19 @@ class SettingsProcessTests(unittest.TestCase):
         cmd2 = settings_command(executable=exe, frozen=True, focus_token=True)
         self.assertEqual(cmd2, [exe, "--settings", "--focus-token"])
 
+    def test_popup_mode_and_command(self) -> None:
+        from popup_launch import is_popup_process, popup_command, popup_mode
+
+        self.assertIsNone(popup_mode(argv=[], env={}))
+        self.assertEqual(popup_mode(argv=["--status"], env={}), "status")
+        self.assertEqual(popup_mode(argv=["--menu"], env={}), "menu")
+        self.assertEqual(popup_mode(argv=[], env={"CURSORTOKEN_MODE": "menu"}), "menu")
+        self.assertTrue(is_popup_process(argv=["--status"], env={}))
+        cmd = popup_command("status", executable="/usr/bin/python3", script="/tmp/main.py", frozen=False)
+        self.assertEqual(cmd, ["/usr/bin/python3", "/tmp/main.py", "--status"])
+        exe = "/tmp/CursorTokenTray.exe"
+        self.assertEqual(popup_command("menu", executable=exe, frozen=True), [exe, "--menu"])
+
     def test_main_settings_flag_still_rejects_linux(self) -> None:
         if sys.platform in ("win32", "darwin"):
             self.skipTest("only on linux CI")
@@ -427,6 +440,18 @@ class SettingsProcessTests(unittest.TestCase):
         old = sys.argv
         try:
             sys.argv = ["main.py", "--settings"]
+            self.assertEqual(main.main(), 1)
+        finally:
+            sys.argv = old
+
+    def test_main_status_flag_still_rejects_linux(self) -> None:
+        if sys.platform in ("win32", "darwin"):
+            self.skipTest("only on linux CI")
+        import main
+
+        old = sys.argv
+        try:
+            sys.argv = ["main.py", "--status"]
             self.assertEqual(main.main(), 1)
         finally:
             sys.argv = old

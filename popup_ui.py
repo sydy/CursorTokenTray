@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -318,7 +319,12 @@ class PopupManager:
         except Exception:
             pass
 
-    def show_menu(self, actions: list[MenuAction]) -> None:
+    def show_menu(
+        self,
+        actions: list[MenuAction],
+        *,
+        on_pick: Callable[[str], None] | None = None,
+    ) -> None:
         with self._show_lock:
             if self.status_visible or self.menu_visible:
                 if not self.close_and_wait(2.5):
@@ -342,6 +348,7 @@ class PopupManager:
                     manager=self,
                     quit_root_on_close=False,
                     on_closed=closed.set,
+                    on_pick=on_pick,
                 )
                 with self._lock:
                     self._popup_menu = menu
@@ -1329,6 +1336,7 @@ class _VectorMenu:
         *,
         quit_root_on_close: bool = True,
         on_closed: Callable[[], None] | None = None,
+        on_pick: Callable[[str], None] | None = None,
     ) -> None:
         import tkinter.font as tkfont
 
@@ -1347,6 +1355,7 @@ class _VectorMenu:
         self._manager = manager
         self._quit_root_on_close = quit_root_on_close
         self._on_closed = on_closed
+        self._on_pick = on_pick
         self._photos: list[ImageTk.PhotoImage] = []
         self._closing = False
         # 必须以 PopupManager 的 generation 为准；设置 Toplevel 上没有该标记
@@ -1426,6 +1435,11 @@ class _VectorMenu:
             win.after(120, self._watch_gen)
 
     def _invoke_action(self, action: MenuAction) -> None:
+        if self._on_pick is not None:
+            try:
+                self._on_pick(action.key)
+            except Exception:
+                pass
         self._close()
         delay = 0.25 if action.key == "quit" else 0.05
 
@@ -1565,3 +1579,120 @@ def _menu_icon(kind: str, *, danger: bool = False, size: int = 16) -> Image.Imag
         draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=color, width=stroke)
 
     return img.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def _history_payload() -> tuple[list[float], float | None]:
+    import usage_history
+
+    points = usage_history.load_recent(7)
+    return [p.remaining for p in points], usage_history.daily_avg_burn(7)
+
+
+def run_status_main() -> int:
+    """`--status`：短命飞出层进程，退出即释放 CTk。"""
+    from app_icon import set_app_user_model_id
+    from config import load_config
+    from cursor_api import BILLING_URL, fetch_usage_summary
+    from settings_launch import open_settings_async
+    from usage_snapshot import read_status_snapshot, write_status_snapshot
+
+    enable_dpi_awareness()
+    set_app_user_model_id()
+    usage, err, updated = read_status_snapshot()
+    state = {"usage": usage, "err": err, "updated": updated}
+    hist, burn = _history_payload()
+    closed = threading.Event()
+    mgr = PopupManager()
+
+    def _push(next_usage, next_err, next_updated) -> None:
+        state["usage"] = next_usage
+        state["err"] = next_err
+        state["updated"] = next_updated
+        h, b = _history_payload()
+        mgr.update_status(
+            usage=next_usage,
+            error_message=next_err,
+            updated_at=next_updated,
+            history_values=h,
+            daily_burn=b,
+        )
+        write_status_snapshot(usage=next_usage, error_message=next_err, updated_at=next_updated)
+
+    def on_refresh() -> None:
+        token = str((load_config().get("session_token") or "")).strip()
+        if not token:
+            _push(None, "未配置 Token，请打开设置粘贴", None)
+            return
+        try:
+            snap = fetch_usage_summary(token)
+            when = datetime.now().strftime("%H:%M:%S")
+            try:
+                import usage_history
+
+                usage_history.append(
+                    remaining=snap.remaining_percent,
+                    auto=snap.auto_percent_used,
+                    api=snap.api_percent_used,
+                )
+            except Exception:
+                pass
+            _push(snap, None, when)
+        except Exception as exc:  # noqa: BLE001
+            _push(None, str(exc), datetime.now().strftime("%H:%M:%S"))
+
+    def on_copy() -> None:
+        text = format_summary_text(state["usage"], state["err"], state["updated"])
+        root = mgr.tk_root
+        if root is None:
+            return
+        try:
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            root.update_idletasks()
+        except Exception:
+            pass
+
+    if usage is None and err is None:
+        threading.Thread(target=on_refresh, daemon=True, name="status-boot-refresh").start()
+
+    mgr.show_status(
+        usage=usage,
+        error_message=err,
+        updated_at=updated,
+        from_hover=False,
+        on_closed=closed.set,
+        actions=StatusActions(
+            on_open_settings=lambda: open_settings_async(focus_token=True, start_import=True),
+            on_refresh=on_refresh,
+            on_open_spending=lambda: __import__("webbrowser").open(BILLING_URL),
+            on_copy_summary=on_copy,
+        ),
+        history_values=hist,
+        daily_burn=burn,
+    )
+    closed.wait(timeout=3600)
+    return 0
+
+
+def run_menu_main() -> int:
+    """`--menu`：短命矢量菜单，把选中的 key 写到 stdout。"""
+    from app_icon import set_app_user_model_id
+
+    enable_dpi_awareness()
+    set_app_user_model_id()
+    chosen: list[str] = []
+    mgr = PopupManager()
+    actions = [
+        MenuAction("status", "显示状态", "status", lambda: None),
+        MenuAction("refresh", "立即刷新", "refresh", lambda: None),
+        MenuAction("web", "打开用量账单", "web", lambda: None),
+        MenuAction("import", "导入 Token…", "settings", lambda: None),
+        MenuAction("settings", "设置…", "settings", lambda: None),
+        MenuAction("sep", "", "", lambda: None),
+        MenuAction("quit", "退出", "quit", lambda: None, danger=True),
+    ]
+    mgr.show_menu(actions, on_pick=chosen.append)
+    key = chosen[0] if chosen else ""
+    sys.stdout.write(key)
+    sys.stdout.flush()
+    return 0

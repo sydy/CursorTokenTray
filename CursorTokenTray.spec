@@ -28,6 +28,8 @@ a = Analysis(
         'certifi',
         # 托盘空闲时按需 import，分析器扫不到，必须显式打进包
         'popup_ui',
+        'popup_launch',
+        'usage_snapshot',
         'settings_ui',
         'ui_ctk',
         'win11_settings',

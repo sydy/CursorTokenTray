@@ -162,30 +162,70 @@ class IconBudgetTests(unittest.TestCase):
 
 
 class IdleMemoryTests(unittest.TestCase):
-    def test_tray_app_defers_windows_ui_imports(self) -> None:
+    def test_tray_app_never_imports_windows_ui(self) -> None:
         text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
-        header = text.split("class TrayApp")[0]
-        self.assertNotIn("from popup_ui import", header)
-        self.assertNotIn("from settings_ui import", header)
-        self.assertIn("def _ensure_windows_ui", text)
+        self.assertNotIn("from popup_ui import", text)
+        self.assertNotIn("from settings_ui import", text)
+        self.assertNotIn("def _ensure_windows_ui", text)
         self.assertIn("open_settings_async", text)
-        apply = text.split("def _apply_ui")[1]
-        self.assertIn("status_visible", apply)
+        self.assertIn("open_status_async", text)
+        self.assertIn("run_menu_and_pick", text)
 
-    def test_popup_manager_drops_tk_when_idle(self) -> None:
+    def test_popup_process_entrypoints_exist(self) -> None:
         text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
+        self.assertIn("def run_status_main", text)
+        self.assertIn("def run_menu_main", text)
         self.assertIn("def _drop_tk_root_if_idle", text)
-        self.assertNotIn("EmptyWorkingSet", text)
-        self.assertNotIn("IDLE_TK_RELEASE_SEC", text)
 
     def test_settings_ui_does_not_keep_tray_tk(self) -> None:
         text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
         self.assertNotIn("schedule_idle_release", text)
 
-    def test_windows_spec_keeps_lazy_ui_modules(self) -> None:
+    def test_windows_spec_keeps_child_ui_modules(self) -> None:
         text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
-        for name in ("popup_ui", "settings_ui", "customtkinter"):
+        for name in ("popup_ui", "popup_launch", "usage_snapshot", "settings_ui", "customtkinter"):
             self.assertIn(f"'{name}'", text)
+
+    def test_usage_snapshot_roundtrip(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        import usage_snapshot
+        from cursor_api import ModelTokenUsage, UsageSnapshot
+
+        snap = UsageSnapshot(
+            used_percent=20.0,
+            remaining_percent=80.0,
+            auto_percent_used=10.0,
+            api_percent_used=5.0,
+            total_percent_used=15.0,
+            membership_type="pro",
+            billing_cycle_start=None,
+            billing_cycle_end=None,
+            days_remaining=12,
+            days_elapsed=3.5,
+            estimated_usable_days=20.0,
+            raw={"skip": True},
+            total_tokens=1234,
+            model_usages=(ModelTokenUsage("auto", 10, 0.1, 2, 4.0),),
+        )
+        old_path = usage_snapshot.SNAPSHOT_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_snapshot.SNAPSHOT_PATH = Path(tmp) / "last_status.json"
+            try:
+                usage_snapshot.write_status_snapshot(
+                    usage=snap, error_message=None, updated_at="12:00:00"
+                )
+                got, err, updated = usage_snapshot.read_status_snapshot()
+            finally:
+                usage_snapshot.SNAPSHOT_PATH = old_path
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertEqual(got.remaining_percent, 80.0)
+        self.assertEqual(got.total_tokens, 1234)
+        self.assertEqual(got.model_usages[0].name, "auto")
+        self.assertIsNone(err)
+        self.assertEqual(updated, "12:00:00")
 
     def test_pr_builds_skip_artifact_upload(self) -> None:
         text = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
