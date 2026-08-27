@@ -79,9 +79,9 @@ python3 main.py
 2. 在 `windows-latest` 打出 `CursorTokenTray-windows.zip`（onedir + exe）
 3. 在 `macos-latest` 打出 `CursorTokenTray-macos.zip`（`.app`）
 
-产物在对应 run 的 **Artifacts** 里下载。打 `v*` 标签（例如 `v1.0.0`）还会自动创建 GitHub Release 并挂上这两个 zip。
-
-也可在仓库 **Actions** 页点 **Run workflow** 手动触发。
+推送 `main` 和 PR **不上传** Actions 制品（免费仓库配额约 500MB，旧 zip 会把合入 CI 打红）。  
+打 `v*` 标签（例如 `v1.0.0`）会创建 GitHub Release，并由编译 job 直接挂上这两个 zip（不走制品存储）。  
+也可在仓库 **Actions** 页点 **Run workflow** 手动触发；配额未满时会把 zip 传到该次 run 的 Artifacts（保留 1 天）。
 
 ## 获取 Token
 
