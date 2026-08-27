@@ -87,8 +87,18 @@ dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-
 
 ### macOS
 
-1. 下载 `CursorTokenTray-macos.zip`，将 `.app` 拖到「应用程序」
-2. 开机自启会注册本机登录项（`SMAppService`）
+1. 下载 `CursorTokenTray-macos.zip`，解压后将 `.app` 拖到「应用程序」（也可先放在下载文件夹）
+2. 双击打开。若弹出「已损坏 / 移到废纸篓」：**点「取消」，不要移到废纸篓**
+3. 打开 **系统设置 → 隐私与安全性**，拉到下面的安全性，点 **「仍要打开」**，再输入本机密码。这就是以前右键打开时那次放行，只是 Sequoia 以后不再允许用右键绕过
+4. 若设置里没有「仍要打开」，再双击 zip 里的 **`首次打开.command`**（系统会用「来自互联网，要打开吗」那种确认）。仍不行再在终端执行：
+
+```bash
+xattr -cr /Applications/CursorTokenTray.app
+open /Applications/CursorTokenTray.app
+```
+
+路径按实际位置改。放行一次之后就可以正常打开。  
+5. 开机自启会注册本机登录项（`SMAppService`）
 
 本地打包：`./macos/scripts/package_app.sh`
 

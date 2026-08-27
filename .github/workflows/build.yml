@@ -113,6 +113,7 @@ jobs:
           body: |
             最新 `main` 构建（`${{ github.sha }}`），随每次合入覆盖更新。
             Windows 为 .NET 8 单文件 exe，macOS 为 Swift `.app`。
+            从浏览器下载的 macOS 包若提示「已损坏」，请双击 zip 内的「首次打开.command」，或执行 `xattr -cr CursorTokenTray.app`。
             正式版请打 `v*` 标签。
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -133,7 +134,7 @@ jobs:
           chmod +x macos/scripts/package_app.sh
           ./macos/scripts/package_app.sh
       - name: Zip .app
-        run: ditto -c -k --keepParent macos/dist/CursorTokenTray.app CursorTokenTray-macos.zip
+        run: ditto -c -k macos/dist/release CursorTokenTray-macos.zip
       - uses: actions/upload-artifact@v6
         if: github.event_name != 'pull_request'
         continue-on-error: true
@@ -157,6 +158,7 @@ jobs:
           body: |
             最新 `main` 构建（`${{ github.sha }}`），随每次合入覆盖更新。
             Windows 为 .NET 8 单文件 exe，macOS 为 Swift `.app`。
+            从浏览器下载的 macOS 包若提示「已损坏」，请双击 zip 内的「首次打开.command」，或执行 `xattr -cr CursorTokenTray.app`。
             正式版请打 `v*` 标签。
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
