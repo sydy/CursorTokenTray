@@ -11,6 +11,15 @@ from typing import Any
 
 import pystray
 
+from accounts import (
+    active_account,
+    apply_snapshot_to_account,
+    clone_accounts,
+    display_label,
+    list_accounts,
+    set_active_account,
+    sync_legacy_fields,
+)
 from config import APP_NAME, load_config, save_config
 from cursor_api import (
     BILLING_URL,
@@ -49,15 +58,7 @@ class TrayApp:
         # Windows：隐藏 default 供左键，右键走自定义矢量菜单。
         # macOS：原生菜单栏菜单；左键 default 打开状态飞出层。
         if IS_MAC:
-            menu = pystray.Menu(
-                pystray.MenuItem("显示状态", self._action_open_status, default=True),
-                pystray.MenuItem("立即刷新", self._action_refresh),
-                pystray.MenuItem("打开用量账单", self._action_open_spending),
-                pystray.MenuItem("导入 Token…", self._action_open_settings_focus),
-                pystray.MenuItem("设置…", self._action_open_settings),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("退出", self._action_quit),
-            )
+            menu = self._build_macos_menu()
         else:
             menu = pystray.Menu(
                 pystray.MenuItem(
@@ -74,6 +75,78 @@ class TrayApp:
             menu=menu,
         )
 
+    def _build_macos_menu(self) -> pystray.Menu:
+        return pystray.Menu(
+            pystray.MenuItem("显示状态", self._action_open_status, default=True),
+            pystray.MenuItem("立即刷新", self._action_refresh),
+            pystray.MenuItem("打开用量账单", self._action_open_spending),
+            pystray.MenuItem("切换账号", pystray.Menu(lambda: tuple(self._account_menu_items()))),
+            pystray.MenuItem("导入 Token…", self._action_open_settings_focus),
+            pystray.MenuItem("设置…", self._action_open_settings),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出", self._action_quit),
+        )
+
+    def _account_menu_items(self):
+        with self._lock:
+            cfg = self.config
+        accounts = list_accounts(cfg)
+        if not accounts:
+            return (pystray.MenuItem("暂无账号", None, enabled=False),)
+        items = []
+        for acc in accounts:
+            aid = str(acc.get("id") or "")
+            remaining = acc.get("last_remaining")
+            title = display_label(acc)
+            if remaining is not None:
+                try:
+                    title = f"{title}  {float(remaining):.0f}%"
+                except (TypeError, ValueError):
+                    pass
+            items.append(
+                pystray.MenuItem(
+                    title,
+                    self._make_switch_handler(aid),
+                    checked=lambda _item, i=aid: i
+                    == str((self.config or {}).get("active_account_id") or ""),
+                    radio=True,
+                )
+            )
+        return tuple(items)
+
+    def _make_switch_handler(self, account_id: str):
+        def _handler(_icon=None, _item=None) -> None:
+            self._switch_account(account_id)
+
+        return _handler
+
+    def _switch_account(self, account_id: str) -> None:
+        cfg = load_config()
+        current = str(cfg.get("active_account_id") or "")
+        if current == account_id:
+            return
+        if not set_active_account(cfg, account_id):
+            return
+        save_config(cfg)
+        app_log(f"switch account {current} -> {account_id}")
+        if not IS_MAC:
+            try:
+                from popup_launch import close_popup_processes
+
+                close_popup_processes()
+            except Exception:
+                pass
+        self._on_config_saved(cfg)
+
+    def _rebuild_macos_menu(self) -> None:
+        if not IS_MAC:
+            return
+        try:
+            self.icon.menu = self._build_macos_menu()
+            self.icon.update_menu()
+        except Exception:
+            pass
+
     def run(self) -> None:
         try:
             from autostart import set_autostart
@@ -81,6 +154,13 @@ class TrayApp:
             set_autostart(bool(self.config.get("autostart_enabled", True)))
         except Exception:
             pass
+
+        acc = active_account(self.config)
+        if acc:
+            try:
+                usage_history.adopt_legacy_history(str(acc.get("id") or ""))
+            except Exception:
+                pass
 
         self._worker = threading.Thread(target=self._loop, daemon=True)
         self._worker.start()
@@ -166,6 +246,8 @@ class TrayApp:
             self._open_settings(focus_token=False)
         elif key == "quit":
             self._action_quit()
+        elif isinstance(key, str) and key.startswith("switch:"):
+            self._switch_account(key.split(":", 1)[1].strip())
 
     def _open_status_bg(self) -> None:
         if IS_MAC:
@@ -179,6 +261,7 @@ class TrayApp:
                 on_refresh=self._action_refresh,
                 on_open_spending=self._action_open_spending,
                 on_open_settings=self._action_open_settings,
+                account_label=self._active_label(),
             )
             return
         from popup_launch import open_status_async
@@ -378,7 +461,9 @@ class TrayApp:
 
         prev_token = (prev.get("session_token") or "").strip()
         new_token = (cfg.get("session_token") or "").strip()
-        need_api = prev_token != new_token
+        prev_active = str(prev.get("active_account_id") or "")
+        new_active = str(cfg.get("active_account_id") or "")
+        need_api = prev_token != new_token or prev_active != new_active
         interval_changed = int(prev.get("refresh_interval_minutes", 10)) != int(
             cfg.get("refresh_interval_minutes", 10)
         )
@@ -396,6 +481,7 @@ class TrayApp:
                     pass
             try:
                 self._apply_ui()
+                self._rebuild_macos_menu()
             except Exception:
                 pass
             if need_api or interval_changed:
@@ -419,10 +505,10 @@ class TrayApp:
 
     def _do_refresh(self) -> None:
         with self._lock:
-            cfg = dict(self.config)
+            cfg = clone_accounts(self.config)
 
-        token = (cfg.get("session_token") or "").strip()
-        if not token:
+        accounts = list_accounts(cfg)
+        if not accounts:
             with self._lock:
                 self.usage = None
                 self.error_message = "未配置 Token，请打开设置粘贴"
@@ -431,56 +517,85 @@ class TrayApp:
             self._apply_ui()
             return
 
-        try:
-            snapshot = fetch_usage_summary(token)
-            with self._lock:
-                self.usage = snapshot
-                self.error_message = None
-                self.updated_at = datetime.now().strftime("%H:%M:%S")
-            self._clear_auth_error_flag(cfg)
+        active_id = str(cfg.get("active_account_id") or "")
+        ordered = sorted(accounts, key=lambda a: 0 if a.get("id") == active_id else 1)
+        by_id = {str(a.get("id") or ""): a for a in cfg["accounts"] if isinstance(a, dict)}
+
+        for acc in ordered:
+            if self._stop.is_set():
+                break
+            aid = str(acc.get("id") or "")
+            live = by_id.get(aid, acc)
+            token = str(live.get("token") or "").strip()
+            is_active = aid == active_id
+            if not token:
+                continue
             try:
-                usage_history.append(
+                snapshot = fetch_usage_summary(token, timeout=20.0)
+                when = datetime.now().strftime("%H:%M:%S")
+                apply_snapshot_to_account(
+                    live,
+                    membership_type=snapshot.membership_type,
                     remaining=snapshot.remaining_percent,
-                    auto=snapshot.auto_percent_used,
-                    api=snapshot.api_percent_used,
+                    error="",
+                    updated_at=when,
                 )
-            except Exception:
-                pass
-            self._maybe_notify_alerts(cfg, snapshot)
-        except CursorApiError as err:
-            with self._lock:
-                self.usage = None
-                self.error_message = str(err)
-                self.updated_at = datetime.now().strftime("%H:%M:%S")
-            if err.is_auth_error or is_auth_error_message(str(err)):
-                self._maybe_notify_auth_error(cfg, str(err))
-        except Exception as err:  # noqa: BLE001
-            with self._lock:
-                self.usage = None
-                self.error_message = f"刷新失败: {err}"
-                self.updated_at = datetime.now().strftime("%H:%M:%S")
+                live["auth_error_notified"] = False
+                try:
+                    usage_history.append(
+                        remaining=snapshot.remaining_percent,
+                        auto=snapshot.auto_percent_used,
+                        api=snapshot.api_percent_used,
+                        account_id=aid,
+                    )
+                except Exception:
+                    pass
+                self._maybe_notify_alerts(cfg, live, snapshot)
+                if is_active:
+                    with self._lock:
+                        self.usage = snapshot
+                        self.error_message = None
+                        self.updated_at = when
+            except CursorApiError as err:
+                when = datetime.now().strftime("%H:%M:%S")
+                apply_snapshot_to_account(live, error=str(err), updated_at=when)
+                if err.is_auth_error or is_auth_error_message(str(err)):
+                    self._maybe_notify_auth_error(cfg, live, str(err))
+                if is_active:
+                    with self._lock:
+                        self.usage = None
+                        self.error_message = str(err)
+                        self.updated_at = when
+            except Exception as err:  # noqa: BLE001
+                when = datetime.now().strftime("%H:%M:%S")
+                apply_snapshot_to_account(live, error=f"刷新失败: {err}", updated_at=when)
+                if is_active:
+                    with self._lock:
+                        self.usage = None
+                        self.error_message = f"刷新失败: {err}"
+                        self.updated_at = when
 
-        self._apply_ui()
-
-    def _clear_auth_error_flag(self, cfg: dict[str, Any]) -> None:
-        if cfg.get("auth_error_notified"):
-            cfg["auth_error_notified"] = False
-            save_config(cfg)
-            with self._lock:
-                self.config = cfg
-
-    def _maybe_notify_auth_error(self, cfg: dict[str, Any], message: str) -> None:
-        if not cfg.get("notify_enabled", True):
-            return
-        if cfg.get("auth_error_notified"):
-            return
-        self._notify("Token 需要更新", message)
-        cfg["auth_error_notified"] = True
+        sync_legacy_fields(cfg)
         save_config(cfg)
         with self._lock:
             self.config = cfg
+        self._rebuild_macos_menu()
+        self._apply_ui()
 
-    def _maybe_notify_alerts(self, cfg: dict[str, Any], snapshot: UsageSnapshot) -> None:
+    def _maybe_notify_auth_error(self, cfg: dict[str, Any], account: dict[str, Any], message: str) -> None:
+        if not cfg.get("notify_enabled", True):
+            return
+        if account.get("auth_error_notified"):
+            return
+        name = display_label(account)
+        title = "Token 需要更新"
+        body = f"账号「{name}」：{message}" if name else message
+        self._notify(title, body)
+        account["auth_error_notified"] = True
+
+    def _maybe_notify_alerts(
+        self, cfg: dict[str, Any], account: dict[str, Any], snapshot: UsageSnapshot
+    ) -> None:
         if not cfg.get("notify_enabled", True):
             return
 
@@ -489,49 +604,44 @@ class TrayApp:
             {int(x) for x in (cfg.get("alert_thresholds") or [50, 20, 5]) if 1 <= int(x) <= 100},
             reverse=True,
         )
-        notified = {int(x) for x in (cfg.get("alert_notified_levels") or [])}
+        notified = {int(x) for x in (account.get("alert_notified_levels") or [])}
         changed = False
+        name = display_label(account)
+        who = f"账号「{name}」" if name else "套餐"
 
-        # 剩余回升超过某档 → 清除该档去重，允许再次通知
         still = {lvl for lvl in notified if remaining < lvl}
         if still != notified:
             notified = still
             changed = True
 
-        # 新跌破的档位：只通知「刚跌破」的最高那一档（避免一次刷多条）
         newly = [lvl for lvl in thresholds if remaining < lvl and lvl not in notified]
         if newly:
             hit = max(newly)
             self._notify(
                 "额度告警",
-                f"套餐剩余 {remaining:.1f}%，已低于 {hit}% 档。",
+                f"{who}剩余 {remaining:.1f}%，已低于 {hit}% 档。",
             )
             notified.add(hit)
             changed = True
 
-        # 耗尽风险
         if cfg.get("notify_exhaustion_risk", True):
             at_risk = self._is_exhaustion_risk(snapshot)
-            was = bool(cfg.get("exhaustion_notified", False))
+            was = bool(account.get("exhaustion_notified", False))
             if at_risk and not was:
                 self._notify(
                     "耗尽风险",
-                    f"按当前速度可能提前耗尽（剩余 {remaining:.1f}%）。",
+                    f"{who}按当前速度可能提前耗尽（剩余 {remaining:.1f}%）。",
                 )
-                cfg["exhaustion_notified"] = True
+                account["exhaustion_notified"] = True
                 changed = True
             elif not at_risk and was:
-                cfg["exhaustion_notified"] = False
+                account["exhaustion_notified"] = False
                 changed = True
 
         if changed:
-            cfg["alert_notified_levels"] = sorted(notified)
-            # 兼容旧字段
+            account["alert_notified_levels"] = sorted(notified)
             min_thr = min(thresholds) if thresholds else 20
-            cfg["low_quota_notified"] = remaining < min_thr
-            save_config(cfg)
-            with self._lock:
-                self.config = cfg
+            account["low_quota_notified"] = remaining < min_thr
 
     @staticmethod
     def _is_exhaustion_risk(snapshot: UsageSnapshot) -> bool:
@@ -604,13 +714,20 @@ class TrayApp:
             except Exception as exc:
                 app_log(f"set menubar icon failed: {exc}")
             if usage is not None:
-                self.icon.title = f"{usage.remaining_percent:.0f}%"
+                label = self._active_label()
+                pct = f"{usage.remaining_percent:.0f}%"
+                self.icon.title = f"{label} · {pct}" if label else pct
             elif err and str(err).startswith("未配置"):
                 self.icon.title = "Token"
             else:
                 self.icon.title = "Token"
             try:
-                update_macos_status(usage=usage, error_message=err, updated_at=updated)
+                update_macos_status(
+                    usage=usage,
+                    error_message=err,
+                    updated_at=updated,
+                    account_label=self._active_label(),
+                )
             except Exception as exc:
                 app_log(f"update macos status failed: {exc}")
         else:
@@ -633,11 +750,21 @@ class TrayApp:
                     pass
             self._write_status_snapshot()
 
+    def _active_label(self) -> str:
+        with self._lock:
+            acc = active_account(self.config)
+        return display_label(acc)
+
     def _write_status_snapshot(self) -> None:
         usage, err, updated = self._ui_snapshot()
         try:
             from usage_snapshot import write_status_snapshot
 
-            write_status_snapshot(usage=usage, error_message=err, updated_at=updated)
+            write_status_snapshot(
+                usage=usage,
+                error_message=err,
+                updated_at=updated,
+                account_label=self._active_label(),
+            )
         except Exception:
             pass

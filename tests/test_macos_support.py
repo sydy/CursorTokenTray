@@ -614,6 +614,7 @@ class StatusTextTests(unittest.TestCase):
         self.assertEqual(status_pill_text(None, error=True), "异常")
         self.assertEqual(format_plan_caption("pro"), "pro 套餐")
         self.assertEqual(format_plan_caption("Pro 套餐"), "Pro 套餐")
+        self.assertEqual(format_plan_caption("Pro", "公司"), "公司 · Pro 套餐")
         snap = UsageSnapshot(
             used_percent=36.0,
             remaining_percent=64.0,

@@ -16,11 +16,13 @@ def write_status_snapshot(
     usage: UsageSnapshot | None,
     error_message: str | None,
     updated_at: str | None,
+    account_label: str | None = None,
 ) -> None:
     ensure_config_dir()
     payload = {
         "error_message": error_message,
         "updated_at": updated_at,
+        "account_label": account_label or "",
         "usage": None if usage is None else _usage_to_dict(usage),
     }
     try:
@@ -43,6 +45,18 @@ def read_status_snapshot() -> tuple[UsageSnapshot | None, str | None, str | None
     usage_raw = raw.get("usage")
     usage = _usage_from_dict(usage_raw) if isinstance(usage_raw, dict) else None
     return usage, (None if err is None else str(err)), (None if updated is None else str(updated))
+
+
+def read_account_label() -> str:
+    if not SNAPSHOT_PATH.exists():
+        return ""
+    try:
+        raw = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("account_label") or "")
 
 
 def _usage_to_dict(usage: UsageSnapshot) -> dict[str, Any]:

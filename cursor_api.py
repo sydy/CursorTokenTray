@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import ssl
@@ -187,6 +188,40 @@ def session_token_variants(token: str) -> list[str]:
                 add(f"{sub}%3A%3A{jwt}")
                 add(f"{sub}::{jwt}")
     return variants[:4]
+
+
+def account_id_from_token(token: str) -> str:
+    """从 WorkOS Token 提取稳定账号 ID（JWT user_id，否则哈希）。"""
+    try:
+        value = normalize_workos_token(token)
+    except CursorApiError:
+        value = (token or "").strip()
+    if not value:
+        return ""
+
+    jwt = value
+    prefix = ""
+    for sep in ("%3A%3A", "%3a%3a", "::"):
+        if sep in value:
+            prefix, jwt = value.split(sep, 1)
+            break
+    if _looks_like_jwt(jwt):
+        uid = _extract_user_id_from_jwt(jwt)
+        if uid:
+            return _safe_account_id(uid)
+    if prefix.strip():
+        return _safe_account_id(prefix.split("|")[-1])
+    if _looks_like_jwt(value):
+        uid = _extract_user_id_from_jwt(value)
+        if uid:
+            return _safe_account_id(uid)
+    digest = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"tok_{digest}"
+
+
+def _safe_account_id(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value or "").strip("._-")
+    return (cleaned or "account")[:80]
 
 
 def fetch_usage_summary(session_token: str, timeout: float = 30.0) -> UsageSnapshot:

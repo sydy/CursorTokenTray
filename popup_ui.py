@@ -851,7 +851,10 @@ class _StatusCard:
             sub = f"已用 {usage.used_percent:.1f}%"
             if usage.total_tokens:
                 sub = f"{sub} · {format_token_count(usage.total_tokens)} Token"
-            if memb:
+            acc_name = _current_account_label()
+            if acc_name:
+                sub = f"{sub} · {acc_name}"
+            if memb and memb.lower() != acc_name.lower():
                 sub = f"{sub} · {memb}"
             ctk.CTkLabel(text_col, text=sub, text_color=self.FG_TER, font=ctk.CTkFont(size=11), anchor="w").pack(
                 fill="x", pady=(5, 0)
@@ -928,7 +931,12 @@ class _StatusCard:
         if self._actions.on_copy_summary:
             self._actions.on_copy_summary()
         else:
-            text = format_summary_text(self._usage, self._error_message, self._updated_at)
+            text = format_summary_text(
+                self._usage,
+                self._error_message,
+                self._updated_at,
+                account_label=_current_account_label() or None,
+            )
             try:
                 self.win.clipboard_clear()
                 self.win.clipboard_append(text)
@@ -1581,11 +1589,25 @@ def _menu_icon(kind: str, *, danger: bool = False, size: int = 16) -> Image.Imag
     return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def _current_account_label() -> str:
+    try:
+        from accounts import active_account, display_label
+        from config import load_config
+
+        return display_label(active_account(load_config()))
+    except Exception:
+        return ""
+
+
 def _history_payload() -> tuple[list[float], float | None]:
     import usage_history
+    from accounts import active_account
+    from config import load_config
 
-    points = usage_history.load_recent(7)
-    return [p.remaining for p in points], usage_history.daily_avg_burn(7)
+    acc = active_account(load_config())
+    aid = str(acc.get("id") or "") if acc else ""
+    points = usage_history.load_recent(7, account_id=aid or None)
+    return [p.remaining for p in points], usage_history.daily_avg_burn(7, account_id=aid or None)
 
 
 def run_status_main() -> int:
@@ -1641,7 +1663,12 @@ def run_status_main() -> int:
             _push(None, str(exc), datetime.now().strftime("%H:%M:%S"))
 
     def on_copy() -> None:
-        text = format_summary_text(state["usage"], state["err"], state["updated"])
+        text = format_summary_text(
+            state["usage"],
+            state["err"],
+            state["updated"],
+            account_label=_current_account_label() or None,
+        )
         root = mgr.tk_root
         if root is None:
             return
@@ -1676,21 +1703,44 @@ def run_status_main() -> int:
 
 def run_menu_main() -> int:
     """`--menu`：短命矢量菜单，把选中的 key 写到 stdout。"""
+    from accounts import format_account_caption, list_accounts
     from app_icon import set_app_user_model_id
+    from config import load_config
 
     enable_dpi_awareness()
     set_app_user_model_id()
     chosen: list[str] = []
     mgr = PopupManager()
+    cfg = load_config()
     actions = [
         MenuAction("status", "显示状态", "status", lambda: None),
         MenuAction("refresh", "立即刷新", "refresh", lambda: None),
         MenuAction("web", "打开用量账单", "web", lambda: None),
-        MenuAction("import", "导入 Token…", "settings", lambda: None),
-        MenuAction("settings", "设置…", "settings", lambda: None),
-        MenuAction("sep", "", "", lambda: None),
-        MenuAction("quit", "退出", "quit", lambda: None, danger=True),
     ]
+    accounts = list_accounts(cfg)
+    active_id = str(cfg.get("active_account_id") or "")
+    if accounts:
+        actions.append(MenuAction("sep", "", "", lambda: None))
+        for acc in accounts:
+            aid = str(acc.get("id") or "")
+            mark = "✓  " if aid == active_id else "    "
+            actions.append(
+                MenuAction(
+                    f"switch:{aid}",
+                    f"{mark}{format_account_caption(acc)}",
+                    "status",
+                    lambda: None,
+                )
+            )
+    actions.extend(
+        [
+            MenuAction("sep", "", "", lambda: None),
+            MenuAction("import", "导入 Token…", "settings", lambda: None),
+            MenuAction("settings", "设置…", "settings", lambda: None),
+            MenuAction("sep", "", "", lambda: None),
+            MenuAction("quit", "退出", "quit", lambda: None, danger=True),
+        ]
+    )
     mgr.show_menu(actions, on_pick=chosen.append)
     key = chosen[0] if chosen else ""
     sys.stdout.write(key)
