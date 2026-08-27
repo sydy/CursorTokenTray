@@ -10,6 +10,7 @@ from settings_launch import is_settings_process
 
 
 def main() -> int:
+    print("提示：Python 入口已弃用，仅作夹具对照。日常请使用 Windows 的 CursorTokenTray.exe 或 macOS 的 CursorTokenTray.app。", file=sys.stderr)
     install_crash_logging()
     app_log(
         f"start argv={sys.argv!r} frozen={bool(getattr(sys, 'frozen', False))} "

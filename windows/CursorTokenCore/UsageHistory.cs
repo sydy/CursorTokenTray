@@ -6,6 +6,8 @@ public sealed record HistoryPoint(double Ts, double Remaining, double? Auto, dou
 
 public static class UsageHistory
 {
+    public const int KeepDays = 90;
+
     public static void AdoptLegacy(string accountId, string directory)
     {
         var dest = AppPaths.HistoryPath(accountId, directory);
@@ -34,6 +36,26 @@ public static class UsageHistory
             ["account_id"] = aid,
         };
         File.AppendAllText(path, JsonSerializer.Serialize(obj) + "\n");
+        if (ts is null) Prune(path);
+    }
+
+    public static void Prune(string path, int keepDays = KeepDays)
+    {
+        if (!File.Exists(path)) return;
+        var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - Math.Max(1, keepDays) * 86400L;
+        var kept = new List<string>();
+        foreach (var line in File.ReadAllLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                if (!doc.RootElement.TryGetProperty("ts", out var tsEl)) continue;
+                if (tsEl.GetDouble() >= cutoff) kept.Add(line);
+            }
+            catch { }
+        }
+        File.WriteAllText(path, kept.Count == 0 ? "" : string.Join("\n", kept) + "\n");
     }
 
     public static List<HistoryPoint> LoadRecent(int days = 7, string? accountId = null, string? directory = null)
@@ -93,9 +115,9 @@ public static class AlertLogic
         var newly = thresholds.Where(lvl => remaining < lvl && !notified.Contains(lvl)).ToList();
         if (newly.Count > 0)
         {
-            var hit = newly.Max();
+            var hit = newly.Min();
             notices.Add(new Notice("额度告警", $"{who}剩余 {remaining:0.0}%，已低于 {hit}% 档。"));
-            notified.Add(hit);
+            foreach (var lvl in newly) notified.Add(lvl);
             changed = true;
         }
         if (config.NotifyExhaustionRisk)

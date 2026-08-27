@@ -23,6 +23,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>用于显示用量通知并打开浏览器登录页。</string>
+    <string>用于显示用量通知并打开浏览器登录页。从 Safari 导入 Cookie 时，请在「系统设置 → 隐私与安全性」中为本应用打开完全磁盘访问权限。</string>
 </dict>
 </plist>

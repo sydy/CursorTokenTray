@@ -46,7 +46,7 @@ sealed class TrayContext : ApplicationContext
         };
         _icon.MouseUp += (_, e) =>
         {
-            if (e.Button == MouseButtons.Left) ShowFlyout();
+            if (e.Button == MouseButtons.Left) ShowFlyout(Cursor.Position);
         };
         if (string.IsNullOrEmpty(_config.SessionToken))
             BeginInvoke(() => OpenSettings(true, false));
@@ -64,7 +64,7 @@ sealed class TrayContext : ApplicationContext
     ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("显示状态", null, (_, _) => ShowFlyout());
+        menu.Items.Add("显示状态", null, (_, _) => ShowFlyout(Cursor.Position));
         menu.Items.Add("立即刷新", null, (_, _) => { _refreshNow = true; });
         menu.Items.Add(UsageParser.DashboardMenuLabel(_usage), null, (_, _) => OpenDashboard());
         var switcher = new ToolStripMenuItem("切换账号");
@@ -182,7 +182,7 @@ sealed class TrayContext : ApplicationContext
         _flyout?.Render(_usage, _error, _updated, _config);
     }
 
-    void ShowFlyout()
+    void ShowFlyout(Point? anchor = null)
     {
         _flyout ??= new FlyoutForm(
             () => _icon.ShowBalloonTip(1, "", "", ToolTipIcon.None),
@@ -196,7 +196,7 @@ sealed class TrayContext : ApplicationContext
             });
         var hist = UsageHistory.LoadRecent(7, _config.ActiveAccount?.Id).Select(p => p.Remaining).ToList();
         _flyout.Render(_usage, _error, _updated, _config, hist);
-        _flyout.PopupNearTray();
+        _flyout.PopupNear(anchor ?? Cursor.Position);
     }
 
     void OpenDashboard()
@@ -211,6 +211,8 @@ sealed class TrayContext : ApplicationContext
         {
             _settings.Show();
             _settings.Activate();
+            if (focusToken) _settings.FocusToken();
+            if (startImport) _settings.StartImport();
             return;
         }
         _settings = new SettingsForm(_config, cfg => ApplyConfig(cfg, true), async prefer =>
@@ -242,18 +244,33 @@ sealed class TrayContext : ApplicationContext
 
 static class Autostart
 {
+    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string ValueName = "CursorTokenTray";
     static string StartupDir => Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-    static string LnkPath => Path.Combine(StartupDir, "CursorTokenTray.lnk");
-    static string VbsPath => Path.Combine(StartupDir, "CursorTokenTray.vbs");
 
     public static void Apply(bool enabled)
     {
-        foreach (var path in new[] { LnkPath, VbsPath, Path.Combine(StartupDir, "CursorTokenTray.cmd") })
+        foreach (var path in new[]
+        {
+            Path.Combine(StartupDir, "CursorTokenTray.lnk"),
+            Path.Combine(StartupDir, "CursorTokenTray.vbs"),
+            Path.Combine(StartupDir, "CursorTokenTray.cmd"),
+        })
             try { File.Delete(path); } catch { }
-        if (!enabled) return;
-        var exe = Environment.ProcessPath ?? Application.ExecutablePath;
-        var quoted = exe.Replace("\"", "\"\"");
-        File.WriteAllText(VbsPath, $"CreateObject(\"Wscript.Shell\").Run \"\"\"{quoted}\"\"\", 0, False\r\n");
+
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey);
+            if (key is null) return;
+            if (!enabled)
+            {
+                try { key.DeleteValue(ValueName, false); } catch { }
+                return;
+            }
+            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+            key.SetValue(ValueName, "\"" + exe.Replace("\"", "") + "\"");
+        }
+        catch { }
     }
 }
 

@@ -173,6 +173,89 @@ public class FixtureTests
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
+    [Fact]
+    public void AlertMarksAllNewlyCrossedLevels()
+    {
+        var cfg = new AppConfig { NotifyEnabled = true, AlertThresholds = [50, 20, 5] };
+        var acc = new Account { Label = "工作" };
+        var snap = new UsageSnapshot { RemainingPercent = 4 };
+        var notices = AlertLogic.Evaluate(cfg, acc, snap);
+        Assert.Single(notices);
+        Assert.Contains("5%", notices[0].Body);
+        Assert.Equal([5, 20, 50], acc.AlertNotifiedLevels);
+        Assert.Empty(AlertLogic.Evaluate(cfg, acc, snap));
+    }
+
+    [Fact]
+    public void CorruptConfigIsNotOverwritten()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ctt_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = AppPaths.ConfigPath(dir);
+            File.WriteAllText(path, "{not-json");
+            var loaded = ConfigStore.Load(dir);
+            Assert.True(loaded.LoadError);
+            Assert.Empty(loaded.Accounts);
+            Assert.Equal("{not-json", File.ReadAllText(path));
+            Assert.True(File.Exists(path + ".corrupt"));
+            ConfigStore.Save(loaded, dir);
+            Assert.Equal("{not-json", File.ReadAllText(path));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
+    public void HistoryPruneDropsOldPoints()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ctt_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var old = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 100 * 86400;
+            UsageHistory.Append(10, ts: old, accountId: "user_p", directory: dir);
+            UsageHistory.Append(20, accountId: "user_p", directory: dir);
+            var recent = UsageHistory.LoadRecent(200, "user_p", dir);
+            Assert.DoesNotContain(recent, p => Math.Abs(p.Remaining - 10) < 0.01);
+            Assert.Contains(recent, p => Math.Abs(p.Remaining - 20) < 0.01);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
+    public void TokenProtectorRoundtrip()
+    {
+        const string token = "user_01PROT%3A%3Aaaa.bbb.ccc";
+        Assert.Equal(token, TokenProtector.Unprotect(TokenProtector.Protect(token)));
+        Assert.Equal("plain", TokenProtector.Unprotect("plain"));
+        Assert.Equal("", TokenProtector.Protect(""));
+    }
+
+    [Fact]
+    public async Task HttpRetriesServerErrors()
+    {
+        var handler = new SeqHandler([500, 500, 200]);
+        var client = new CursorClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan });
+        var snap = await client.FetchUsageSummary("user_01HTTP%3A%3Aaaa.bbb.ccc", 5);
+        Assert.Equal(3, handler.Calls);
+        Assert.Equal(0, snap.UsedPercent);
+    }
+
+    sealed class SeqHandler(int[] statuses) : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var code = statuses[Math.Min(Calls, statuses.Length - 1)];
+            Calls++;
+            return Task.FromResult(new HttpResponseMessage((System.Net.HttpStatusCode)code)
+            {
+                Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
     static double? Opt(JsonElement el, string key)
     {
         if (!el.TryGetProperty(key, out var v) || v.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;

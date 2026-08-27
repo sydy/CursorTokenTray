@@ -80,29 +80,45 @@ public struct CursorClient: Sendable {
         if let body {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw CursorAPIError("网络错误: \(error.localizedDescription)")
+        var lastError: CursorAPIError?
+        for attempt in 0..<3 {
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                lastError = CursorAPIError("网络错误: \(error.localizedDescription)")
+                if attempt == 2 { throw lastError! }
+                try? await Task.sleep(nanoseconds: UInt64(250 << attempt) * 1_000_000)
+                continue
+            }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 401 || status == 403 {
+                throw CursorAPIError(CursorAPIError.authMessage, statusCode: status)
+            }
+            if status == 404 || status == 405 {
+                throw CursorAPIError("HTTP \(status)", statusCode: status)
+            }
+            if status == 429 || status >= 500 {
+                lastError = CursorAPIError("HTTP \(status)", statusCode: status)
+                if attempt == 2 { throw lastError! }
+                try? await Task.sleep(nanoseconds: UInt64(250 << attempt) * 1_000_000)
+                continue
+            }
+            if status >= 400 {
+                let detail = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+                let safe = detail.unicodeScalars.map { $0.isASCII ? Character($0) : "?" }.map(String.init).joined()
+                throw CursorAPIError(safe.isEmpty ? "HTTP \(status)" : "HTTP \(status): \(safe)", statusCode: status)
+            }
+            if data.isEmpty { return JSONValue([:]) }
+            do {
+                return try JSONValue.parseObject(data)
+            } catch let err as CursorAPIError {
+                throw err
+            } catch {
+                throw CursorAPIError("接口返回非 JSON")
+            }
         }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 401 || status == 403 {
-            throw CursorAPIError(CursorAPIError.authMessage, statusCode: status)
-        }
-        if status >= 400 {
-            let detail = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
-            let safe = detail.unicodeScalars.map { $0.isASCII ? Character($0) : "?" }.map(String.init).joined()
-            throw CursorAPIError(safe.isEmpty ? "HTTP \(status)" : "HTTP \(status): \(safe)", statusCode: status)
-        }
-        if data.isEmpty { return JSONValue([:]) }
-        do {
-            return try JSONValue.parseObject(data)
-        } catch let err as CursorAPIError {
-            throw err
-        } catch {
-            throw CursorAPIError("接口返回非 JSON")
-        }
+        throw lastError ?? CursorAPIError("网络错误")
     }
 }

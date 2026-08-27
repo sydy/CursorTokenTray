@@ -2,18 +2,18 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-where pythonw >nul 2>&1
-if %errorlevel%==0 (
-  start "" pythonw "%~dp0main.py"
+echo Python 启动脚本已弃用。请使用原生 Windows 程序：
+echo   1. 从 GitHub Releases 下载 CursorTokenTray-windows.zip
+echo   2. 或: dotnet run --project windows\CursorTokenTray\CursorTokenTray.csproj -c Release
+echo.
+if exist "%~dp0dist\CursorTokenTray.exe" (
+  echo 发现 dist\CursorTokenTray.exe，正在启动...
+  start "" "%~dp0dist\CursorTokenTray.exe"
   exit /b 0
 )
-
-where python >nul 2>&1
-if %errorlevel%==0 (
-  start "" python "%~dp0main.py"
+if exist "%~dp0windows\CursorTokenTray\bin\Release\net8.0-windows\win-x64\CursorTokenTray.exe" (
+  start "" "%~dp0windows\CursorTokenTray\bin\Release\net8.0-windows\win-x64\CursorTokenTray.exe"
   exit /b 0
 )
-
-echo 未找到 Python，请先安装并加入 PATH。
 pause
 exit /b 1

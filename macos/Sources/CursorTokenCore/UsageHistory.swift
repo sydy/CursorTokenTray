@@ -77,6 +77,21 @@ public enum UsageHistory {
         } else {
             try? line.write(to: path, atomically: true, encoding: .utf8)
         }
+        if ts == nil { prune(path) }
+    }
+
+    public static func prune(_ path: URL, keepDays: Int = keepDays) {
+        let cutoff = Date().timeIntervalSince1970 - Double(max(1, keepDays)) * 86_400
+        var kept: [String] = []
+        for raw in iterRaw(path) {
+            guard let ts = number(raw["ts"]), ts >= cutoff else { continue }
+            guard let data = try? JSONSerialization.data(withJSONObject: raw),
+                  let line = String(data: data, encoding: .utf8)
+            else { continue }
+            kept.append(line)
+        }
+        let text = kept.isEmpty ? "" : kept.joined(separator: "\n") + "\n"
+        try? text.write(to: path, atomically: true, encoding: .utf8)
     }
 
     public static func loadRecent(days: Int = 7, accountId: String? = nil, directory: URL? = nil) -> [HistoryPoint] {
@@ -164,9 +179,9 @@ public enum AlertLogic {
         }
         let newly = thresholds.filter { remaining < Double($0) && !notified.contains($0) }
         if !newly.isEmpty {
-            let hit = newly.max() ?? newly[0]
+            let hit = newly.min() ?? newly[0]
             notices.append(Notice(title: "额度告警", body: String(format: "%@剩余 %.1f%%，已低于 %d%% 档。", who, remaining, hit)))
-            notified.insert(hit)
+            newly.forEach { notified.insert($0) }
             changed = true
         }
         if config.notifyExhaustionRisk {

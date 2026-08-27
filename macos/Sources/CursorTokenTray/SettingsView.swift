@@ -10,7 +10,9 @@ struct SettingsRootView: View {
     @State private var intervalText = "10"
     @State private var thresholdText = "50,20,5"
     @State private var hint = ""
+    @FocusState private var tokenFocused: Bool
     var startImport: Bool = false
+    var focusToken: Bool = false
 
     var body: some View {
         TabView {
@@ -24,6 +26,9 @@ struct SettingsRootView: View {
             tokenText = store.config.sessionToken
             intervalText = String(store.config.refreshIntervalMinutes)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
+            if focusToken || store.focusToken {
+                tokenFocused = true
+            }
             if startImport {
                 Task { await importFrom(prefer: "cursor-app") }
             }
@@ -48,6 +53,7 @@ struct SettingsRootView: View {
                 .font(.system(.body, design: .monospaced))
                 .frame(height: 56)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                .focused($tokenFocused)
             HStack {
                 Button("从 Cursor 导入") { Task { await importFrom(prefer: "cursor-app") } }
                     .disabled(importing)
@@ -58,6 +64,15 @@ struct SettingsRootView: View {
                     Button("Safari 登录") { Task { await loginAndImport(prefer: "safari") } }
                     Button("Firefox 登录") { Task { await loginAndImport(prefer: "firefox") } }
                     Button("仅扫描 Cookie") { Task { await importFrom(prefer: nil) } }
+                }
+            }
+            if !FullDiskAccess.safariCookiesReadable() {
+                HStack(alignment: .top, spacing: 8) {
+                    Text("Safari 导入需要「完全磁盘访问权限」。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("打开系统设置") { FullDiskAccess.openPrivacySettings() }
+                        .font(.caption)
                 }
             }
             Text(store.importStatus.isEmpty ? "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。" : store.importStatus)
@@ -297,11 +312,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             win.delegate = self
             window = win
         }
-        window?.contentView = NSHostingView(rootView: SettingsRootView(store: store, startImport: startImport))
+        window?.contentView = NSHostingView(rootView: SettingsRootView(store: store, startImport: startImport, focusToken: focusToken))
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         if focusToken {
-            window?.makeFirstResponder(window?.contentView)
+            DispatchQueue.main.async {
+                store.focusToken = true
+            }
         }
     }
 

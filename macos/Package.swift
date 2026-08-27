@@ -5,7 +5,10 @@ var targets: [Target] = [
     .target(
         name: "CursorTokenCore",
         path: "Sources/CursorTokenCore",
-        linkerSettings: [.linkedLibrary("sqlite3")]
+        linkerSettings: [
+            .linkedLibrary("sqlite3"),
+            .linkedFramework("Security", .when(platforms: [.macOS])),
+        ]
     ),
     .testTarget(
         name: "CursorTokenCoreTests",

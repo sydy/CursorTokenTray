@@ -1,6 +1,6 @@
 # Windows 原生托盘（C# / .NET 8）
 
-与 `macos/` Swift 菜单栏应用并列。配置文件仍是 `%APPDATA%\CursorTokenTray\config.json`。
+与 `macos/` Swift 菜单栏应用并列。配置文件仍是 `%APPDATA%\CursorTokenTray\config.json`。Token 用当前用户 DPAPI 加密后写入；开机自启写入 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`。
 
 ```powershell
 dotnet test CursorTokenCore.Tests\CursorTokenCore.Tests.csproj

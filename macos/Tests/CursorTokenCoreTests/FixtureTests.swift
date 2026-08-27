@@ -247,6 +247,61 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertEqual(loaded.activeAccountId, "user_01SAVE")
     }
 
+    func testAlertMarksAllNewlyCrossedLevels() {
+        var cfg = AppConfig.default
+        cfg.notifyEnabled = true
+        cfg.alertThresholds = [50, 20, 5]
+        var acc = Account(label: "工作")
+        var snap = UsageSnapshot(
+            usedPercent: 96,
+            remainingPercent: 4,
+            membershipType: "Pro",
+            raw: JSONValue([:]),
+            billingMode: "percent",
+            limitType: "",
+            isUnlimited: false
+        )
+        var notices = AlertLogic.evaluate(config: cfg, account: &acc, snapshot: snap)
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertTrue(notices[0].body.contains("5%"))
+        XCTAssertEqual(acc.alertNotifiedLevels, [5, 20, 50])
+        XCTAssertTrue(AlertLogic.evaluate(config: cfg, account: &acc, snapshot: snap).isEmpty)
+    }
+
+    func testCorruptConfigIsNotOverwritten() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = AppPaths.configPath(in: dir)
+        try "{not-json".write(to: path, atomically: true, encoding: .utf8)
+        let loaded = ConfigStore.load(from: dir)
+        XCTAssertTrue(loaded.loadError)
+        XCTAssertTrue(loaded.accounts.isEmpty)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "{not-json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.appendingPathExtension("corrupt").path))
+        ConfigStore.save(loaded, to: dir)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "{not-json")
+    }
+
+    func testHistoryPruneDropsOldPoints() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let old = Date().timeIntervalSince1970 - 100 * 86_400
+        UsageHistory.append(remaining: 10, ts: old, accountId: "user_p", directory: dir)
+        UsageHistory.append(remaining: 20, accountId: "user_p", directory: dir)
+        let recent = UsageHistory.loadRecent(days: 200, accountId: "user_p", directory: dir)
+        XCTAssertFalse(recent.contains { abs($0.remaining - 10) < 0.01 })
+        XCTAssertTrue(recent.contains { abs($0.remaining - 20) < 0.01 })
+    }
+
+    func testTokenProtectorRoundtrip() {
+        let token = "user_01PROT%3A%3Aaaa.bbb.ccc"
+        XCTAssertEqual(TokenProtector.unprotect(TokenProtector.protect(token)), token)
+        XCTAssertEqual(TokenProtector.unprotect("plain"), "plain")
+        XCTAssertEqual(TokenProtector.protect(""), "")
+    }
+
     private func num(_ value: Any?) -> Double? {
         if value == nil || value is NSNull { return nil }
         if let n = value as? NSNumber { return n.doubleValue }
