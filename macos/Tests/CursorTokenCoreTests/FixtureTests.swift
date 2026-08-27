@@ -197,10 +197,12 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertEqual(UsageHistory.loadRecent(days: 10_000, accountId: "user_01A", directory: dir).map(\.remaining), [80])
         XCTAssertEqual(UsageHistory.loadRecent(days: 10_000, accountId: "user_01B", directory: dir).map(\.remaining), [20])
 
-        let legacy = dir.appendingPathComponent("usage_history.jsonl")
+        let legacyDir = dir.appendingPathComponent("legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+        let legacy = legacyDir.appendingPathComponent("usage_history.jsonl")
         try "{\"ts\":1700000000,\"remaining\":55,\"auto\":null,\"api\":null}\n".write(to: legacy, atomically: true, encoding: .utf8)
-        UsageHistory.adoptLegacyHistory(accountId: "user_01LEG", directory: dir)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("usage_history.user_01LEG.jsonl").path))
+        UsageHistory.adoptLegacyHistory(accountId: "user_01LEG", directory: legacyDir)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyDir.appendingPathComponent("usage_history.user_01LEG.jsonl").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
     }
 

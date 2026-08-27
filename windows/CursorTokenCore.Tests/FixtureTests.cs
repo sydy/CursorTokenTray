@@ -72,9 +72,9 @@ public class FixtureTests
         foreach (var row in root.GetProperty("account_ids").EnumerateArray())
             Assert.Equal(row.GetProperty("id").GetString(), Token.AccountId(row.GetProperty("token").GetString()!));
         var variants = root.GetProperty("variants_jwt");
-        Assert.Equal(
-            variants.GetProperty("variants").EnumerateArray().Select(x => x.GetString()).ToList(),
-            Token.Variants(variants.GetProperty("input").GetString()!));
+            Assert.Equal(
+                variants.GetProperty("variants").EnumerateArray().Select(x => x.GetString()!).ToList(),
+                Token.Variants(variants.GetProperty("input").GetString()!));
         foreach (var row in root.GetProperty("normalize").EnumerateArray())
             Assert.Equal(row.GetProperty("output").GetString(), Token.Normalize(row.GetProperty("input").GetString()!));
         foreach (var row in root.GetProperty("normalize_errors").EnumerateArray())
@@ -141,10 +141,13 @@ public class FixtureTests
             UsageHistory.Append(20, ts: 1_700_000_100, accountId: "user_01B", directory: dir);
             Assert.Equal([80], UsageHistory.LoadRecent(10_000, "user_01A", dir).Select(p => p.Remaining));
             Assert.Equal([20], UsageHistory.LoadRecent(10_000, "user_01B", dir).Select(p => p.Remaining));
-            File.WriteAllText(Path.Combine(dir, "usage_history.jsonl"), "{\"ts\":1700000000,\"remaining\":55,\"auto\":null,\"api\":null}\n");
-            UsageHistory.AdoptLegacy("user_01LEG", dir);
-            Assert.True(File.Exists(Path.Combine(dir, "usage_history.user_01LEG.jsonl")));
-            Assert.False(File.Exists(Path.Combine(dir, "usage_history.jsonl")));
+
+            var legacyDir = Path.Combine(dir, "legacy");
+            Directory.CreateDirectory(legacyDir);
+            File.WriteAllText(Path.Combine(legacyDir, "usage_history.jsonl"), "{\"ts\":1700000000,\"remaining\":55,\"auto\":null,\"api\":null}\n");
+            UsageHistory.AdoptLegacy("user_01LEG", legacyDir);
+            Assert.True(File.Exists(Path.Combine(legacyDir, "usage_history.user_01LEG.jsonl")));
+            Assert.False(File.Exists(Path.Combine(legacyDir, "usage_history.jsonl")));
 
             var header = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\"alg\":\"none\"}"))
                 .TrimEnd('=').Replace('+', '-').Replace('/', '_');
