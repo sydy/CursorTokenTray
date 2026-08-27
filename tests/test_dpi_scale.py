@@ -233,9 +233,10 @@ class IdleMemoryTests(unittest.TestCase):
 
     def test_pr_builds_skip_artifact_upload(self) -> None:
         text = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
-        # 合入 main / PR 不 upload-artifact，避免制品配额把已经编过的 job 打红。
-        self.assertGreaterEqual(text.count("github.event_name == 'workflow_dispatch'"), 2)
+        # PR 不上传；合入 main 上传制品（失败不红）并覆盖 latest Release。
+        self.assertGreaterEqual(text.count("github.event_name != 'pull_request'"), 3)
         self.assertIn("continue-on-error: true", text)
+        self.assertGreaterEqual(text.count("tag_name: latest"), 2)
         self.assertGreaterEqual(text.count("Attach to GitHub Release"), 2)
         self.assertNotIn("download-artifact", text)
 
