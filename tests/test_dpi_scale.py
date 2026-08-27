@@ -107,21 +107,13 @@ class SettingsCenterTests(unittest.TestCase):
         self.assertGreater(y, 0)
 
 
-class HiddenHostGuardTests(unittest.TestCase):
-    def test_popup_host_is_tk_not_ctk(self) -> None:
-        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
-        self.assertIn("root = tk.Tk()", text)
-        self.assertIn("harden_hidden_tk_root", text)
-        self.assertIn("cap_ctk_maxsize", text)
-        self.assertNotIn("root = ctk.CTk()", text)
-        self.assertIn("self._status_win = None", text)
-        # 空闲托盘不建 Tk 线程
-        self.assertNotIn("self._start_ui_thread()", text.split("def bind_tray_icon")[0])
-
-    def test_settings_caps_ctk_maxsize(self) -> None:
-        text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
-        self.assertIn("cap_ctk_maxsize(root)", text)
-        self.assertGreaterEqual(text.count("cap_ctk_maxsize(root)"), 2)
+class NativeHostGuardTests(unittest.TestCase):
+    def test_windows_ui_modules_have_no_tk(self) -> None:
+        for name in ("win_tray.py", "win_menu.py", "win_flyout.py", "win_settings.py", "win_api.py"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertNotIn("tkinter", text, name)
+            self.assertNotIn("customtkinter", text, name)
+            self.assertNotIn("pystray", text, name)
 
 
 class IconBudgetTests(unittest.TestCase):
@@ -162,64 +154,42 @@ class IconBudgetTests(unittest.TestCase):
 
 
 class IdleMemoryTests(unittest.TestCase):
-    def test_tray_app_never_imports_windows_ui(self) -> None:
+    def test_tray_app_uses_native_windows_ui(self) -> None:
         text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
         self.assertNotIn("from popup_ui import", text)
         self.assertNotIn("from settings_ui import", text)
-        self.assertNotIn("def _ensure_windows_ui", text)
-        self.assertIn("open_settings_async", text)
-        self.assertIn("open_status_async", text)
-        self.assertIn("run_menu_and_pick", text)
+        self.assertNotIn("from popup_launch import", text)
+        self.assertNotIn("open_settings_async", text)
+        self.assertNotIn("open_status_async", text)
+        self.assertNotIn("run_menu_and_pick", text)
+        self.assertIn("from win_tray import NativeTray", text)
+        self.assertIn("popup_native_menu", text)
+        self.assertIn("show_status_flyout", text)
+        self.assertIn("show_win_settings", text)
 
-    def test_popup_process_entrypoints_exist(self) -> None:
-        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
-        self.assertIn("def run_status_main", text)
-        self.assertIn("def run_menu_main", text)
-        self.assertIn("def _drop_tk_root_if_idle", text)
-        self.assertIn("def run_blocking", text)
+    def test_main_does_not_spawn_popup_processes(self) -> None:
+        text = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertNotIn("popup_ui", text)
+        self.assertNotIn("is_popup_process", text)
+        self.assertNotIn("settings_ui", text)
+        self.assertIn("from win_settings import run_settings_main", text)
 
-    def test_popup_subprocesses_run_tk_on_main_thread(self) -> None:
-        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
-        status = text.split("def run_status_main")[1].split("def run_menu_main")[0]
-        menu = text.split("def run_menu_main")[1]
-        self.assertIn("run_blocking", status)
-        self.assertIn("run_blocking", menu)
-        self.assertNotIn("closed.wait", status)
-        self.assertIn("主线程正在跑 Tk 时不能 wait", text)
+    def test_windows_tray_uses_shell_notify_icon(self) -> None:
+        text = (ROOT / "win_tray.py").read_text(encoding="utf-8")
+        self.assertIn("Shell_NotifyIcon", text)
+        self.assertIn("NOTIFYICON_VERSION_4", text)
+        self.assertIn("int(lparam) & 0xFFFF", text)
+        self.assertIn("WS_EX_TOOLWINDOW", text)
+        self.assertIn("不能用 HWND_MESSAGE", text)
+        self.assertIn("PostThreadMessageW", text)
 
-    def test_windows_tray_suppresses_pystray_native_menu(self) -> None:
-        hover = (ROOT / "tray_hover.py").read_text(encoding="utf-8")
-        tray = (ROOT / "tray_app.py").read_text(encoding="utf-8")
-        self.assertIn("def suppress_native_context_menu", hover)
-        self.assertIn("suppress_native_context_menu", tray)
-        self.assertIn("on_right_click", hover)
-        self.assertIn("WM_RBUTTONUP", hover)
-        self.assertIn("_menu_handle = None", hover)
-
-    def test_suppress_native_menu_is_noop_off_windows(self) -> None:
-        if sys.platform == "win32":
-            self.skipTest("windows uses the real notify hook")
-        from tray_hover import suppress_native_context_menu
-
-        class _Icon:
-            _on_notify = staticmethod(lambda w, l: 7)
-            _menu_handle = ("hmenu", [])
-
-        icon = _Icon()
-        suppress_native_context_menu(icon, on_right_click=lambda: None)
-        self.assertEqual(icon._on_notify(0, 0x0205), 7)
-        self.assertEqual(icon._menu_handle, ("hmenu", []))
-
-    def test_settings_ui_does_not_keep_tray_tk(self) -> None:
-        text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
-        self.assertNotIn("schedule_idle_release", text)
-        self.assertIn("SETTINGS_IDLE_CLOSE_SEC", text)
-        self.assertIn("_idle_watch", text)
-
-    def test_windows_spec_keeps_child_ui_modules(self) -> None:
+    def test_windows_spec_packs_native_modules(self) -> None:
         text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
-        for name in ("popup_ui", "popup_launch", "usage_snapshot", "accounts", "settings_ui", "customtkinter"):
-            self.assertIn(f"'{name}'", text)
+        hidden = text.split("excludes")[0]
+        for name in ("win_api", "win_tray", "win_menu", "win_flyout", "win_settings", "win11_style"):
+            self.assertIn(f"'{name}'", hidden)
+        for name in ("popup_ui", "popup_launch", "settings_ui", "customtkinter", "pystray._win32"):
+            self.assertNotIn(f"'{name}'", hidden)
 
     def test_usage_snapshot_roundtrip(self) -> None:
         import tempfile

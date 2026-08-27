@@ -6,7 +6,6 @@ import atexit
 import sys
 
 from platform_util import IS_MAC, IS_WIN, app_log, install_crash_logging, show_already_running
-from popup_launch import is_popup_process, popup_mode
 from settings_launch import is_settings_process
 
 
@@ -22,27 +21,17 @@ def main() -> int:
         print("本工具支持 Windows 与 macOS。")
         return 1
 
-    # 设置进程必须在 import settings_ui / Tk 之前返回。
-    # macOS 26 + 打包的 Tk 8.6 会在 Tcl_AppInit 里对 NSApplication 发不存在的
-    # selector，子进程启动 200ms 内 SIGABRT。
+    # `--settings` 在独立进程里跑原生设置窗（Windows Win32 / macOS AppKit）。
+    # 必须在 import 托盘循环之前返回。
     if is_settings_process():
         app_log("enter settings process")
         if IS_MAC:
             from macos_settings import run_macos_settings
 
             return run_macos_settings()
-        from settings_ui import run_settings_main
+        from win_settings import run_settings_main
 
         return run_settings_main()
-
-    if is_popup_process():
-        if not IS_WIN:
-            app_log("popup process is Windows-only")
-            return 1
-        app_log(f"enter popup process mode={popup_mode()}")
-        from popup_ui import run_menu_main, run_status_main
-
-        return run_menu_main() if popup_mode() == "menu" else run_status_main()
 
     if IS_MAC:
         try:

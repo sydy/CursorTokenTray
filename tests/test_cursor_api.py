@@ -228,10 +228,12 @@ class SourceGuardTests(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[1]
         tray = (root / "tray_app.py").read_text(encoding="utf-8")
-        popup = (root / "popup_ui.py").read_text(encoding="utf-8")
+        flyout = (root / "win_flyout.py").read_text(encoding="utf-8")
+        menu = (root / "win_menu.py").read_text(encoding="utf-8")
         self.assertIn("dashboard_url_for", tray)
         self.assertIn("dashboard_menu_label", tray)
-        self.assertIn("dashboard_url_for", popup)
-        self.assertIn("dashboard_button_label", popup)
+        self.assertIn("dashboard_menu_label", menu)
+        self.assertIn("dashboard_button_label", flyout)
         self.assertNotIn("webbrowser.open(BILLING_URL)", tray)
-        self.assertNotIn("webbrowser.open(BILLING_URL)", popup)
+        self.assertNotIn("webbrowser.open(BILLING_URL)", flyout)
+        self.assertNotIn("webbrowser.open(BILLING_URL)", menu)
