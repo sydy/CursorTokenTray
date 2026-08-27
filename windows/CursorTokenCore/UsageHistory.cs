@@ -11,7 +11,8 @@ public static class UsageHistory
         var dest = AppPaths.HistoryPath(accountId, directory);
         var legacy = Path.Combine(directory, "usage_history.jsonl");
         if (string.IsNullOrEmpty(accountId) || File.Exists(dest) || !File.Exists(legacy)) return;
-        var others = Directory.GetFiles(directory, "usage_history.*.jsonl");
+        var others = Directory.GetFiles(directory, "usage_history.*.jsonl")
+            .Where(p => !string.Equals(Path.GetFileName(p), "usage_history.jsonl", StringComparison.OrdinalIgnoreCase));
         if (others.Any(p => Path.GetFullPath(p) != Path.GetFullPath(dest))) return;
         File.Move(legacy, dest);
     }

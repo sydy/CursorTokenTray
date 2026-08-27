@@ -149,6 +149,14 @@ public class FixtureTests
             Assert.True(File.Exists(Path.Combine(legacyDir, "usage_history.user_01LEG.jsonl")));
             Assert.False(File.Exists(Path.Combine(legacyDir, "usage_history.jsonl")));
 
+            var skipDir = Path.Combine(dir, "skip");
+            Directory.CreateDirectory(skipDir);
+            File.WriteAllText(Path.Combine(skipDir, "usage_history.jsonl"), "{\"ts\":1700000000,\"remaining\":40,\"auto\":null,\"api\":null}\n");
+            File.WriteAllText(Path.Combine(skipDir, "usage_history.user_01A.jsonl"), "{\"ts\":1700000100,\"remaining\":10,\"auto\":null,\"api\":null}\n");
+            UsageHistory.AdoptLegacy("user_01LEG", skipDir);
+            Assert.True(File.Exists(Path.Combine(skipDir, "usage_history.jsonl")));
+            Assert.False(File.Exists(Path.Combine(skipDir, "usage_history.user_01LEG.jsonl")));
+
             var header = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\"alg\":\"none\"}"))
                 .TrimEnd('=').Replace('+', '-').Replace('/', '_');
             var payload = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { sub = "github|user_01SAVE" }))

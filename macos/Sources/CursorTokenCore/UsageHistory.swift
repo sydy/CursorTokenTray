@@ -24,14 +24,19 @@ public enum UsageHistory {
         if FileManager.default.fileExists(atPath: dest.path) { return }
         if !FileManager.default.fileExists(atPath: legacy.path) { return }
         let others = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        if others.contains(where: {
-            $0.lastPathComponent.hasPrefix("usage_history.")
-                && $0.pathExtension == "jsonl"
-                && $0.standardizedFileURL != dest.standardizedFileURL
-        }) {
+        // Match usage_history.<id>.jsonl only — the legacy file is usage_history.jsonl
+        // and must not count as "another account already claimed history".
+        if others.contains(where: { isPerAccountHistoryFile($0) && $0.standardizedFileURL != dest.standardizedFileURL }) {
             return
         }
         try? FileManager.default.moveItem(at: legacy, to: dest)
+    }
+
+    static func isPerAccountHistoryFile(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        return name.hasPrefix("usage_history.")
+            && name.hasSuffix(".jsonl")
+            && name != "usage_history.jsonl"
     }
 
     public static func append(

@@ -212,6 +212,19 @@ final class UsageParserFixtureTests: XCTestCase {
         UsageHistory.adoptLegacyHistory(accountId: "user_01LEG", directory: legacyDir)
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacyDir.appendingPathComponent("usage_history.user_01LEG.jsonl").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
+
+        let skipDir = dir.appendingPathComponent("skip", isDirectory: true)
+        try FileManager.default.createDirectory(at: skipDir, withIntermediateDirectories: true)
+        let skipLegacy = skipDir.appendingPathComponent("usage_history.jsonl")
+        try "{\"ts\":1700000000,\"remaining\":40,\"auto\":null,\"api\":null}\n".write(to: skipLegacy, atomically: true, encoding: .utf8)
+        try "{\"ts\":1700000100,\"remaining\":10,\"auto\":null,\"api\":null}\n".write(
+            to: skipDir.appendingPathComponent("usage_history.user_01A.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+        UsageHistory.adoptLegacyHistory(accountId: "user_01LEG", directory: skipDir)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: skipLegacy.path), "legacy file stays when another account already has history")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: skipDir.appendingPathComponent("usage_history.user_01LEG.jsonl").path))
     }
 
     func testConfigRoundtrip() throws {
