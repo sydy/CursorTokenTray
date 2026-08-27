@@ -180,6 +180,8 @@ class IdleMemoryTests(unittest.TestCase):
     def test_settings_ui_does_not_keep_tray_tk(self) -> None:
         text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
         self.assertNotIn("schedule_idle_release", text)
+        self.assertIn("SETTINGS_IDLE_CLOSE_SEC", text)
+        self.assertIn("_idle_watch", text)
 
     def test_windows_spec_keeps_child_ui_modules(self) -> None:
         text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
