@@ -13,6 +13,9 @@ log = logging.getLogger("tray_hover")
 HIT_PAD = 8
 VK_RBUTTON = 0x02
 VK_LBUTTON = 0x01
+WM_RBUTTONDOWN = 0x0204
+WM_RBUTTONUP = 0x0205
+WM_CONTEXTMENU = 0x007B
 
 
 def icon_uid(icon) -> int:
@@ -38,6 +41,38 @@ def patch_pystray_uid(icon) -> None:
         win32util.Shell_NotifyIcon(code, nid)
 
     icon._message = _message  # type: ignore[method-assign]
+
+
+def suppress_native_context_menu(
+    icon,
+    *,
+    on_right_click: Callable[[], None] | None = None,
+) -> None:
+    """Windows：右键不走 pystray 原生菜单，改调自定义回调。
+
+    托盘菜单只有一项隐藏的 default，TrackPopupMenuEx 会抢前台，
+    矢量菜单子进程刚出来就被 FocusOut 关掉，看起来像右键没反应。
+    直接挂在 WM_RBUTTONUP 上，不依赖 Shell_NotifyIconGetRect（溢出区经常拿不到）。
+    """
+    if not IS_WIN:
+        return
+    original = getattr(icon, "_on_notify", None)
+
+    def _on_notify(wparam, lparam):
+        if lparam in (WM_RBUTTONUP, WM_RBUTTONDOWN, WM_CONTEXTMENU):
+            if lparam != WM_RBUTTONDOWN and on_right_click is not None:
+                threading.Thread(target=on_right_click, daemon=True, name="tray-right").start()
+            return 0
+        if original is not None:
+            return original(wparam, lparam)
+        return 0
+
+    icon._on_notify = _on_notify  # type: ignore[method-assign]
+    try:
+        # 双保险：即便回调没换上，没有 HMENU 也不会弹出原生菜单。
+        icon._menu_handle = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 class HoverWatcher:

@@ -53,6 +53,7 @@ def popup_command(
 def _popen(cmd: list[str], *, capture: bool = False) -> subprocess.Popen[bytes]:
     env = os.environ.copy()
     env[MODE_ENV] = "menu" if "--menu" in cmd else "status"
+    # 子进程是短命 worker，复用 onefile 已解包目录；不要 RESET_ENVIRONMENT。
     kw: dict = {
         "env": env,
         "start_new_session": True,
@@ -87,7 +88,12 @@ def open_status_async() -> None:
             return
         cmd = popup_command("status")
         app_log(f"spawn status: {cmd}")
-        _status_proc = _popen(cmd)
+        try:
+            _status_proc = _popen(cmd)
+        except Exception as exc:
+            app_log(f"spawn status failed: {exc}")
+            raise
+        app_log(f"status pid={_status_proc.pid}")
 
 
 def run_menu_and_pick() -> str | None:
@@ -97,14 +103,21 @@ def run_menu_and_pick() -> str | None:
     global _menu_proc
     with _spawn_lock:
         if menu_process_running() or status_process_running():
+            app_log("menu skipped, popup already running")
             return None
         cmd = popup_command("menu")
         app_log(f"spawn menu: {cmd}")
-        _menu_proc = _popen(cmd, capture=True)
+        try:
+            _menu_proc = _popen(cmd, capture=True)
+        except Exception as exc:
+            app_log(f"spawn menu failed: {exc}")
+            raise
         proc = _menu_proc
+        app_log(f"menu pid={proc.pid}")
     try:
         out, _ = proc.communicate(timeout=300)
-    except Exception:
+    except Exception as exc:
+        app_log(f"menu communicate failed: {exc}")
         try:
             proc.kill()
         except Exception:
@@ -112,6 +125,7 @@ def run_menu_and_pick() -> str | None:
         return None
     key = (out or b"").decode("utf-8", errors="replace").strip()
     if not key:
+        app_log(f"menu produced no key rc={proc.returncode}")
         return None
     if key in MENU_ACTIONS:
         return key

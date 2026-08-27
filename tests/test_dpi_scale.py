@@ -176,6 +176,39 @@ class IdleMemoryTests(unittest.TestCase):
         self.assertIn("def run_status_main", text)
         self.assertIn("def run_menu_main", text)
         self.assertIn("def _drop_tk_root_if_idle", text)
+        self.assertIn("def run_blocking", text)
+
+    def test_popup_subprocesses_run_tk_on_main_thread(self) -> None:
+        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
+        status = text.split("def run_status_main")[1].split("def run_menu_main")[0]
+        menu = text.split("def run_menu_main")[1]
+        self.assertIn("run_blocking", status)
+        self.assertIn("run_blocking", menu)
+        self.assertNotIn("closed.wait", status)
+        self.assertIn("主线程正在跑 Tk 时不能 wait", text)
+
+    def test_windows_tray_suppresses_pystray_native_menu(self) -> None:
+        hover = (ROOT / "tray_hover.py").read_text(encoding="utf-8")
+        tray = (ROOT / "tray_app.py").read_text(encoding="utf-8")
+        self.assertIn("def suppress_native_context_menu", hover)
+        self.assertIn("suppress_native_context_menu", tray)
+        self.assertIn("on_right_click", hover)
+        self.assertIn("WM_RBUTTONUP", hover)
+        self.assertIn("_menu_handle = None", hover)
+
+    def test_suppress_native_menu_is_noop_off_windows(self) -> None:
+        if sys.platform == "win32":
+            self.skipTest("windows uses the real notify hook")
+        from tray_hover import suppress_native_context_menu
+
+        class _Icon:
+            _on_notify = staticmethod(lambda w, l: 7)
+            _menu_handle = ("hmenu", [])
+
+        icon = _Icon()
+        suppress_native_context_menu(icon, on_right_click=lambda: None)
+        self.assertEqual(icon._on_notify(0, 0x0205), 7)
+        self.assertEqual(icon._menu_handle, ("hmenu", []))
 
     def test_settings_ui_does_not_keep_tray_tk(self) -> None:
         text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")

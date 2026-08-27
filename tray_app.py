@@ -187,7 +187,11 @@ class TrayApp:
             self._maybe_open_first_run_settings()
             return
 
-        from tray_hover import enable_hover_flyout, patch_pystray_uid
+        from tray_hover import (
+            enable_hover_flyout,
+            patch_pystray_uid,
+            suppress_native_context_menu,
+        )
 
         patch_pystray_uid(icon)
         icon.visible = True
@@ -197,13 +201,21 @@ class TrayApp:
             pass
         time.sleep(0.2)
         try:
+            suppress_native_context_menu(
+                icon,
+                on_right_click=self._on_tray_right_click,
+            )
+        except Exception as exc:
+            app_log(f"suppress native menu failed: {exc}")
+        try:
             enable_hover_flyout(
                 icon,
                 on_left_click=self._open_status_bg,
                 on_right_click=self._on_tray_right_click,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            app_log(f"enable hover flyout failed: {exc}")
+        app_log("windows tray icon ready")
         self._maybe_open_first_run_settings()
 
     def _maybe_open_first_run_settings(self) -> None:
@@ -214,9 +226,12 @@ class TrayApp:
         threading.Timer(delay, lambda: self._open_settings(focus_token=True)).start()
 
     def _on_tray_right_click(self) -> None:
-        if getattr(self, "_menu_opening", False):
-            return
-        self._menu_opening = True
+        app_log("tray right click")
+        with self._lock:
+            if getattr(self, "_menu_opening", False):
+                app_log("tray right click ignored, menu already opening")
+                return
+            self._menu_opening = True
         watcher = getattr(self.icon, "_hover_watcher", None)
         if watcher is not None:
             watcher.pause()
@@ -270,6 +285,7 @@ class TrayApp:
             return
         from popup_launch import open_status_async
 
+        app_log("open windows status popup")
         self._write_status_snapshot()
         open_status_async()
 
