@@ -87,8 +87,17 @@ dotnet publish windows/CursorTokenTray/CursorTokenTray.csproj -c Release -r win-
 
 ### macOS
 
-1. 下载 `CursorTokenTray-macos.zip`，将 `.app` 拖到「应用程序」
-2. 开机自启会注册本机登录项（`SMAppService`）
+1. 下载 `CursorTokenTray-macos.zip`，解压后将 `.app` 拖到「应用程序」（也可先放在下载文件夹）
+2. **不要直接双击 App**。浏览器下载的未公证应用会被系统隔离，弹「已损坏，无法打开 / 移到废纸篓」
+3. 双击解压出来的 **`首次打开.command`**（若系统拦脚本，右键 → 打开），或在终端执行：
+
+```bash
+xattr -cr /Applications/CursorTokenTray.app
+open /Applications/CursorTokenTray.app
+```
+
+路径按实际位置改。去掉隔离属性后以后就可以正常打开。  
+4. 开机自启会注册本机登录项（`SMAppService`）
 
 本地打包：`./macos/scripts/package_app.sh`
 

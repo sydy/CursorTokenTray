@@ -711,6 +711,16 @@ class NativeMenubarGuardTests(unittest.TestCase):
         self.assertIn("不要走 pystray 的 icon setter", text)
 
 
+class NativePackageScriptTests(unittest.TestCase):
+    def test_package_script_signs_and_ships_opener(self) -> None:
+        script = (ROOT / "macos" / "scripts" / "package_app.sh").read_text(encoding="utf-8")
+        self.assertIn("codesign --force --deep --sign -", script)
+        self.assertIn("首次打开.command", script)
+        self.assertIn("xattr -cr", script)
+        workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+        self.assertIn("macos/dist/release", workflow)
+
+
 class MainGuardTests(unittest.TestCase):
     def test_main_rejects_linux(self) -> None:
         if sys.platform in ("win32", "darwin"):
