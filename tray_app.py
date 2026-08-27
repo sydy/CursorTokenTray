@@ -31,9 +31,6 @@ if IS_MAC:
     from macos_menubar import show_status as show_macos_status
     from macos_menubar import update_status as update_macos_status
     from macos_settings import show_settings
-else:
-    from popup_ui import MenuAction, PopupManager, StatusActions
-    from settings_ui import SettingsWindow
 
 
 class TrayApp:
@@ -45,13 +42,10 @@ class TrayApp:
         self._stop = threading.Event()
         self._refresh_event = threading.Event()
         self._lock = threading.Lock()
-        # Windows：设置窗挂到唯一 popup-ui Tk 线程。
+        # Windows：设置/飞出层按需再 import CTk。过夜不用就不要让 Tk 常驻。
         # macOS：托盘进程不导入 settings_ui / Tk。
-        self.popups = None if IS_MAC else PopupManager()
-        self.settings = None if IS_MAC else SettingsWindow(
-            on_saved=self._on_config_saved,
-            ui=self.popups,
-        )
+        self.popups = None
+        self.settings = None
         self._worker: threading.Thread | None = None
         self._suppress_status_closed_resume = False
         self._status_opening = False
@@ -84,8 +78,21 @@ class TrayApp:
             "",
             menu=menu,
         )
-        if self.popups is not None:
-            self.popups.bind_tray_icon(self.icon)
+
+    def _ensure_windows_ui(self):
+        """第一次点飞出层/菜单/设置才加载 CustomTkinter。"""
+        if IS_MAC or self.popups is not None:
+            return self.popups
+        from popup_ui import PopupManager
+        from settings_ui import SettingsWindow
+
+        self.popups = PopupManager(is_ui_busy=lambda: bool(self.settings and self.settings.is_open))
+        self.settings = SettingsWindow(
+            on_saved=self._on_config_saved,
+            ui=self.popups,
+        )
+        self.popups.bind_tray_icon(self.icon)
+        return self.popups
 
     def run(self) -> None:
         try:
@@ -143,6 +150,8 @@ class TrayApp:
         threading.Timer(delay, lambda: self._open_settings(focus_token=True)).start()
 
     def _status_actions(self):
+        from popup_ui import StatusActions
+
         return StatusActions(
             on_open_settings=self._action_open_settings_focus,
             on_refresh=self._action_refresh,
@@ -157,9 +166,10 @@ class TrayApp:
         return values, burn
 
     def _on_tray_right_click(self) -> None:
-        if self.popups is None:
+        popups = self._ensure_windows_ui()
+        if popups is None:
             return
-        if self.popups.menu_visible or getattr(self, "_menu_opening", False):
+        if popups.menu_visible or getattr(self, "_menu_opening", False):
             return
         self._menu_opening = True
         watcher = getattr(self.icon, "_hover_watcher", None)
@@ -176,13 +186,13 @@ class TrayApp:
 
         def open_menu() -> None:
             try:
-                self.popups.cancel_hover_close()
-                if not self.popups.close_and_wait(2.5):
+                popups.cancel_hover_close()
+                if not popups.close_and_wait(2.5):
                     return
                 actions = self._vector_menu_actions()
                 # 设置窗已挂到同一 Tk 线程，勿再 show_menu_on_host：
                 # 宿主 Toplevel 没有 _tray_popup_gen，菜单会被 _watch_gen 立刻关掉
-                self.popups.show_menu(actions)
+                popups.show_menu(actions)
             except Exception:
                 pass
             finally:
@@ -190,7 +200,9 @@ class TrayApp:
 
         threading.Thread(target=open_menu, daemon=True, name="tray-menu").start()
 
-    def _vector_menu_actions(self) -> list[MenuAction]:
+    def _vector_menu_actions(self):
+        from popup_ui import MenuAction
+
         return [
             MenuAction("status", "显示状态", "status", self._action_open_status),
             MenuAction("refresh", "立即刷新", "refresh", self._action_refresh),
@@ -224,12 +236,13 @@ class TrayApp:
                 on_open_settings=self._action_open_settings,
             )
             return
-        self.popups.cancel_hover_close()
-        if self.popups is None:
+        popups = self._ensure_windows_ui()
+        if popups is None:
             return
-        if self._status_opening or self.popups.status_visible or self.popups.busy:
+        popups.cancel_hover_close()
+        if self._status_opening or popups.status_visible or popups.busy:
             return
-        if self.popups.menu_visible:
+        if popups.menu_visible:
             return
         self._status_opening = True
         watcher = getattr(self.icon, "_hover_watcher", None)
@@ -239,7 +252,7 @@ class TrayApp:
         try:
             hist, burn = self._history_payload()
             usage, err, updated = self._ui_snapshot()
-            self.popups.show_status(
+            popups.show_status(
                 usage=usage,
                 error_message=err,
                 updated_at=updated,
@@ -371,6 +384,7 @@ class TrayApp:
                 on_saved=self._on_config_saved,
             )
             return
+        self._ensure_windows_ui()
         assert self.settings is not None
         self.settings.open(focus_token=focus_token, start_import=start_import)
 
@@ -443,7 +457,10 @@ class TrayApp:
             return
 
         def _clip() -> None:
-            root = self.popups.tk_root
+            popups = self.popups
+            if popups is None:
+                return
+            root = popups.tk_root
             if root is None:
                 return
             try:
@@ -453,6 +470,8 @@ class TrayApp:
             except Exception:
                 pass
 
+        if self.popups is None:
+            return
         try:
             self.popups.run_on_ui(_clip, wait=False)
         except Exception:
@@ -717,12 +736,13 @@ class TrayApp:
             if key != self._icon_key:
                 self._icon_key = key
                 self.icon.icon = image
-            try:
-                self.icon.title = ""
-            except Exception:
-                pass
+            if getattr(self.icon, "title", "") != "":
+                try:
+                    self.icon.title = ""
+                except Exception:
+                    pass
 
-        if self.popups is not None:
+        if self.popups is not None and self.popups.status_visible:
             hist, burn = self._history_payload()
             self.popups.update_status(
                 usage=usage,
@@ -731,3 +751,22 @@ class TrayApp:
                 history_values=hist,
                 daily_burn=burn,
             )
+        elif not IS_MAC:
+            self._maybe_release_idle_memory()
+
+    def _maybe_release_idle_memory(self) -> None:
+        """后台刷新后：没有飞出层/设置就压缩工作集，避免过夜数字不掉。"""
+        if IS_MAC:
+            return
+        if self.popups is not None and (
+            self.popups.status_visible or self.popups.menu_visible or self.popups.busy
+        ):
+            return
+        if self.settings is not None and self.settings.is_open:
+            return
+        try:
+            from win_memory import release_idle_memory
+
+            release_idle_memory()
+        except Exception:
+            pass

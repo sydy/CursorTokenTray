@@ -298,6 +298,12 @@ class SettingsWindow:
                 root.destroy()
             except tk.TclError:
                 pass
+            ui = self._ui
+            if ui is not None:
+                try:
+                    ui.schedule_idle_release()
+                except Exception:
+                    pass
 
         root.grid_columnconfigure(2, weight=1)
         root.grid_rowconfigure(0, weight=1)

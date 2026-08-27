@@ -108,6 +108,12 @@ def create_idle_icon(size: int | None = None, mode: str = "ring") -> Image.Image
     return create_progress_icon(None, error=False, size=size, mode=mode)
 
 
+def clear_icon_caches() -> None:
+    """空闲时丢掉超采样图标和探测字体。当前托盘 HICON 不在这里。"""
+    _cached_icon.cache_clear()
+    _fit_font.cache_clear()
+
+
 def create_sparkline(
     values: list[float],
     *,
