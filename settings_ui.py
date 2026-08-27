@@ -8,13 +8,25 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 from typing import Any, Callable
 
 import customtkinter as ctk
 
 from app_icon import apply_window_icon
+from accounts import (
+    display_label,
+    existing_token_variants,
+    find_account,
+    format_account_caption,
+    list_accounts,
+    remove_account,
+    rename_account,
+    set_active_account,
+    upsert_account,
+)
 from config import load_config, save_config
 from dpi_util import cap_ctk_maxsize, enable_dpi_awareness, physical_window_size, sync_windows_ui_scale
 from platform_util import (
@@ -333,7 +345,7 @@ class SettingsWindow:
         pages: dict[str, ctk.CTkFrame] = {}
         nav_items: dict[str, CTkNavItem] = {}
         page_meta = {
-            "account": {"title": "账户与登录", "desc": "粘贴或导入会话 Token。"},
+            "account": {"title": "账户与登录", "desc": "可保存多个账号；托盘圆环显示当前账号，其余账号在后台刷新并告警。"},
             "notify": {"title": "刷新与通知", "desc": "刷新频率与额度提醒。"},
             "tray": {
                 "title": "菜单栏与启动" if IS_MAC else "托盘与启动",
@@ -405,8 +417,116 @@ class SettingsWindow:
         token_var = tk.StringVar(value=cfg.get("session_token", ""))
         show_var = tk.BooleanVar(value=False)
 
-        token_exp = CTkSettingsRow(account_body, title="会话 Token", description="用于读取用量，请勿分享。", glyph=_G_KEY)
-        token_exp.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        list_host = ctk.CTkFrame(account_body, fg_color="transparent")
+        list_host.grid(row=0, column=0, sticky="ew")
+        list_host.grid_columnconfigure(0, weight=1)
+
+        def notify_cfg_saved(new_cfg: dict[str, Any]) -> None:
+            def notify_saved() -> None:
+                if self.on_saved:
+                    try:
+                        self.on_saved(new_cfg)
+                    except Exception:
+                        pass
+
+            try:
+                root.after(1, notify_saved)
+            except tk.TclError:
+                notify_saved()
+
+        def refresh_account_list() -> None:
+            for child in list_host.winfo_children():
+                try:
+                    child.destroy()
+                except tk.TclError:
+                    pass
+            now = load_config()
+            accounts = list_accounts(now)
+            active_id = str(now.get("active_account_id") or "")
+            if not accounts:
+                ctk.CTkLabel(
+                    list_host,
+                    text="还没有账号。请在下方导入或粘贴 Token。",
+                    text_color=FG_TER,
+                    font=ctk.CTkFont(size=12),
+                    anchor="w",
+                    justify="left",
+                ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+                return
+            for i, acc in enumerate(accounts):
+                aid = str(acc.get("id") or "")
+                is_active = aid == active_id
+                row = CTkSettingsRow(
+                    list_host,
+                    title=display_label(acc) + ("  · 当前" if is_active else ""),
+                    description=format_account_caption(acc),
+                    glyph=_G_ACCOUNT,
+                )
+                row.grid(row=i, column=0, sticky="ew", pady=(0, 6))
+                btns = ctk.CTkFrame(row.control_host, fg_color="transparent")
+                btns.pack()
+                if not is_active:
+                    make_ghost_button(
+                        btns, "切换", lambda a=aid: on_switch_account(a), width=56
+                    ).pack(side="left", padx=(0, 6))
+                make_ghost_button(
+                    btns, "重命名", lambda a=aid: on_rename_account(a), width=64
+                ).pack(side="left", padx=(0, 6))
+                make_ghost_button(
+                    btns, "删除", lambda a=aid: on_delete_account(a), width=56
+                ).pack(side="left")
+
+        def on_switch_account(account_id: str) -> None:
+            new_cfg = load_config()
+            if not set_active_account(new_cfg, account_id):
+                return
+            save_config(new_cfg)
+            token_var.set(str(new_cfg.get("session_token") or ""))
+            refresh_account_list()
+            notify_cfg_saved(new_cfg)
+
+        def on_rename_account(account_id: str) -> None:
+            new_cfg = load_config()
+            acc = find_account(new_cfg, account_id)
+            if acc is None:
+                return
+            name = simpledialog.askstring(
+                "重命名账号",
+                "备注名称（例如 个人、公司）：",
+                initialvalue=str(acc.get("label") or display_label(acc)),
+                parent=root,
+            )
+            if name is None:
+                return
+            rename_account(new_cfg, account_id, name)
+            save_config(new_cfg)
+            refresh_account_list()
+            notify_cfg_saved(new_cfg)
+
+        def on_delete_account(account_id: str) -> None:
+            new_cfg = load_config()
+            acc = find_account(new_cfg, account_id)
+            if acc is None:
+                return
+            if not messagebox.askyesno(
+                "删除账号",
+                f"确定删除「{display_label(acc)}」？不会退出 Cursor，只是从本工具移除。",
+                parent=root,
+            ):
+                return
+            remove_account(new_cfg, account_id)
+            save_config(new_cfg)
+            token_var.set(str(new_cfg.get("session_token") or ""))
+            refresh_account_list()
+            notify_cfg_saved(new_cfg)
+
+        token_exp = CTkSettingsRow(
+            account_body,
+            title="添加账号",
+            description="粘贴 WorkosCursorSessionToken。同一账号会更新 Token，不会重复添加。",
+            glyph=_G_KEY,
+        )
+        token_exp.grid(row=1, column=0, sticky="ew", pady=(8, 6))
         show_host = ctk.CTkFrame(token_exp.control_host, fg_color="transparent")
         show_host.pack()
         ctk.CTkLabel(show_host, text="显示", text_color=FG_TER, font=ctk.CTkFont(size=12)).pack(
@@ -426,8 +546,32 @@ class SettingsWindow:
 
         show_var.trace_add("write", toggle_show)
 
+        def add_pasted_token() -> None:
+            from cursor_api import CursorApiError, normalize_workos_token
+
+            raw = token_var.get().strip()
+            if not raw:
+                messagebox.showwarning("添加账号", "请先粘贴 Token。", parent=root)
+                return
+            try:
+                token = normalize_workos_token(raw)
+            except CursorApiError as err:
+                messagebox.showerror("添加账号", str(err), parent=root)
+                return
+            token_var.set(token)
+            new_cfg = load_config()
+            _, created = upsert_account(new_cfg, token, activate=True)
+            save_config(new_cfg)
+            refresh_account_list()
+            notify_cfg_saved(new_cfg)
+            messagebox.showinfo("添加账号", "已添加账号。" if created else "已更新已有账号。", parent=root)
+
+        add_btn_host = ctk.CTkFrame(token_exp.body_host, fg_color="transparent")
+        add_btn_host.pack(fill="x", pady=(8, 0))
+        make_ghost_button(add_btn_host, "添加此 Token", add_pasted_token, width=120).pack(side="left")
+
         ctk.CTkLabel(account_body, text="浏览器导入", text_color=FG_TER, font=ctk.CTkFont(size=12), anchor="w").grid(
-            row=1, column=0, sticky="ew", pady=(10, 6)
+            row=2, column=0, sticky="ew", pady=(10, 6)
         )
 
         import_exp = CTkSettingsRow(
@@ -440,7 +584,7 @@ class SettingsWindow:
             ),
             glyph=_G_GLOBE,
         )
-        import_exp.grid(row=2, column=0, sticky="ew")
+        import_exp.grid(row=3, column=0, sticky="ew")
         import_exp.show_body()
 
         auth_status = tk.StringVar(value="")
@@ -468,26 +612,25 @@ class SettingsWindow:
             except tk.TclError:
                 pass
 
-        def apply_imported_token(token: str, msg: str) -> None:
+        def apply_imported_token(token: str, msg: str, membership: str = "", remaining: float | None = None) -> None:
             token_var.set(token)
             show_var.set(False)
             set_auth_status_ui(msg)
             new_cfg = load_config()
-            new_cfg["session_token"] = token
-            new_cfg["auth_error_notified"] = False
+            _, created = upsert_account(
+                new_cfg,
+                token,
+                membership_type=membership or None,
+                remaining=remaining,
+                activate=True,
+            )
             save_config(new_cfg)
-
-            def notify_saved() -> None:
-                if self.on_saved:
-                    try:
-                        self.on_saved(new_cfg)
-                    except Exception:
-                        pass
-
-            try:
-                root.after(1, notify_saved)
-            except tk.TclError:
-                notify_saved()
+            refresh_account_list()
+            notify_cfg_saved(new_cfg)
+            if created:
+                set_auth_status_ui(msg if "已添加" in msg else f"已添加账号。{msg}")
+            else:
+                set_auth_status_ui(msg if "已更新" in msg else f"已更新已有账号。{msg}")
 
         def _drain_import_events() -> None:
             try:
@@ -529,7 +672,12 @@ class SettingsWindow:
                 set_auth_status_ui("导入已结束")
                 return
             if result.ok:
-                apply_imported_token(result.token, result.message)
+                apply_imported_token(
+                    result.token,
+                    result.message,
+                    membership=str(getattr(result, "membership_type", "") or ""),
+                    remaining=getattr(result, "remaining_percent", None),
+                )
 
                 def _ok_dialog() -> None:
                     try:
@@ -570,6 +718,7 @@ class SettingsWindow:
                         import_events.put(("progress", text))
 
                     cancel_cb = lambda: cancel_flag["value"]
+                    skip = existing_token_variants(load_config())
                     if open_browser:
                         result = start_browser_login_and_import(
                             timeout_sec=180.0,
@@ -579,9 +728,20 @@ class SettingsWindow:
                         )
                     else:
                         result = import_and_validate(
+                            skip_tokens=skip or None,
                             should_cancel=cancel_cb,
                             on_progress=on_progress,
                         )
+                        if (
+                            skip
+                            and result is not None
+                            and not result.ok
+                            and result.message != "已取消"
+                        ):
+                            result = import_and_validate(
+                                should_cancel=cancel_cb,
+                                on_progress=on_progress,
+                            )
                 except Exception as exc:  # noqa: BLE001
                     error = exc
                 import_events.put(("done", {"result": result, "error": error}))
@@ -621,6 +781,7 @@ class SettingsWindow:
             state="disabled",
         )
         btn_cancel_import.pack(side="left")
+        refresh_account_list()
 
         # ========== 通知页 ==========
         notify_body = make_page("notify")
@@ -718,10 +879,17 @@ class SettingsWindow:
         )
 
         def persist_settings(*, close: bool) -> bool:
-            from cursor_api import normalize_workos_token
+            from cursor_api import CursorApiError, normalize_workos_token
 
-            token = normalize_workos_token(token_var.get().strip())
-            token_var.set(token)
+            raw_token = token_var.get().strip()
+            token = ""
+            if raw_token:
+                try:
+                    token = normalize_workos_token(raw_token)
+                except CursorApiError as err:
+                    messagebox.showerror("错误", str(err), parent=root)
+                    return False
+                token_var.set(token)
             try:
                 interval = int(interval_var.get())
             except (tk.TclError, ValueError):
@@ -747,12 +915,15 @@ class SettingsWindow:
 
             display_mode = rev_map.get(mode_var.get(), "ring")
             new_cfg = load_config()
-            old_token = str(new_cfg.get("session_token") or "").strip()
             old_thr = list(new_cfg.get("alert_thresholds") or [])
             if parsed != old_thr:
                 new_cfg["alert_notified_levels"] = []
                 new_cfg["low_quota_notified"] = False
-            new_cfg["session_token"] = token
+                for acc in list_accounts(new_cfg):
+                    acc["alert_notified_levels"] = []
+                    acc["low_quota_notified"] = False
+            if token:
+                upsert_account(new_cfg, token, activate=True)
             new_cfg["refresh_interval_minutes"] = interval
             new_cfg["alert_thresholds"] = parsed
             new_cfg["low_quota_threshold"] = min(parsed) if parsed else 20
@@ -760,21 +931,9 @@ class SettingsWindow:
             new_cfg["notify_exhaustion_risk"] = bool(exhaust_var.get())
             new_cfg["tray_display_mode"] = display_mode
             new_cfg["autostart_enabled"] = bool(autostart_var.get())
-            if token != old_token:
-                new_cfg["auth_error_notified"] = False
             save_config(new_cfg)
-
-            def notify() -> None:
-                if self.on_saved:
-                    try:
-                        self.on_saved(new_cfg)
-                    except Exception:
-                        pass
-
-            try:
-                root.after(1, notify)
-            except tk.TclError:
-                notify()
+            refresh_account_list()
+            notify_cfg_saved(new_cfg)
 
             if close:
                 _close_window()
@@ -827,6 +986,35 @@ class SettingsWindow:
                 root.after(400, lambda: run_import(open_browser=True))
             except tk.TclError:
                 run_import(open_browser=True)
+
+        # 开着过夜不会泄漏式暴涨，但会一直占着一套 CTk。无操作 30 分钟就关，进程退出。
+        SETTINGS_IDLE_CLOSE_SEC = 30 * 60
+        last_input = {"t": time.monotonic()}
+
+        def _note_input(_e=None) -> None:
+            last_input["t"] = time.monotonic()
+
+        def _idle_watch() -> None:
+            try:
+                if importing["value"]:
+                    last_input["t"] = time.monotonic()
+                elif time.monotonic() - last_input["t"] >= SETTINGS_IDLE_CLOSE_SEC:
+                    app_log("settings idle timeout, closing")
+                    _close_window()
+                    return
+                root.after(30_000, _idle_watch)
+            except tk.TclError:
+                pass
+
+        for seq in ("<Motion>", "<Key>", "<Button>", "<MouseWheel>"):
+            try:
+                root.bind_all(seq, _note_input, add="+")
+            except tk.TclError:
+                pass
+        try:
+            root.after(30_000, _idle_watch)
+        except tk.TclError:
+            pass
 
         if owns_loop:
             try:

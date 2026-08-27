@@ -152,6 +152,94 @@ class IconBudgetTests(unittest.TestCase):
         self.assertIs(a, b)
         self.assertGreaterEqual(after.hits, before.hits + 1)
 
+    def test_clear_icon_caches_drops_lru(self) -> None:
+        from icon_renderer import _cached_icon, clear_icon_caches, create_progress_icon
+
+        create_progress_icon(80, size=64, mode="ring")
+        self.assertGreater(_cached_icon.cache_info().currsize, 0)
+        clear_icon_caches()
+        self.assertEqual(_cached_icon.cache_info().currsize, 0)
+
+
+class IdleMemoryTests(unittest.TestCase):
+    def test_tray_app_never_imports_windows_ui(self) -> None:
+        text = (ROOT / "tray_app.py").read_text(encoding="utf-8")
+        self.assertNotIn("from popup_ui import", text)
+        self.assertNotIn("from settings_ui import", text)
+        self.assertNotIn("def _ensure_windows_ui", text)
+        self.assertIn("open_settings_async", text)
+        self.assertIn("open_status_async", text)
+        self.assertIn("run_menu_and_pick", text)
+
+    def test_popup_process_entrypoints_exist(self) -> None:
+        text = (ROOT / "popup_ui.py").read_text(encoding="utf-8")
+        self.assertIn("def run_status_main", text)
+        self.assertIn("def run_menu_main", text)
+        self.assertIn("def _drop_tk_root_if_idle", text)
+
+    def test_settings_ui_does_not_keep_tray_tk(self) -> None:
+        text = (ROOT / "settings_ui.py").read_text(encoding="utf-8")
+        self.assertNotIn("schedule_idle_release", text)
+        self.assertIn("SETTINGS_IDLE_CLOSE_SEC", text)
+        self.assertIn("_idle_watch", text)
+
+    def test_windows_spec_keeps_child_ui_modules(self) -> None:
+        text = (ROOT / "CursorTokenTray.spec").read_text(encoding="utf-8")
+        for name in ("popup_ui", "popup_launch", "usage_snapshot", "accounts", "settings_ui", "customtkinter"):
+            self.assertIn(f"'{name}'", text)
+
+    def test_usage_snapshot_roundtrip(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        import usage_snapshot
+        from cursor_api import ModelTokenUsage, UsageSnapshot
+
+        snap = UsageSnapshot(
+            used_percent=20.0,
+            remaining_percent=80.0,
+            auto_percent_used=10.0,
+            api_percent_used=5.0,
+            total_percent_used=15.0,
+            membership_type="pro",
+            billing_cycle_start=None,
+            billing_cycle_end=None,
+            days_remaining=12,
+            days_elapsed=3.5,
+            estimated_usable_days=20.0,
+            raw={"skip": True},
+            total_tokens=1234,
+            model_usages=(ModelTokenUsage("auto", 10, 0.1, 2, 4.0),),
+        )
+        old_path = usage_snapshot.SNAPSHOT_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            usage_snapshot.SNAPSHOT_PATH = Path(tmp) / "last_status.json"
+            try:
+                usage_snapshot.write_status_snapshot(
+                    usage=snap, error_message=None, updated_at="12:00:00"
+                )
+                got, err, updated = usage_snapshot.read_status_snapshot()
+            finally:
+                usage_snapshot.SNAPSHOT_PATH = old_path
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertEqual(got.remaining_percent, 80.0)
+        self.assertEqual(got.total_tokens, 1234)
+        self.assertEqual(got.model_usages[0].name, "auto")
+        self.assertEqual(got.billing_mode, "percent")
+        self.assertFalse(got.is_unlimited)
+        self.assertIsNone(err)
+        self.assertEqual(updated, "12:00:00")
+
+    def test_pr_builds_skip_artifact_upload(self) -> None:
+        text = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        # PR 不上传；合入 main 上传制品（失败不红）并覆盖 latest Release。
+        self.assertGreaterEqual(text.count("github.event_name != 'pull_request'"), 3)
+        self.assertIn("continue-on-error: true", text)
+        self.assertGreaterEqual(text.count("tag_name: latest"), 2)
+        self.assertGreaterEqual(text.count("Attach to GitHub Release"), 2)
+        self.assertNotIn("download-artifact", text)
+
 
 class LinuxDefaultsTests(unittest.TestCase):
     def test_non_windows_scale_is_one(self) -> None:

@@ -239,6 +239,16 @@ def install_crash_logging() -> None:
     threading.excepthook = _thread_hook
 
 
+def hidden_popen_kwargs() -> dict:
+    """Windows 子进程不要闪出控制台。其它平台为空。"""
+    if not IS_WIN:
+        return {}
+    import subprocess
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flags} if flags else {}
+
+
 def copy_text(text: str) -> bool:
     """复制到剪贴板。macOS 用 pbcopy，避免托盘进程再碰 Tk。"""
     if IS_MAC:

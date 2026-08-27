@@ -9,6 +9,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from platform_util import hidden_popen_kwargs
+
 MODE_ENV = "CURSORTOKEN_MODE"
 FOCUS_ENV = "CURSORTOKEN_FOCUS_TOKEN"
 IMPORT_ENV = "CURSORTOKEN_START_IMPORT"
@@ -100,6 +102,7 @@ def spawn_settings_process(
             start_new_session=True,
             close_fds=True,
             cwd=str(Path(cmd[0]).resolve().parent) if os.path.isabs(cmd[0]) else None,
+            **hidden_popen_kwargs(),
         )
         proc = _settings_proc
     try:

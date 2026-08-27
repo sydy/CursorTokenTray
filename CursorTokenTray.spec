@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec — onefile，无控制台
 #
-# Windows 设置窗挂在托盘同一进程，资源走 sys._MEIPASS，不需要 onedir。
+# 资源走 sys._MEIPASS。飞出层 / 设置是短命子进程，会再启动同一份 exe。
 # 单文件启动时解到临时目录，关掉进程后由 bootloader 清理。
 
 block_cipher = None
@@ -29,6 +29,19 @@ a = Analysis(
         'cryptography',
         'cryptography.hazmat.primitives.ciphers.aead',
         'certifi',
+        # 托盘空闲时按需 import，分析器扫不到，必须显式打进包
+        'popup_ui',
+        'popup_launch',
+        'usage_snapshot',
+        'accounts',
+        'settings_ui',
+        'ui_ctk',
+        'win11_settings',
+        'win11_style',
+        'win11_theme',
+        'tray_hover',
+        'customtkinter',
+        'pywinstyles',
     ],
     hookspath=[],
     hooksconfig={},

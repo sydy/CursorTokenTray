@@ -18,6 +18,8 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "session_token": "",
+    "accounts": [],
+    "active_account_id": "",
     "refresh_interval_minutes": 10,
     "low_quota_threshold": 20,  # 兼容旧版；迁移到 alert_thresholds
     "alert_thresholds": [50, 20, 5],
@@ -25,7 +27,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "notify_exhaustion_risk": True,
     "autostart_enabled": True,
     "tray_display_mode": "ring",  # ring | number | dot
-    # 去重状态
+    # 去重状态（跟随当前账号；兼容旧读取路径）
     "low_quota_notified": False,
     "auth_error_notified": False,
     "alert_notified_levels": [],
@@ -182,6 +184,10 @@ def _normalize_config(cfg: dict[str, Any], *, raw: dict[str, Any]) -> dict[str, 
     cfg["alert_notified_levels"] = sorted(
         {int(x) for x in levels if _is_int_like(x) and 1 <= int(x) <= 100}
     )
+
+    from accounts import normalize_account_state
+
+    normalize_account_state(cfg, raw=raw)
     return cfg
 
 

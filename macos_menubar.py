@@ -19,6 +19,7 @@ import time
 from typing import Any, Callable
 
 from platform_util import app_log
+from cursor_api import dashboard_link_label, format_spend_range
 from status_text import (
     format_estimate_caption,
     format_plan_caption,
@@ -184,6 +185,7 @@ def show_status(
     on_refresh: Callable[[], None] | None = None,
     on_open_spending: Callable[[], None] | None = None,
     on_open_settings: Callable[[], None] | None = None,
+    account_label: str | None = None,
     **_unused: Any,
 ) -> None:
     """打开或切换状态明细面板。可从菜单回调或后台线程调用。"""
@@ -201,6 +203,7 @@ def show_status(
                 on_refresh=on_refresh,
                 on_open_spending=on_open_spending,
                 on_open_settings=on_open_settings,
+                account_label=account_label,
             )
         except Exception as exc:  # noqa: BLE001
             app_log(f"show status failed: {exc}")
@@ -215,6 +218,7 @@ def update_status(
     usage: Any = None,
     error_message: str | None = None,
     updated_at: str | None = None,
+    account_label: str | None = None,
     **_unused: Any,
 ) -> None:
     ctrl = _STATUS
@@ -228,7 +232,7 @@ def update_status(
 
     def apply() -> None:
         try:
-            ctrl.apply_data(usage, error_message, updated_at)
+            ctrl.apply_data(usage, error_message, updated_at, account_label=account_label)
         except Exception as exc:
             app_log(f"update status failed: {exc}")
 
@@ -701,6 +705,7 @@ def _present(
     on_refresh: Callable[[], None] | None,
     on_open_spending: Callable[[], None] | None,
     on_open_settings: Callable[[], None] | None,
+    account_label: str | None = None,
 ) -> None:
     global _STATUS
     ctrl = _STATUS
@@ -722,8 +727,9 @@ def _present(
     ctrl._on_open_spending = on_open_spending
     ctrl._on_open_settings = on_open_settings
     ctrl._icon = icon
+    ctrl._account_label = account_label or ""
     ctrl.build()
-    ctrl.apply_data(usage, error_message, updated_at)
+    ctrl.apply_data(usage, error_message, updated_at, account_label=account_label)
     _STATUS = ctrl
     _front_panel(ctrl.window)
     _position_panel(ctrl.window, icon)
@@ -987,6 +993,8 @@ class StatusController(NSObject):
             self._on_open_settings = None
         if not hasattr(self, "_icon"):
             self._icon = None
+        if not hasattr(self, "_account_label"):
+            self._account_label = ""
 
         try:
             from AppKit import NSPanel, NSWindowStyleMaskNonactivatingPanel
@@ -1041,8 +1049,17 @@ class StatusController(NSObject):
                 pass
         self._host = host
 
-    def apply_data(self, usage, error_message: str | None, updated_at: str | None) -> None:
+    def apply_data(
+        self,
+        usage,
+        error_message: str | None,
+        updated_at: str | None,
+        account_label: str | None = None,
+    ) -> None:
         from cursor_api import format_token_count
+
+        if account_label is not None:
+            self._account_label = account_label
 
         view = self._host
         for sub in list(view.subviews()):
@@ -1059,9 +1076,15 @@ class StatusController(NSObject):
         if remaining is not None and not is_error:
             _label(view, f"{remaining:.1f}", 22, _y(38, 44), 150, 44, 34, bold=True)
             _label(view, "%", 168, _y(54, 20), 28, 20, 14, secondary=True)
+            memb_caption = format_plan_caption(
+                getattr(usage, "membership_type", ""),
+                getattr(self, "_account_label", "") or None,
+            )
+            if getattr(usage, "is_unlimited", False):
+                memb_caption = f"{memb_caption} · 不限量"
             _label(
                 view,
-                format_plan_caption(getattr(usage, "membership_type", "")),
+                memb_caption,
                 24,
                 _y(88, 18),
                 180,
@@ -1085,6 +1108,21 @@ class StatusController(NSObject):
         rx, rw = 230.0, 202.0
         top = 20.0
         if usage is not None and not is_error:
+            if getattr(usage, "shows_amount", lambda: False)():
+                _label(view, "金额", rx, _y(top, 16), 120, 16, 11, secondary=True)
+                _label(
+                    view,
+                    format_spend_range(
+                        getattr(usage, "used_cents", None),
+                        getattr(usage, "limit_cents", None),
+                    ),
+                    rx + 90,
+                    _y(top, 16),
+                    112,
+                    16,
+                    11,
+                )
+                top += 22.0
             auto = getattr(usage, "auto_percent_used", None)
             api = getattr(usage, "api_percent_used", None)
             if auto is not None or api is not None:
@@ -1135,7 +1173,7 @@ class StatusController(NSObject):
         elif updated_at:
             _label(view, f"更新  {updated_at}", rx, _y(20, 16), rw, 16, 12, secondary=True)
 
-        _link(view, "查看用量账单 →", b"spending:", self, 20, 16, 140)
+        _link(view, dashboard_link_label(usage), b"spending:", self, 20, 16, 140)
         _link(view, "刷新", b"refresh:", self, 320, 16, 44)
         _link(view, "设置", b"settings:", self, 372, 16, 44)
 

@@ -26,9 +26,38 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -v
 
+  # 只清掉历史制品，避开当前 run，避免和打包上传抢同一批 zip。
+  cleanup-artifacts:
+    name: Cleanup artifacts
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete old Actions artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deleted=0
+          while :; do
+            mapfile -t ids < <(gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --jq ".artifacts[] | select(.workflow_run.id != ${GITHUB_RUN_ID}) | .id")
+            if [ "${#ids[@]}" -eq 0 ] || [ -z "${ids[0]:-}" ]; then
+              break
+            fi
+            for id in "${ids[@]}"; do
+              [ -z "$id" ] && continue
+              gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" >/dev/null
+              deleted=$((deleted + 1))
+            done
+          done
+          echo "Deleted ${deleted} old artifacts (Actions storage quota)."
+
   build-windows:
     name: Build Windows
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -44,15 +73,43 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path dist\CursorTokenTray.exe -DestinationPath CursorTokenTray-windows.zip -Force
+      # PR 不上传。合入 main 会上传；配额尚未重算时忽略失败，避免把已经编过的 job 打红。
       - uses: actions/upload-artifact@v6
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
         with:
           name: CursorTokenTray-windows
           path: CursorTokenTray-windows.zip
           if-no-files-found: error
+          retention-days: 1
+      # Releases 不占 Actions 制品配额，合入后一定能在这里下到包。
+      - name: Publish latest build
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: latest
+          name: Latest
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          target_commitish: ${{ github.sha }}
+          files: CursorTokenTray-windows.zip
+          body: |
+            最新 `main` 构建（`${{ github.sha }}`），随每次合入覆盖更新。
+            正式版请打 `v*` 标签。
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: CursorTokenTray-windows.zip
+          generate_release_notes: true
 
   build-macos:
     name: Build macOS
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -70,23 +127,31 @@ jobs:
       - name: Zip .app
         run: ditto -c -k --keepParent dist/CursorTokenTray.app CursorTokenTray-macos.zip
       - uses: actions/upload-artifact@v6
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
         with:
           name: CursorTokenTray-macos
           path: CursorTokenTray-macos.zip
           if-no-files-found: error
-
-  release:
-    name: GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, build-windows, build-macos]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v7
+          retention-days: 1
+      - name: Publish latest build
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v3
         with:
-          path: artifacts
-      - uses: softprops/action-gh-release@v3
+          tag_name: latest
+          name: Latest
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          target_commitish: ${{ github.sha }}
+          files: CursorTokenTray-macos.zip
+          body: |
+            最新 `main` 构建（`${{ github.sha }}`），随每次合入覆盖更新。
+            正式版请打 `v*` 标签。
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/**/*.zip
+          files: CursorTokenTray-macos.zip
           generate_release_notes: true
