@@ -230,6 +230,75 @@ public class FixtureTests
         Assert.Equal(token, TokenProtector.Unprotect(TokenProtector.Protect(token)));
         Assert.Equal("plain", TokenProtector.Unprotect("plain"));
         Assert.Equal("", TokenProtector.Protect(""));
+        var blob = TokenProtector.Prefix + Convert.ToBase64String(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 });
+        Assert.False(TokenProtector.TryUnprotect(blob, out var plain));
+        Assert.Equal("", plain);
+        Assert.Equal("", TokenProtector.Unprotect(blob));
+        Assert.DoesNotContain(TokenProtector.Prefix, TokenProtector.Unprotect(blob));
+    }
+
+    [Fact]
+    public void EncryptedBlobIsNotUsedAsTokenAndIsPreserved()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ctt_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var blob = TokenProtector.Prefix + Convert.ToBase64String("not-a-real-dpapi-payload"u8.ToArray());
+            var json = $$"""
+                {
+                  "session_token": "{{blob}}",
+                  "accounts": [{ "id": "user_01X", "token": "{{blob}}", "label": "坏" }],
+                  "active_account_id": "user_01X",
+                  "refresh_interval_minutes": 10
+                }
+                """;
+            File.WriteAllText(AppPaths.ConfigPath(dir), json);
+            var loaded = ConfigStore.Load(dir);
+            Assert.True(loaded.DecryptError);
+            Assert.Single(loaded.Accounts);
+            Assert.True(loaded.Accounts[0].TokenDecryptFailed);
+            Assert.Equal("", loaded.Accounts[0].Token);
+            Assert.Equal("坏", loaded.Accounts[0].Label);
+            Assert.Equal(TokenProtector.DecryptFailedMessage, loaded.Accounts[0].LastError);
+            ConfigStore.Save(loaded, dir);
+            Assert.Contains(blob, File.ReadAllText(AppPaths.ConfigPath(dir)));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
+    public void UpdateMergesOntoLatestDiskConfig()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ctt_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var header = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\"alg\":\"none\"}"))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var payload = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { sub = "github|user_01SAVE" }))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var token = $"user_01SAVE%3A%3A{header}.{payload}.sig";
+            var cfg = new AppConfig { RefreshIntervalMinutes = 10 };
+            cfg.UpsertAccount(token, label: "工作", activate: true);
+            ConfigStore.Save(cfg, dir);
+
+            var settings = ConfigStore.Load(dir);
+            settings.RefreshIntervalMinutes = 15;
+            ConfigStore.Save(settings, dir);
+
+            var merged = ConfigStore.Update(live =>
+            {
+                Assert.Equal(15, live.RefreshIntervalMinutes);
+                live.ApplySnapshot(live.ActiveAccountId, remaining: 42);
+            }, dir);
+            Assert.Equal(15, merged.RefreshIntervalMinutes);
+            Assert.Equal(42, merged.ActiveAccount!.LastRemaining);
+            var reloaded = ConfigStore.Load(dir);
+            Assert.Equal(15, reloaded.RefreshIntervalMinutes);
+            Assert.Equal(42, reloaded.ActiveAccount!.LastRemaining);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
     [Fact]

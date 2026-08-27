@@ -127,7 +127,7 @@ sealed class SettingsForm : Form
         var del = new Button { Text = "删除", Left = 110, Top = y, Width = 80 };
         Controls.Add(rename); Controls.Add(del);
         y += 40;
-        Controls.Add(new Label { Text = "添加账号（粘贴 Token，请勿分享）", Left = 20, Top = y, AutoSize = true });
+        Controls.Add(new Label { Text = "添加账号（粘贴 Token，请勿分享；已保存的不会显示）", Left = 20, Top = y, AutoSize = true });
         y += 22; _token.Left = 20; _token.Top = y; Controls.Add(_token);
         y += 66;
         var cur = new Button { Text = "从 Cursor 导入", Left = 20, Top = y, Width = 140 };
@@ -220,7 +220,8 @@ sealed class SettingsForm : Form
             _accounts.Items.Add(new AccountItem(a.Id, a.Caption(a.Id == cfg.ActiveAccountId)));
         var idx = cfg.Accounts.FindIndex(a => a.Id == cfg.ActiveAccountId);
         if (idx >= 0) _accounts.SelectedIndex = idx;
-        _token.Text = cfg.SessionToken;
+        _token.Text = "";
+        _token.PlaceholderText = "粘贴新 Token 以添加或更换账号（已保存的不会显示）";
         _interval.Text = cfg.RefreshIntervalMinutes.ToString();
         _thresholds.Text = string.Join(",", cfg.AlertThresholds);
         _notify.Checked = cfg.NotifyEnabled;
@@ -251,7 +252,7 @@ sealed class SettingsForm : Form
             _status.Text = result.Message;
             if (!result.Ok) return;
             _cfg.UpsertAccount(result.Token, membershipType: result.MembershipType, remaining: result.RemainingPercent, activate: true);
-            _token.Text = result.Token;
+            _token.Text = "";
             Persist(false);
         }
         finally { _importing = false; }

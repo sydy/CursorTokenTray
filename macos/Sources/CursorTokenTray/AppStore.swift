@@ -115,35 +115,39 @@ final class AppStore: ObservableObject {
     }
 
     func refreshAll() async {
-        var cfg = config
-        if cfg.accounts.isEmpty {
+        let targets = config.accounts.map { (id: $0.id, token: $0.token, decryptFailed: $0.tokenDecryptFailed) }
+        if targets.isEmpty {
             usage = nil
             errorMessage = "未配置 Token，请打开设置粘贴"
             updatedAt = nil
             return
         }
-        let activeId = cfg.activeAccountId
-        let ordered = cfg.accounts.sorted { a, b in
+        let activeId = config.activeAccountId
+        struct Outcome {
+            var id: String
+            var snap: UsageSnapshot?
+            var error: String?
+            var authError: Bool
+            var stamp: String
+        }
+        var outcomes: [Outcome] = []
+        let ordered = targets.sorted { a, b in
             (a.id == activeId ? 0 : 1) < (b.id == activeId ? 0 : 1)
         }
         for acc in ordered {
             if Task.isCancelled { break }
-            let token = acc.token.trimmingCharacters(in: .whitespaces)
-            guard !token.isEmpty else { continue }
-            let isActive = acc.id == activeId
             let stamp: String = {
                 let f = DateFormatter()
                 f.dateFormat = "HH:mm:ss"
                 return f.string(from: Date())
             }()
+            if acc.decryptFailed || acc.token.trimmingCharacters(in: .whitespaces).isEmpty {
+                outcomes.append(Outcome(id: acc.id, snap: nil, error: TokenProtector.decryptFailedMessage, authError: false, stamp: stamp))
+                continue
+            }
             do {
-                let snap = try await client.fetchUsageSummary(sessionToken: token, timeout: 20)
-                cfg.applySnapshot(to: acc.id, membershipType: snap.membershipType, remaining: snap.remainingPercent, error: "", updatedAt: stamp)
-                if let idx = cfg.accounts.firstIndex(where: { $0.id == acc.id }) {
-                    cfg.accounts[idx].authErrorNotified = false
-                    let notices = AlertLogic.evaluate(config: cfg, account: &cfg.accounts[idx], snapshot: snap)
-                    for n in notices { notify(n.title, n.body) }
-                }
+                let snap = try await client.fetchUsageSummary(sessionToken: acc.token, timeout: 20)
+                outcomes.append(Outcome(id: acc.id, snap: snap, error: nil, authError: false, stamp: stamp))
                 UsageHistory.append(
                     remaining: snap.remainingPercent,
                     auto: snap.autoPercentUsed,
@@ -151,38 +155,54 @@ final class AppStore: ObservableObject {
                     accountId: acc.id,
                     directory: settingsDirectory
                 )
-                if isActive {
-                    usage = snap
-                    errorMessage = nil
-                    updatedAt = stamp
-                }
             } catch let err as CursorAPIError {
-                cfg.applySnapshot(to: acc.id, error: err.message, updatedAt: stamp)
-                if err.isAuthError, let idx = cfg.accounts.firstIndex(where: { $0.id == acc.id }), !cfg.accounts[idx].authErrorNotified {
-                    if cfg.notifyEnabled {
-                        let name = cfg.accounts[idx].displayLabel
-                        notify("Token 需要更新", name.isEmpty ? err.message : "账号「\(name)」：\(err.message)")
-                    }
-                    cfg.accounts[idx].authErrorNotified = true
-                }
-                if isActive {
-                    usage = nil
-                    errorMessage = err.message
-                    updatedAt = stamp
-                }
+                outcomes.append(Outcome(id: acc.id, snap: nil, error: err.message, authError: err.isAuthError, stamp: stamp))
             } catch {
-                let msg = "刷新失败: \(error.localizedDescription)"
-                cfg.applySnapshot(to: acc.id, error: msg, updatedAt: stamp)
-                if isActive {
-                    usage = nil
-                    errorMessage = msg
-                    updatedAt = stamp
-                }
+                outcomes.append(Outcome(id: acc.id, snap: nil, error: "刷新失败: \(error.localizedDescription)", authError: false, stamp: stamp))
             }
         }
-        cfg.syncLegacyFields()
+
+        var notices: [(String, String)] = []
+        let cfg = ConfigStore.update(from: settingsDirectory) { live in
+            for o in outcomes {
+                guard let idx = live.accounts.firstIndex(where: { $0.id == o.id }) else { continue }
+                if let snap = o.snap {
+                    live.applySnapshot(to: o.id, membershipType: snap.membershipType, remaining: snap.remainingPercent, error: "", updatedAt: o.stamp)
+                    live.accounts[idx].authErrorNotified = false
+                    var account = live.accounts[idx]
+                    let found = AlertLogic.evaluate(config: live, account: &account, snapshot: snap)
+                    live.accounts[idx] = account
+                    for n in found { notices.append((n.title, n.body)) }
+                } else if let err = o.error {
+                    live.applySnapshot(to: o.id, error: err, updatedAt: o.stamp)
+                    if o.authError, !live.accounts[idx].authErrorNotified {
+                        live.accounts[idx].authErrorNotified = true
+                        if live.notifyEnabled {
+                            let name = live.accounts[idx].displayLabel
+                            notices.append(("Token 需要更新", name.isEmpty ? err : "账号「\(name)」：\(err)"))
+                        }
+                    }
+                }
+            }
+            live.syncLegacyFields()
+        }
         config = cfg
-        ConfigStore.save(cfg, to: settingsDirectory)
+        if let active = outcomes.first(where: { $0.id == cfg.activeAccountId }) {
+            if let snap = active.snap {
+                usage = snap
+                errorMessage = nil
+                updatedAt = active.stamp
+            } else if let err = active.error {
+                usage = nil
+                errorMessage = err
+                updatedAt = active.stamp
+            }
+        } else if cfg.accounts.isEmpty {
+            usage = nil
+            errorMessage = "未配置 Token，请打开设置粘贴"
+            updatedAt = nil
+        }
+        for n in notices { notify(n.0, n.1) }
     }
 
     func notify(_ title: String, _ body: String) {
