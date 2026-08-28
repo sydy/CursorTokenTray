@@ -63,6 +63,11 @@ final class AppStore: ObservableObject {
         SettingsWindowController.shared.show(store: self, focusToken: focusToken, startImport: startImport)
     }
 
+    func openReport() {
+        FlyoutWindowController.shared.close()
+        ReportWindowController.shared.show(app: self)
+    }
+
     func applyConfig(_ cfg: AppConfig, refresh: Bool) {
         let prevToken = config.sessionToken
         let prevActive = config.activeAccountId

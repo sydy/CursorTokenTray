@@ -68,6 +68,7 @@ final class StatusItemController: NSObject {
         let web = NSMenuItem(title: UsageParser.dashboardMenuLabel(store.usage), action: #selector(openWeb), keyEquivalent: "")
         web.target = self
         menu.addItem(web)
+        menu.addItem(withTitle: "用量报表…", action: #selector(openReport), keyEquivalent: "").target = self
         let switcher = NSMenuItem(title: "切换账号", action: nil, keyEquivalent: "")
         let sub = NSMenu()
         let accounts = store.config.accounts
@@ -102,6 +103,7 @@ final class StatusItemController: NSObject {
 
     @objc private func refresh() { store.requestRefresh() }
     @objc private func openWeb() { store.openDashboard() }
+    @objc private func openReport() { store.openReport() }
     @objc private func importToken() { store.openSettings(focusToken: true, startImport: true) }
     @objc private func openSettings() { store.openSettings() }
     @objc private func switchAccount(_ sender: NSMenuItem) {
@@ -111,6 +113,7 @@ final class StatusItemController: NSObject {
     @objc private func quit() {
         FlyoutWindowController.shared.close()
         SettingsWindowController.shared.close()
+        ReportWindowController.shared.close()
         store.stop()
         NSApp.terminate(nil)
     }

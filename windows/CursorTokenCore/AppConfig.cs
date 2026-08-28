@@ -192,6 +192,14 @@ public static class AppPaths
         var aid = (accountId ?? "").Trim();
         return aid.Length == 0 ? Path.Combine(root, "usage_history.jsonl") : Path.Combine(root, $"usage_history.{Token.SafeAccountId(aid)}.jsonl");
     }
+
+    public static string UsageEventsPath(string? accountId, bool teamScope, string? dir = null)
+    {
+        var root = ConfigDirectory(dir);
+        var aid = Token.SafeAccountId((accountId ?? "").Trim());
+        if (aid.Length == 0) aid = "account";
+        return Path.Combine(root, teamScope ? $"usage_events.{aid}.team.jsonl" : $"usage_events.{aid}.jsonl");
+    }
 }
 
 public sealed class ConfigLockException : IOException

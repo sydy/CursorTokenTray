@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 CURSOR_BASE = "https://cursor.com"
 USAGE_ENDPOINTS = ("/api/usage-summary", "/api/dashboard/usage-summary")
 AGGREGATED_USAGE_ENDPOINT = "/api/dashboard/get-aggregated-usage-events"
+FILTERED_USAGE_ENDPOINT = "/api/dashboard/get-filtered-usage-events"
 USAGE_URL = "https://cursor.com/dashboard/usage"
 SPENDING_URL = "https://cursor.com/dashboard/spending"
 BILLING_URL = "https://cursor.com/dashboard/billing"
@@ -749,6 +750,20 @@ def _percent_from_display_message(message: Any) -> float | None:
     if value is None:
         return None
     return min(100.0, max(0.0, value))
+
+
+def _user_id_from_payload(payload: dict[str, Any] | None) -> int:
+    if not isinstance(payload, dict):
+        return -1
+    for key in ("userId", "numericUserId", "currentUserId"):
+        n = _as_int(payload.get(key))
+        if n is not None and n > 0:
+            return n
+    individual = _as_dict(payload.get("individualUsage"))
+    n = _as_int(individual.get("userId") or individual.get("id"))
+    if n is not None and n > 0:
+        return n
+    return -1
 
 
 def _team_id_from_payload(payload: dict[str, Any] | None) -> int:

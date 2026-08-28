@@ -36,6 +36,14 @@ public enum AppPaths {
         return root.appendingPathComponent("usage_history.\(Token.safeAccountId(aid)).jsonl")
     }
 
+    public static func usageEventsPath(accountId: String?, teamScope: Bool, in directory: URL? = nil) -> URL {
+        let root = directory ?? configDirectory()
+        var aid = Token.safeAccountId((accountId ?? "").trimmingCharacters(in: .whitespaces))
+        if aid.isEmpty { aid = "account" }
+        let name = teamScope ? "usage_events.\(aid).team.jsonl" : "usage_events.\(aid).jsonl"
+        return root.appendingPathComponent(name)
+    }
+
     public static func logPath() -> URL {
         #if os(macOS)
         return FileManager.default.homeDirectoryForCurrentUser
