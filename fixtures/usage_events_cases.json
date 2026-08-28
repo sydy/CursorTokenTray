@@ -1,0 +1,365 @@
+{
+  "kind": [
+    {
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS",
+      "usage_based_costs": "Included",
+      "is_chargeable": false,
+      "output": "included"
+    },
+    {
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usage_based_costs": "$1.67",
+      "is_chargeable": true,
+      "output": "on_demand"
+    },
+    {
+      "kind": "USAGE_EVENT_KIND_FREE",
+      "usage_based_costs": "Free",
+      "is_chargeable": false,
+      "output": "free"
+    },
+    {
+      "kind": "Included",
+      "usage_based_costs": "",
+      "is_chargeable": false,
+      "output": "included"
+    },
+    {
+      "kind": "something-else",
+      "usage_based_costs": "",
+      "is_chargeable": true,
+      "output": "on_demand"
+    }
+  ],
+  "parse": [
+    {
+      "name": "mixed_page",
+      "payload": {
+        "totalUsageEventsCount": 3,
+        "usageEventsDisplay": [
+          {
+            "timestamp": "1787884620000",
+            "model": "cursor-grok-4.6-high-fast",
+            "kind": "USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS",
+            "usageBasedCosts": "Included",
+            "isTokenBasedCall": true,
+            "tokenUsage": {
+              "inputTokens": 1000,
+              "outputTokens": 500,
+              "cacheWriteTokens": 200,
+              "cacheReadTokens": 100,
+              "totalCents": 29
+            },
+            "email": "celeste@example.com",
+            "owningUser": "152683922",
+            "isChargeable": false,
+            "isHeadless": false,
+            "chargedCents": 29
+          },
+          {
+            "timestamp": 1787884500000,
+            "model": "default",
+            "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+            "usageBasedCosts": "$1.67",
+            "tokenUsage": {
+              "inputTokens": 2000,
+              "outputTokens": 100
+            },
+            "userEmail": "celeste@example.com",
+            "owningUser": "152683922",
+            "isChargeable": true,
+            "isHeadless": true,
+            "chargedCents": 167
+          },
+          {
+            "timestamp": "1787798220000",
+            "model": "cursor-grok-4.6-high",
+            "kind": "USAGE_EVENT_KIND_FREE",
+            "usageBasedCosts": "Free",
+            "tokenUsage": {
+              "inputTokens": 50,
+              "outputTokens": 10
+            },
+            "email": "other@example.com",
+            "owningUser": "99",
+            "isChargeable": false,
+            "isHeadless": false,
+            "chargedCents": 0
+          }
+        ]
+      },
+      "total_count": 3,
+      "events": [
+        {
+          "id": "1787884620000|152683922|cursor-grok-4.6-high-fast|1000|500|200|100|USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS",
+          "timestamp_ms": 1787884620000,
+          "model": "cursor-grok-4.6-high-fast",
+          "kind": "included",
+          "user_email": "celeste@example.com",
+          "owning_user": "152683922",
+          "tokens": 1800,
+          "input_tokens": 1000,
+          "output_tokens": 500,
+          "cache_write_tokens": 200,
+          "cache_read_tokens": 100,
+          "charged_cents": 29.0,
+          "total_cents": 29.0,
+          "is_headless": false,
+          "is_chargeable": false
+        },
+        {
+          "id": "1787884500000|152683922|auto|2000|100|0|0|USAGE_EVENT_KIND_USAGE_BASED",
+          "timestamp_ms": 1787884500000,
+          "model": "auto",
+          "kind": "on_demand",
+          "user_email": "celeste@example.com",
+          "owning_user": "152683922",
+          "tokens": 2100,
+          "input_tokens": 2000,
+          "output_tokens": 100,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 167.0,
+          "total_cents": null,
+          "is_headless": true,
+          "is_chargeable": true
+        },
+        {
+          "id": "1787798220000|99|cursor-grok-4.6-high|50|10|0|0|USAGE_EVENT_KIND_FREE",
+          "timestamp_ms": 1787798220000,
+          "model": "cursor-grok-4.6-high",
+          "kind": "free",
+          "user_email": "other@example.com",
+          "owning_user": "99",
+          "tokens": 60,
+          "input_tokens": 50,
+          "output_tokens": 10,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 0.0,
+          "total_cents": null,
+          "is_headless": false,
+          "is_chargeable": false
+        }
+      ]
+    }
+  ],
+  "report": [
+    {
+      "name": "all_events",
+      "events": [
+        {
+          "id": "1787884620000|152683922|cursor-grok-4.6-high-fast|1000|500|200|100|USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS",
+          "timestamp_ms": 1787884620000,
+          "model": "cursor-grok-4.6-high-fast",
+          "kind": "included",
+          "user_email": "celeste@example.com",
+          "owning_user": "152683922",
+          "tokens": 1800,
+          "input_tokens": 1000,
+          "output_tokens": 500,
+          "cache_write_tokens": 200,
+          "cache_read_tokens": 100,
+          "charged_cents": 29.0,
+          "total_cents": 29.0,
+          "is_headless": false,
+          "is_chargeable": false
+        },
+        {
+          "id": "1787884500000|152683922|auto|2000|100|0|0|USAGE_EVENT_KIND_USAGE_BASED",
+          "timestamp_ms": 1787884500000,
+          "model": "auto",
+          "kind": "on_demand",
+          "user_email": "celeste@example.com",
+          "owning_user": "152683922",
+          "tokens": 2100,
+          "input_tokens": 2000,
+          "output_tokens": 100,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 167.0,
+          "total_cents": null,
+          "is_headless": true,
+          "is_chargeable": true
+        },
+        {
+          "id": "1787798220000|99|cursor-grok-4.6-high|50|10|0|0|USAGE_EVENT_KIND_FREE",
+          "timestamp_ms": 1787798220000,
+          "model": "cursor-grok-4.6-high",
+          "kind": "free",
+          "user_email": "other@example.com",
+          "owning_user": "99",
+          "tokens": 60,
+          "input_tokens": 50,
+          "output_tokens": 10,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 0.0,
+          "total_cents": null,
+          "is_headless": false,
+          "is_chargeable": false
+        }
+      ],
+      "filter": {
+        "kind": "",
+        "model": "",
+        "headless": null,
+        "owning_user": ""
+      },
+      "expected": {
+        "event_count": 3,
+        "total_tokens": 3960,
+        "total_cents": 196.0,
+        "has_cost": true,
+        "included_count": 1,
+        "free_count": 1,
+        "on_demand_count": 1,
+        "other_count": 0,
+        "headless_count": 1,
+        "daily": [
+          {
+            "date": "2026-08-27",
+            "tokens": 60,
+            "cents": 0.0,
+            "count": 1
+          },
+          {
+            "date": "2026-08-28",
+            "tokens": 3900,
+            "cents": 196.0,
+            "count": 2
+          }
+        ],
+        "models": [
+          {
+            "name": "auto",
+            "tokens": 2100,
+            "cents": 167.0,
+            "count": 1,
+            "headless_count": 1
+          },
+          {
+            "name": "cursor-grok-4.6-high-fast",
+            "tokens": 1800,
+            "cents": 29.0,
+            "count": 1,
+            "headless_count": 0
+          },
+          {
+            "name": "cursor-grok-4.6-high",
+            "tokens": 60,
+            "cents": 0.0,
+            "count": 1,
+            "headless_count": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "filter_included",
+      "events": [
+        {
+          "id": "a",
+          "timestamp_ms": 1787884620000,
+          "model": "cursor-grok-4.6-high-fast",
+          "kind": "included",
+          "user_email": "celeste@example.com",
+          "owning_user": "152683922",
+          "tokens": 1800,
+          "input_tokens": 1000,
+          "output_tokens": 500,
+          "cache_write_tokens": 200,
+          "cache_read_tokens": 100,
+          "charged_cents": 29.0,
+          "total_cents": 29.0,
+          "is_headless": false,
+          "is_chargeable": false
+        },
+        {
+          "id": "b",
+          "timestamp_ms": 1787884500000,
+          "model": "auto",
+          "kind": "on_demand",
+          "user_email": "celeste@example.com",
+          "owning_user": "152683922",
+          "tokens": 2100,
+          "input_tokens": 2000,
+          "output_tokens": 100,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 167.0,
+          "total_cents": null,
+          "is_headless": true,
+          "is_chargeable": true
+        }
+      ],
+      "filter": {
+        "kind": "included",
+        "model": "",
+        "headless": null,
+        "owning_user": ""
+      },
+      "expected": {
+        "event_count": 1,
+        "total_tokens": 1800,
+        "total_cents": 29.0,
+        "has_cost": true,
+        "included_count": 1,
+        "free_count": 0,
+        "on_demand_count": 0,
+        "other_count": 0,
+        "headless_count": 0,
+        "daily": [
+          {
+            "date": "2026-08-28",
+            "tokens": 1800,
+            "cents": 29.0,
+            "count": 1
+          }
+        ],
+        "models": [
+          {
+            "name": "cursor-grok-4.6-high-fast",
+            "tokens": 1800,
+            "cents": 29.0,
+            "count": 1,
+            "headless_count": 0
+          }
+        ]
+      }
+    }
+  ],
+  "labels": {
+    "included": "套餐内",
+    "free": "免费",
+    "on_demand": "按需",
+    "other": "其他"
+  },
+  "cost_format": [
+    {
+      "kind": "free",
+      "charged_cents": 0,
+      "total_cents": null,
+      "output": "免费"
+    },
+    {
+      "kind": "included",
+      "charged_cents": 29,
+      "total_cents": 29,
+      "output": "$0.29 套餐内"
+    },
+    {
+      "kind": "included",
+      "charged_cents": 0,
+      "total_cents": null,
+      "output": "套餐内"
+    },
+    {
+      "kind": "on_demand",
+      "charged_cents": 167,
+      "total_cents": null,
+      "output": "$1.67"
+    }
+  ],
+  "csv_header": "日期(UTC),用户,类型,模型,Token,费用,云端Agent"
+}

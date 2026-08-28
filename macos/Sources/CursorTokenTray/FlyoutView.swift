@@ -97,6 +97,8 @@ struct FlyoutView: View {
                 Spacer()
                 Button("复制") { store.copySummary() }.buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
                 Button("刷新") { store.requestRefresh() }.buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
+                Button("报表") { FlyoutWindowController.shared.close(); store.openReport() }
+                    .buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
                 Button("设置") { FlyoutWindowController.shared.close(); store.openSettings() }
                     .buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
             }

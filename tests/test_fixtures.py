@@ -84,3 +84,93 @@ class GoldenFixtureTests(unittest.TestCase):
             self.assertEqual(got.tokens, exp["tokens"])
             self.assertEqual(got.tier, exp["tier"])
             self.assertEqual(got.usage_percent, exp["usage_percent"])
+
+    def test_usage_events_fixtures_match_python(self) -> None:
+        from usage_report import (
+            CSV_HEADER,
+            KIND_LABELS,
+            UsageEvent,
+            UsageReportFilter,
+            build_usage_report,
+            classify_usage_kind,
+            format_event_cost,
+            parse_filtered_usage_events,
+            usage_event_from_dict,
+            usage_events_to_csv,
+        )
+
+        data = json.loads((ROOT / "fixtures" / "usage_events_cases.json").read_text(encoding="utf-8"))
+        for row in data["kind"]:
+            self.assertEqual(
+                classify_usage_kind(row["kind"], row["usage_based_costs"], row["is_chargeable"]),
+                row["output"],
+            )
+        self.assertEqual(data["labels"], KIND_LABELS)
+        for cse in data["parse"]:
+            events, total = parse_filtered_usage_events(cse["payload"])
+            self.assertEqual(total, cse["total_count"])
+            self.assertEqual(len(events), len(cse["events"]))
+            for got, exp in zip(events, cse["events"]):
+                self.assertEqual(got.id, exp["id"])
+                self.assertEqual(got.timestamp_ms, exp["timestamp_ms"])
+                self.assertEqual(got.model, exp["model"])
+                self.assertEqual(got.kind, exp["kind"])
+                self.assertEqual(got.user_email, exp["user_email"])
+                self.assertEqual(got.owning_user, exp["owning_user"])
+                self.assertEqual(got.tokens, exp["tokens"])
+                self.assertEqual(got.charged_cents, exp["charged_cents"])
+                self.assertEqual(got.total_cents, exp["total_cents"])
+                self.assertEqual(got.is_headless, exp["is_headless"])
+        for cse in data["report"]:
+            events = [usage_event_from_dict(row) for row in cse["events"]]
+            filt = cse["filter"]
+            report = build_usage_report(
+                events,
+                UsageReportFilter(
+                    kind=filt["kind"],
+                    model=filt["model"],
+                    headless=filt["headless"],
+                    owning_user=filt.get("owning_user", ""),
+                ),
+            )
+            exp = cse["expected"]
+            self.assertEqual(report.event_count, exp["event_count"])
+            self.assertEqual(report.total_tokens, exp["total_tokens"])
+            self.assertEqual(report.total_cents, exp["total_cents"])
+            self.assertEqual(report.has_cost, exp["has_cost"])
+            self.assertEqual(report.included_count, exp["included_count"])
+            self.assertEqual(report.free_count, exp["free_count"])
+            self.assertEqual(report.on_demand_count, exp["on_demand_count"])
+            self.assertEqual(report.headless_count, exp["headless_count"])
+            self.assertEqual(
+                [(d.date, d.tokens, d.cents, d.count) for d in report.daily],
+                [(d["date"], d["tokens"], d["cents"], d["count"]) for d in exp["daily"]],
+            )
+            self.assertEqual(
+                [(m.name, m.tokens, m.cents, m.count, m.headless_count) for m in report.models],
+                [(m["name"], m["tokens"], m["cents"], m["count"], m["headless_count"]) for m in exp["models"]],
+            )
+        for row in data["cost_format"]:
+            ev = UsageEvent(
+                id="x",
+                timestamp_ms=1,
+                model="m",
+                kind=row["kind"],
+                user_email="",
+                owning_user="",
+                tokens=1,
+                input_tokens=0,
+                output_tokens=0,
+                cache_write_tokens=0,
+                cache_read_tokens=0,
+                charged_cents=row["charged_cents"],
+                total_cents=row["total_cents"],
+                is_headless=False,
+                is_chargeable=False,
+            )
+            self.assertEqual(format_event_cost(ev), row["output"])
+        csv_text = usage_events_to_csv(parse_filtered_usage_events(data["parse"][0]["payload"])[0])
+        self.assertTrue(csv_text.startswith("\ufeff"))
+        self.assertTrue(csv_text.lstrip("\ufeff").startswith(data["csv_header"]))
+        self.assertEqual(CSV_HEADER, data["csv_header"])
+

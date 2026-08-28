@@ -91,6 +91,7 @@ sealed class TrayContext : ApplicationContext
     string? _updated;
     SettingsForm? _settings;
     FlyoutForm? _flyout;
+    ReportForm? _report;
     CancellationTokenSource _cts = new();
     bool _refreshNow;
 
@@ -143,6 +144,7 @@ sealed class TrayContext : ApplicationContext
         _dashboardItem.Click -= DashboardClick;
         _dashboardItem.Click += DashboardClick;
         _menu.Items.Add(_dashboardItem);
+        _menu.Items.Add("用量报表…", null, (_, _) => OpenReport());
         _menu.Items.Add(_switcher);
         _menu.Items.Add("导入 Token…", null, (_, _) => OpenSettings(true, true));
         _menu.Items.Add("设置…", null, (_, _) => OpenSettings(false, false));
@@ -336,7 +338,8 @@ sealed class TrayContext : ApplicationContext
                     {
                         var text = StatusText.FormatSummary(_usage, _error, _updated, _config.ActiveAccount?.DisplayLabel);
                         Clipboard.SetText(text);
-                    });
+                    },
+                    OpenReport);
                 var hist = UsageHistory.LoadRecent(7, _config.ActiveAccount?.Id).Select(p => p.Remaining).ToList();
                 _flyout.Render(_usage, _error, _updated, _config, hist);
                 _flyout.PopupNear(anchor ?? Cursor.Position);
@@ -349,6 +352,32 @@ sealed class TrayContext : ApplicationContext
     {
         var url = UsageParser.DashboardUrl(_usage);
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+    }
+
+    void OpenReport()
+    {
+        OnUi(() =>
+        {
+            try
+            {
+                _flyout?.Hide();
+                if (_report is { IsDisposed: false })
+                {
+                    _report.Show();
+                    _report.Activate();
+                    _report.RequestSync();
+                    return;
+                }
+                _report = new ReportForm(_client, () => new ReportForm.ReportState(
+                    _config.ActiveAccount?.Token ?? _config.SessionToken,
+                    _config.ActiveAccountId,
+                    _usage,
+                    _usage?.IsTeamAccount == true));
+                _report.FormClosed += (_, _) => _report = null;
+                _report.Show();
+            }
+            catch (Exception ex) { CrashLog.Write(ex); }
+        });
     }
 
     public void OpenSettings(bool focusToken, bool startImport)
@@ -397,6 +426,7 @@ sealed class TrayContext : ApplicationContext
         _icon.Dispose();
         _menu.Dispose();
         _flyout?.Dispose();
+        _report?.Dispose();
         _settings?.Dispose();
         _sync.Dispose();
         Application.Exit();

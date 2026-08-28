@@ -57,6 +57,52 @@ public sealed class CursorClient
         snap.TotalTokens = parsed.total;
     }
 
+    public async Task<(List<UsageEvent> events, int totalCount, bool truncated)> FetchUsageEvents(
+        string sessionToken,
+        long startMs,
+        long endMs,
+        int? teamId,
+        int? userId,
+        long? stopAtMs,
+        int maxPages = UsageParser.UsageEventsMaxPages,
+        int pageSize = UsageParser.UsageEventsPageSize,
+        double timeout = 30,
+        CancellationToken ct = default)
+    {
+        var token = Token.Normalize(sessionToken);
+        if (token.Length == 0) throw new CursorApiException("未配置 Session Token", 401);
+        var all = new List<UsageEvent>();
+        var total = 0;
+        var truncated = false;
+        var pages = Math.Max(1, maxPages);
+        var size = Math.Clamp(pageSize, 1, 200);
+        for (var page = 1; page <= pages; page++)
+        {
+            var fields = new Dictionary<string, object?>
+            {
+                ["startDate"] = startMs,
+                ["endDate"] = endMs,
+                ["page"] = page,
+                ["pageSize"] = size,
+            };
+            if (teamId is > 0) fields["teamId"] = teamId.Value;
+            if (userId is > 0) fields["userId"] = userId.Value;
+            var body = JsonSerializer.Serialize(fields);
+            var payload = await RequestJson("POST", UsageParser.FilteredEndpoint, token, body, timeout, ct);
+            var parsed = UsageEvents.ParsePage(payload);
+            if (page == 1) total = parsed.totalCount;
+            if (parsed.events.Count == 0) break;
+            all.AddRange(parsed.events);
+            var oldest = parsed.events.Min(e => e.TimestampMs);
+            if (stopAtMs is { } watermark && oldest <= watermark) break;
+            if (parsed.events.Count < size) break;
+            if (total > 0 && all.Count >= total) break;
+            if (page == pages && (parsed.events.Count == size) && (total == 0 || all.Count < total))
+                truncated = true;
+        }
+        return (UsageEvents.Merge(all, []), total, truncated);
+    }
+
     async Task<JsonBag> RequestJson(string method, string endpoint, string token, string? body, double timeout, CancellationToken ct)
     {
         Exception? last = null;

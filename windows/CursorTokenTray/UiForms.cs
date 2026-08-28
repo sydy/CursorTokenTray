@@ -9,7 +9,7 @@ sealed class FlyoutForm : Form
     readonly Label _plan = new() { AutoSize = true, ForeColor = Color.Silver };
     readonly Label _body = new() { AutoSize = true, ForeColor = Color.Gainsboro, MaximumSize = new Size(388, 0) };
     readonly SparklineBox _spark = new() { Width = 388, Height = 36 };
-    readonly Action _dismissBalloon, _refresh, _web, _settings, _copy;
+    readonly Action _dismissBalloon, _refresh, _web, _settings, _copy, _report;
     readonly System.Windows.Forms.Timer _activateTimer = new() { Interval = 220 };
     readonly System.Windows.Forms.Timer _holdTimer = new() { Interval = 180 };
     readonly System.Windows.Forms.Timer _hideTimer = new() { Interval = 160 };
@@ -17,13 +17,14 @@ sealed class FlyoutForm : Form
 
     protected override bool ShowWithoutActivation => true;
 
-    public FlyoutForm(Action dismissBalloon, Action refresh, Action web, Action settings, Action copy)
+    public FlyoutForm(Action dismissBalloon, Action refresh, Action web, Action settings, Action copy, Action report)
     {
         _dismissBalloon = dismissBalloon;
         _refresh = refresh;
         _web = web;
         _settings = settings;
         _copy = copy;
+        _report = report;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None;
@@ -38,6 +39,7 @@ sealed class FlyoutForm : Form
 
         var copyBtn = Link("复制", _copy);
         var refBtn = Link("刷新", _refresh);
+        var reportBtn = Link("报表", _report);
         var webBtn = Link("账单", _web);
         var setBtn = Link("设置", _settings);
 
@@ -51,6 +53,7 @@ sealed class FlyoutForm : Form
         };
         leftBtns.Controls.Add(copyBtn);
         leftBtns.Controls.Add(refBtn);
+        leftBtns.Controls.Add(reportBtn);
         var rightBtns = new FlowLayoutPanel
         {
             AutoSize = true,

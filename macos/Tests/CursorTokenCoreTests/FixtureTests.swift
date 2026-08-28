@@ -140,6 +140,94 @@ final class UsageParserFixtureTests: XCTestCase {
         }
     }
 
+    func testUsageEventsCases() throws {
+        let root = try XCTUnwrap(try json("usage_events_cases.json") as? [String: Any])
+        for row in root["kind"] as! [[String: Any]] {
+            XCTAssertEqual(
+                UsageEvents.classifyKind(str(row["kind"]), usageBasedCosts: str(row["usage_based_costs"]), isChargeable: bool(row["is_chargeable"])),
+                str(row["output"])
+            )
+        }
+        let labels = root["labels"] as! [String: Any]
+        XCTAssertEqual(UsageEvents.kindLabel("included"), str(labels["included"]))
+        XCTAssertEqual(UsageEvents.kindLabel("free"), str(labels["free"]))
+        XCTAssertEqual(UsageEvents.kindLabel("on_demand"), str(labels["on_demand"]))
+        for cse in root["parse"] as! [[String: Any]] {
+            let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: cse["payload"] as Any))
+            let parsed = UsageEvents.parsePage(payload)
+            XCTAssertEqual(parsed.totalCount, int(cse["total_count"]) ?? -1)
+            let expected = cse["events"] as! [[String: Any]]
+            XCTAssertEqual(parsed.events.count, expected.count)
+            for (got, exp) in zip(parsed.events, expected) {
+                XCTAssertEqual(got.id, str(exp["id"]))
+                XCTAssertEqual(got.timestampMs, number64(exp["timestamp_ms"]) ?? -1)
+                XCTAssertEqual(got.model, str(exp["model"]))
+                XCTAssertEqual(got.kind, str(exp["kind"]))
+                XCTAssertEqual(got.userEmail, str(exp["user_email"]))
+                XCTAssertEqual(got.owningUser, str(exp["owning_user"]))
+                XCTAssertEqual(got.tokens, int(exp["tokens"]) ?? -1)
+                XCTAssertEqual(opt(got.chargedCents), opt(num(exp["charged_cents"])))
+                XCTAssertEqual(opt(got.totalCents), opt(num(exp["total_cents"])))
+                XCTAssertEqual(got.isHeadless, bool(exp["is_headless"]))
+            }
+        }
+        for cse in root["report"] as! [[String: Any]] {
+            let events = (cse["events"] as! [[String: Any]]).compactMap(UsageEvents.fromDict)
+            let filt = cse["filter"] as! [String: Any]
+            let report = UsageEvents.buildReport(events, filter: UsageReportFilter(
+                kind: str(filt["kind"]),
+                model: str(filt["model"]),
+                headless: filt["headless"] is NSNull ? nil : (filt["headless"] as? Bool),
+                owningUser: str(filt["owning_user"])
+            ))
+            let exp = cse["expected"] as! [String: Any]
+            XCTAssertEqual(report.eventCount, int(exp["event_count"]) ?? -1)
+            XCTAssertEqual(report.totalTokens, int(exp["total_tokens"]) ?? -1)
+            XCTAssertEqual(report.totalCents, try XCTUnwrap(num(exp["total_cents"])), accuracy: 0.001)
+            XCTAssertEqual(report.hasCost, bool(exp["has_cost"]))
+            XCTAssertEqual(report.includedCount, int(exp["included_count"]) ?? -1)
+            XCTAssertEqual(report.freeCount, int(exp["free_count"]) ?? -1)
+            XCTAssertEqual(report.onDemandCount, int(exp["on_demand_count"]) ?? -1)
+            XCTAssertEqual(report.headlessCount, int(exp["headless_count"]) ?? -1)
+            let daily = exp["daily"] as! [[String: Any]]
+            XCTAssertEqual(report.daily.count, daily.count)
+            for (got, row) in zip(report.daily, daily) {
+                XCTAssertEqual(got.date, str(row["date"]))
+                XCTAssertEqual(got.tokens, int(row["tokens"]) ?? -1)
+                XCTAssertEqual(got.cents, try XCTUnwrap(num(row["cents"])), accuracy: 0.001)
+                XCTAssertEqual(got.count, int(row["count"]) ?? -1)
+            }
+            let models = exp["models"] as! [[String: Any]]
+            XCTAssertEqual(report.models.count, models.count)
+            for (got, row) in zip(report.models, models) {
+                XCTAssertEqual(got.name, str(row["name"]))
+                XCTAssertEqual(got.tokens, int(row["tokens"]) ?? -1)
+                XCTAssertEqual(got.cents, try XCTUnwrap(num(row["cents"])), accuracy: 0.001)
+                XCTAssertEqual(got.count, int(row["count"]) ?? -1)
+                XCTAssertEqual(got.headlessCount, int(row["headless_count"]) ?? -1)
+            }
+        }
+        for row in root["cost_format"] as! [[String: Any]] {
+            let ev = UsageEvent(
+                timestampMs: 1,
+                kind: str(row["kind"]),
+                chargedCents: num(row["charged_cents"]),
+                totalCents: num(row["total_cents"])
+            )
+            XCTAssertEqual(UsageEvents.formatCost(ev), str(row["output"]))
+        }
+        let first = (root["parse"] as! [[String: Any]])[0]
+        let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: first["payload"] as Any))
+        let csv = UsageEvents.toCSV(UsageEvents.parsePage(payload).events)
+        XCTAssertTrue(csv.hasPrefix("\u{FEFF}"))
+        XCTAssertTrue(csv.drop(while: { $0 == "\u{FEFF}" }).hasPrefix(str(root["csv_header"])))
+        XCTAssertEqual(UsageEvents.csvHeader, str(root["csv_header"]))
+    }
+
+    private func number64(_ value: Any?) -> Int64? {
+        num(value).map { Int64($0.rounded()) }
+    }
+
     func testSafariBinaryCookies() throws {
         var rec = Data(count: 56)
         let host = Data(".cursor.com\0".utf8)

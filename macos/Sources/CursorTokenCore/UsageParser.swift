@@ -3,6 +3,9 @@ import Foundation
 public let cursorBaseURL = "https://cursor.com"
 public let usageEndpoints = ["/api/usage-summary", "/api/dashboard/usage-summary"]
 public let aggregatedUsageEndpoint = "/api/dashboard/get-aggregated-usage-events"
+public let filteredUsageEndpoint = "/api/dashboard/get-filtered-usage-events"
+public let usageEventsPageSize = 100
+public let usageEventsMaxPages = 50
 public let usageURL = "https://cursor.com/dashboard/usage"
 public let spendingURL = "https://cursor.com/dashboard/spending"
 public let billingURL = "https://cursor.com/dashboard/billing"
@@ -489,6 +492,15 @@ public enum UsageParser {
         }
         let team = object(payload["teamUsage"])
         if let n = (team["teamId"].asInt() ?? team["id"].asInt()), n > 0 { return n }
+        return -1
+    }
+
+    public static func userId(from payload: JSONValue) -> Int {
+        for key in ["userId", "numericUserId", "currentUserId"] {
+            if let n = payload[key].asInt(), n > 0 { return n }
+        }
+        let individual = object(payload["individualUsage"])
+        if let n = (individual["userId"].asInt() ?? individual["id"].asInt()), n > 0 { return n }
         return -1
     }
 

@@ -306,3 +306,18 @@ class SourceGuardTests(unittest.TestCase):
         self.assertNotIn("webbrowser.open(BILLING_URL)", tray)
         self.assertNotIn("webbrowser.open(BILLING_URL)", flyout)
         self.assertNotIn("webbrowser.open(BILLING_URL)", menu)
+
+    def test_native_usage_report_entry_points(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        win_prog = (root / "windows" / "CursorTokenTray" / "Program.cs").read_text(encoding="utf-8")
+        win_parser = (root / "windows" / "CursorTokenCore" / "UsageParser.cs").read_text(encoding="utf-8")
+        mac_menu = (root / "macos" / "Sources" / "CursorTokenTray" / "StatusItemController.swift").read_text(encoding="utf-8")
+        mac_parser = (root / "macos" / "Sources" / "CursorTokenCore" / "UsageParser.swift").read_text(encoding="utf-8")
+        self.assertIn("用量报表", win_prog)
+        self.assertIn("OpenReport", win_prog)
+        self.assertIn("get-filtered-usage-events", win_parser)
+        self.assertIn("用量报表", mac_menu)
+        self.assertIn("openReport", mac_menu)
+        self.assertIn("get-filtered-usage-events", mac_parser)

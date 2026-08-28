@@ -68,6 +68,15 @@ public readonly struct JsonBag
         }
     }
 
+    public long? AsLong()
+    {
+        var n = AsDouble();
+        if (n is null) return null;
+        if (n.Value >= long.MaxValue) return long.MaxValue;
+        if (n.Value <= long.MinValue) return long.MinValue;
+        return (long)Math.Round(n.Value);
+    }
+
     public int? AsInt()
     {
         var n = AsDouble();

@@ -47,6 +47,9 @@ public static class UsageParser
     public const int CursorModelTier = 2;
     public static readonly string[] UsageEndpoints = ["/api/usage-summary", "/api/dashboard/usage-summary"];
     public const string AggregatedEndpoint = "/api/dashboard/get-aggregated-usage-events";
+    public const string FilteredEndpoint = "/api/dashboard/get-filtered-usage-events";
+    public const int UsageEventsPageSize = 100;
+    public const int UsageEventsMaxPages = 50;
 
     static readonly HashSet<string> TeamMemberships = ["enterprise", "enterprise_trial", "team", "teams", "business"];
     static readonly Dictionary<string, string> MembershipLabels = new(StringComparer.OrdinalIgnoreCase)
@@ -265,6 +268,16 @@ public static class UsageParser
         var team = Obj(payload["teamUsage"]);
         if (team["teamId"].AsInt() is > 0 and var a) return a;
         if (team["id"].AsInt() is > 0 and var b) return b;
+        return -1;
+    }
+
+    public static int UserId(JsonBag payload)
+    {
+        foreach (var key in new[] { "userId", "numericUserId", "currentUserId" })
+            if (payload[key].AsInt() is > 0 and var n) return n;
+        var individual = Obj(payload["individualUsage"]);
+        if (individual["userId"].AsInt() is > 0 and var a) return a;
+        if (individual["id"].AsInt() is > 0 and var b) return b;
         return -1;
     }
 

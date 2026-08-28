@@ -59,6 +59,50 @@ public struct CursorClient: Sendable {
         snapshot.totalTokens = parsed.total
     }
 
+    public func fetchUsageEvents(
+        sessionToken: String,
+        startMs: Int64,
+        endMs: Int64,
+        teamId: Int?,
+        userId: Int?,
+        stopAtMs: Int64?,
+        maxPages: Int = usageEventsMaxPages,
+        pageSize: Int = usageEventsPageSize,
+        timeout: TimeInterval? = nil
+    ) async throws -> (events: [UsageEvent], totalCount: Int, truncated: Bool) {
+        let token = try Token.normalize(sessionToken)
+        if token.isEmpty { throw CursorAPIError("未配置 Session Token", statusCode: 401) }
+        let limit = timeout ?? self.timeout
+        var all: [UsageEvent] = []
+        var total = 0
+        var truncated = false
+        let pages = max(1, maxPages)
+        let size = min(200, max(1, pageSize))
+        for page in 1...pages {
+            var body: [String: Any] = [
+                "startDate": Int(startMs),
+                "endDate": Int(endMs),
+                "page": page,
+                "pageSize": size,
+            ]
+            if let teamId, teamId > 0 { body["teamId"] = teamId }
+            if let userId, userId > 0 { body["userId"] = userId }
+            let payload = try await requestJSON(method: "POST", endpoint: filteredUsageEndpoint, token: token, body: body, timeout: limit)
+            let parsed = UsageEvents.parsePage(payload)
+            if page == 1 { total = parsed.totalCount }
+            if parsed.events.isEmpty { break }
+            all.append(contentsOf: parsed.events)
+            let oldest = parsed.events.map(\.timestampMs).min() ?? 0
+            if let stopAtMs, oldest <= stopAtMs { break }
+            if parsed.events.count < size { break }
+            if total > 0 && all.count >= total { break }
+            if page == pages && parsed.events.count == size && (total == 0 || all.count < total) {
+                truncated = true
+            }
+        }
+        return (UsageEvents.merge(all, incoming: []), total, truncated)
+    }
+
     func requestJSON(
         method: String,
         endpoint: String,

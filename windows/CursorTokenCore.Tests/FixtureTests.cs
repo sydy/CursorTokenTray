@@ -131,6 +131,127 @@ public class FixtureTests
     }
 
     [Fact]
+    public void UsageEventsCases()
+    {
+        var root = Load("usage_events_cases.json");
+        foreach (var row in root.GetProperty("kind").EnumerateArray())
+        {
+            Assert.Equal(
+                row.GetProperty("output").GetString(),
+                UsageEvents.ClassifyKind(
+                    row.GetProperty("kind").GetString(),
+                    row.GetProperty("usage_based_costs").GetString(),
+                    row.GetProperty("is_chargeable").GetBoolean()));
+        }
+        Assert.Equal(root.GetProperty("labels").GetProperty("included").GetString(), UsageEvents.KindLabel("included"));
+        Assert.Equal(root.GetProperty("labels").GetProperty("free").GetString(), UsageEvents.KindLabel("free"));
+        Assert.Equal(root.GetProperty("labels").GetProperty("on_demand").GetString(), UsageEvents.KindLabel("on_demand"));
+        foreach (var cse in root.GetProperty("parse").EnumerateArray())
+        {
+            var parsed = UsageEvents.ParsePage(JsonBag.Parse(cse.GetProperty("payload").GetRawText()));
+            Assert.Equal(cse.GetProperty("total_count").GetInt32(), parsed.totalCount);
+            var expected = cse.GetProperty("events").EnumerateArray().ToList();
+            Assert.Equal(expected.Count, parsed.events.Count);
+            for (var i = 0; i < expected.Count; i++)
+            {
+                AssertEvent(expected[i], parsed.events[i]);
+            }
+        }
+        foreach (var cse in root.GetProperty("report").EnumerateArray())
+        {
+            var events = cse.GetProperty("events").EnumerateArray()
+                .Select(row => UsageEvents.FromDict(JsonBag.Parse(row.GetRawText()))!)
+                .ToList();
+            var filtEl = cse.GetProperty("filter");
+            var report = UsageEvents.BuildReport(events, new UsageReportFilter
+            {
+                Kind = filtEl.GetProperty("kind").GetString() ?? "",
+                Model = filtEl.GetProperty("model").GetString() ?? "",
+                Headless = NullBool(filtEl, "headless"),
+                OwningUser = NullStr(filtEl, "owning_user") ?? "",
+            });
+            var exp = cse.GetProperty("expected");
+            Assert.Equal(exp.GetProperty("event_count").GetInt32(), report.EventCount);
+            Assert.Equal(exp.GetProperty("total_tokens").GetInt64(), report.TotalTokens);
+            Assert.Equal(exp.GetProperty("total_cents").GetDouble(), report.TotalCents, 3);
+            Assert.Equal(exp.GetProperty("has_cost").GetBoolean(), report.HasCost);
+            Assert.Equal(exp.GetProperty("included_count").GetInt32(), report.IncludedCount);
+            Assert.Equal(exp.GetProperty("free_count").GetInt32(), report.FreeCount);
+            Assert.Equal(exp.GetProperty("on_demand_count").GetInt32(), report.OnDemandCount);
+            Assert.Equal(exp.GetProperty("headless_count").GetInt32(), report.HeadlessCount);
+            var daily = exp.GetProperty("daily").EnumerateArray().ToList();
+            Assert.Equal(daily.Count, report.Daily.Count);
+            for (var i = 0; i < daily.Count; i++)
+            {
+                Assert.Equal(daily[i].GetProperty("date").GetString(), report.Daily[i].Date);
+                Assert.Equal(daily[i].GetProperty("tokens").GetInt64(), report.Daily[i].Tokens);
+                Assert.Equal(daily[i].GetProperty("cents").GetDouble(), report.Daily[i].Cents, 3);
+                Assert.Equal(daily[i].GetProperty("count").GetInt32(), report.Daily[i].Count);
+            }
+            var modelsExp = exp.GetProperty("models").EnumerateArray().ToList();
+            Assert.Equal(modelsExp.Count, report.Models.Count);
+            for (var i = 0; i < modelsExp.Count; i++)
+            {
+                Assert.Equal(modelsExp[i].GetProperty("name").GetString(), report.Models[i].Name);
+                Assert.Equal(modelsExp[i].GetProperty("tokens").GetInt64(), report.Models[i].Tokens);
+                Assert.Equal(modelsExp[i].GetProperty("cents").GetDouble(), report.Models[i].Cents, 3);
+                Assert.Equal(modelsExp[i].GetProperty("count").GetInt32(), report.Models[i].Count);
+                Assert.Equal(modelsExp[i].GetProperty("headless_count").GetInt32(), report.Models[i].HeadlessCount);
+            }
+        }
+        foreach (var row in root.GetProperty("cost_format").EnumerateArray())
+        {
+            var ev = new UsageEvent
+            {
+                Kind = row.GetProperty("kind").GetString() ?? "",
+                ChargedCents = Opt(row, "charged_cents"),
+                TotalCents = Opt(row, "total_cents"),
+            };
+            Assert.Equal(row.GetProperty("output").GetString(), UsageEvents.FormatCost(ev));
+        }
+        var csv = UsageEvents.ToCsv(UsageEvents.ParsePage(JsonBag.Parse(root.GetProperty("parse")[0].GetProperty("payload").GetRawText())).events);
+        Assert.StartsWith("\ufeff", csv);
+        Assert.StartsWith(root.GetProperty("csv_header").GetString(), csv.TrimStart('\ufeff'));
+        Assert.Equal(UsageEvents.CsvHeader, root.GetProperty("csv_header").GetString());
+    }
+
+    [Fact]
+    public void UsageEventsStoreMergeAndRoundtrip()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ctt_ev_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var a = new UsageEvent { Id = "a", TimestampMs = 200, Tokens = 1, Kind = "included" };
+            var b = new UsageEvent { Id = "b", TimestampMs = 100, Tokens = 2, Kind = "free" };
+            var b2 = new UsageEvent { Id = "b", TimestampMs = 150, Tokens = 9, Kind = "free" };
+            var merged = UsageEvents.Merge([a, b], [b2]);
+            Assert.Equal(["a", "b"], merged.Select(e => e.Id).ToList());
+            Assert.Equal(9, merged.First(e => e.Id == "b").Tokens);
+            UsageEvents.Save(merged, "user_01EV", false, dir);
+            var loaded = UsageEvents.Load("user_01EV", false, dir);
+            Assert.Equal(["a", "b"], loaded.Select(e => e.Id).ToList());
+            Assert.Equal(9, loaded.First(e => e.Id == "b").Tokens);
+            Assert.Empty(UsageEvents.Load("user_01EV", true, dir));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static void AssertEvent(JsonElement exp, UsageEvent got)
+    {
+        Assert.Equal(exp.GetProperty("id").GetString(), got.Id);
+        Assert.Equal(exp.GetProperty("timestamp_ms").GetInt64(), got.TimestampMs);
+        Assert.Equal(exp.GetProperty("model").GetString(), got.Model);
+        Assert.Equal(exp.GetProperty("kind").GetString(), got.Kind);
+        Assert.Equal(exp.GetProperty("user_email").GetString(), got.UserEmail);
+        Assert.Equal(exp.GetProperty("owning_user").GetString(), got.OwningUser);
+        Assert.Equal(exp.GetProperty("tokens").GetInt32(), got.Tokens);
+        Assert.Equal(Opt(exp, "charged_cents"), got.ChargedCents);
+        Assert.Equal(Opt(exp, "total_cents"), got.TotalCents);
+        Assert.Equal(exp.GetProperty("is_headless").GetBoolean(), got.IsHeadless);
+    }
+
+    [Fact]
     public void ConfigAndHistory()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt_" + Guid.NewGuid().ToString("N"));
@@ -399,5 +520,11 @@ public class FixtureTests
     {
         if (!el.TryGetProperty(key, out var v) || v.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
         return v.GetString();
+    }
+
+    static bool? NullBool(JsonElement el, string key)
+    {
+        if (!el.TryGetProperty(key, out var v) || v.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+        return v.GetBoolean();
     }
 }

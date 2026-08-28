@@ -297,6 +297,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private weak var store: AppStore?
 
+    var isOpen: Bool { window?.isVisible == true }
+
     func show(store: AppStore, focusToken: Bool, startImport: Bool) {
         self.store = store
         NSApp.setActivationPolicy(.regular)
@@ -325,12 +327,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func close() {
         window?.orderOut(nil)
-        NSApp.setActivationPolicy(.accessory)
+        if !ReportWindowController.shared.isOpen {
+            NSApp.setActivationPolicy(.accessory)
+        }
         store?.settingsVisible = false
     }
 
     func windowWillClose(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        if !ReportWindowController.shared.isOpen {
+            NSApp.setActivationPolicy(.accessory)
+        }
         store?.settingsVisible = false
     }
 }

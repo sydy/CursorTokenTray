@@ -9,8 +9,8 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 托盘 / 菜单栏圆形进度（显示剩余 %）；支持圆环 / 纯数字 / 仅色点
 - **左键**：打开状态飞出层（多次点击只打开，不关闭；悬停不弹出）
 - **失焦 / Esc**：关闭飞出层
-- **右键**：Windows 为系统原生菜单，macOS 为原生菜单栏菜单（刷新 / Spending / 设置 / 退出）
-- 飞出层快捷操作：复制摘要 / 刷新 / Spending / 设置
+- **右键**：Windows 为系统原生菜单，macOS 为原生菜单栏菜单（刷新 / 用量报表 / 设置 / 退出）
+- 飞出层快捷操作：复制摘要 / 刷新 / 报表 / Spending / 设置
 - 飞出层打开期间随后台刷新实时更新
 - 近 7 日剩余趋势折线与日均消耗
 - Token 过期检测、一键打开设置并聚焦 Token 输入框
@@ -18,6 +18,7 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警
 - 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
 - 中文设置窗口（Windows 为 WinForms，macOS 为 SwiftUI；账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
+- **用量报表**：打开窗口时增量拉取 [Usage 页](https://cursor.com/dashboard/usage) 按次明细，本地缓存；总览、按日趋势、按模型排行、明细表与 CSV 导出。默认当前账号，团队管理员可切全员
 - 默认每 10 分钟刷新（可配置）
 - 开机自启（默认开启；Windows 写当前用户注册表 `Run` 项，macOS 用 `SMAppService` / LaunchAgent）
 
@@ -147,7 +148,8 @@ PR 不上传制品。打 `v*` 标签（例如 `v1.0.0`）会创建正式 GitHub 
 
 Windows：`%APPDATA%\CursorTokenTray\config.json`  
 macOS：`~/Library/Application Support/CursorTokenTray/config.json`  
-用量历史：同目录 `usage_history.<账号ID>.jsonl`（旧版单文件 `usage_history.jsonl` 会在首次启动时归到当时那个账号）
+用量历史：同目录 `usage_history.<账号ID>.jsonl`（旧版单文件 `usage_history.jsonl` 会在首次启动时归到当时那个账号）  
+用量明细缓存：同目录 `usage_events.<账号ID>.jsonl`（团队全员为 `usage_events.<账号ID>.team.jsonl`）
 
 ## 说明
 
