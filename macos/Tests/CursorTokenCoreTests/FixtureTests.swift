@@ -120,6 +120,23 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertEqual(lines["计划"], "Enterprise")
     }
 
+    func testTrayTemplateStateAndPercentLabel() {
+        let idle = StatusText.trayTemplateState(errorMessage: "未配置 Token，请打开设置粘贴", remainingPercent: nil)
+        XCTAssertNil(idle.remaining)
+        XCTAssertFalse(idle.error)
+        let fail = StatusText.trayTemplateState(errorMessage: "HTTP 401", remainingPercent: 40)
+        XCTAssertNil(fail.remaining)
+        XCTAssertTrue(fail.error)
+        let ok = StatusText.trayTemplateState(errorMessage: nil, remainingPercent: 87.4)
+        XCTAssertEqual(ok.remaining ?? -1, 87.4, accuracy: 0.0001)
+        XCTAssertFalse(ok.error)
+        XCTAssertEqual(StatusText.trayPercentLabel(nil, error: false), "–")
+        XCTAssertEqual(StatusText.trayPercentLabel(nil, error: true), "!")
+        XCTAssertEqual(StatusText.trayPercentLabel(12.4, error: false), "12")
+        XCTAssertEqual(StatusText.trayPercentLabel(99.5, error: false), "100")
+        XCTAssertEqual(StatusText.trayPercentLabel(0, error: false), "0")
+    }
+
     func testAggregatedUsage() throws {
         let root = try XCTUnwrap(try json("aggregated_usage_cases.json") as? [[String: Any]])
         let cse = root[0]
