@@ -546,3 +546,24 @@ final class UsageParserFixtureTests: XCTestCase {
         value.map { String($0) } ?? "nil"
     }
 }
+
+final class InstanceLockTests: XCTestCase {
+    func testLooksLikeOurExecutable() {
+        XCTAssertTrue(InstanceLock.looksLikeOurExecutable("/Applications/CursorTokenTray.app/Contents/MacOS/CursorTokenTray"))
+        XCTAssertTrue(InstanceLock.looksLikeOurExecutable("/Users/me/Downloads/CursorTokenTray.app/Contents/MacOS/CursorTokenTray"))
+        XCTAssertTrue(InstanceLock.looksLikeOurExecutable("/tmp/CursorTokenTray"))
+        XCTAssertFalse(InstanceLock.looksLikeOurExecutable("/usr/bin/python3"))
+        XCTAssertFalse(InstanceLock.looksLikeOurExecutable("/Applications/Safari.app/Contents/MacOS/Safari"))
+        XCTAssertFalse(InstanceLock.looksLikeOurExecutable(""))
+    }
+
+    func testAcquireReplacingStaleWhenUnlocked() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            InstanceLock.release(directory: dir)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        XCTAssertTrue(InstanceLock.acquireReplacingStale(directory: dir))
+    }
+}
