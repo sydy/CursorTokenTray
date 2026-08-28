@@ -6,48 +6,112 @@ import SwiftUI
 @MainActor
 final class StatusItemController: NSObject {
     private let store: AppStore
-    private let item: NSStatusItem
+    private var item: NSStatusItem
     private var cancellable: AnyCancellable?
+    private var retryTask: Task<Void, Never>?
+    private var lastIconLog: String?
 
     init(store: AppStore) {
         self.store = store
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item = StatusItemController.makeStatusItem()
         super.init()
-        item.button?.target = self
-        item.button?.action = #selector(clicked(_:))
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        item.button?.imagePosition = .imageOnly
-        item.button?.toolTip = "Cursor Token 剩余进度"
+        configureButton()
         render()
         cancellable = store.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in self?.render() }
         }
+        scheduleAppearRetries()
+    }
+
+    func ensureVisible() {
+        item.isVisible = true
+        item.length = NSStatusItem.squareLength
+        if item.button == nil {
+            recreateItem()
+            return
+        }
+        configureButton()
+        render()
     }
 
     func render() {
-        let mode = store.config.trayDisplayMode
-        let remaining: Double?
-        let error: Bool
-        if let err = store.errorMessage, err.hasPrefix("未配置") {
-            remaining = nil
-            error = false
-        } else if store.errorMessage != nil {
-            remaining = nil
-            error = true
-        } else {
-            remaining = store.usage?.remainingPercent
-            error = false
+        item.isVisible = true
+        item.length = NSStatusItem.squareLength
+        guard let button = item.button else {
+            if lastIconLog != "nil-button" {
+                lastIconLog = "nil-button"
+                AppLog.log("menubar status button is nil")
+            }
+            return
         }
-        item.button?.image = MenubarIcon.image(remaining: remaining, error: error, mode: mode)
+        let mode = store.config.trayDisplayMode
+        let (remaining, error) = StatusText.trayTemplateState(
+            errorMessage: store.errorMessage,
+            remainingPercent: store.usage?.remainingPercent
+        )
+        let image = MenubarIcon.image(remaining: remaining, error: error, mode: mode)
+        button.title = ""
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.image = image
         if let usage = store.usage {
             let label = store.config.activeAccount?.displayLabel ?? ""
             let pct = String(format: "%.0f%%", usage.remainingPercent)
-            item.button?.toolTip = label.isEmpty ? pct : "\(label) · \(pct)"
+            button.toolTip = label.isEmpty ? pct : "\(label) · \(pct)"
         } else {
-            item.button?.toolTip = "Token"
+            button.toolTip = "Token"
+        }
+        let key = "\(mode)|\(remaining.map { String(Int($0.rounded())) } ?? "nil")|\(error)"
+        if key != lastIconLog {
+            lastIconLog = key
+            AppLog.log("menubar icon applied \(key) pt=\(MenubarIcon.pointSize())")
         }
         if store.flyoutVisible {
             FlyoutWindowController.shared.update(store: store)
+        }
+    }
+
+    private static func makeStatusItem() -> NSStatusItem {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.isVisible = true
+        return item
+    }
+
+    private func configureButton() {
+        item.isVisible = true
+        item.length = NSStatusItem.squareLength
+        guard let button = item.button else { return }
+        button.target = self
+        button.action = #selector(clicked(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.title = ""
+        if button.toolTip == nil {
+            button.toolTip = "Cursor Token 剩余进度"
+        }
+    }
+
+    private func recreateItem() {
+        NSStatusBar.system.removeStatusItem(item)
+        item = StatusItemController.makeStatusItem()
+        configureButton()
+        render()
+        AppLog.log("menubar status item recreated")
+    }
+
+    private func scheduleAppearRetries() {
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            for delayNs: UInt64 in [200_000_000, 400_000_000, 1_000_000_000] {
+                try? await Task.sleep(nanoseconds: delayNs)
+                guard let self, !Task.isCancelled else { return }
+                if self.item.button == nil {
+                    self.recreateItem()
+                } else {
+                    self.ensureVisible()
+                }
+            }
         }
     }
 

@@ -175,4 +175,23 @@ public enum StatusText {
         rows.append(("更新", stamp))
         return rows
     }
+
+    /// Menu-bar template: unconfigured is idle (not error); other failures show "!".
+    public static func trayTemplateState(errorMessage: String?, remainingPercent: Double?) -> (remaining: Double?, error: Bool) {
+        if let err = errorMessage, err.hasPrefix("未配置") {
+            return (nil, false)
+        }
+        if errorMessage != nil {
+            return (nil, true)
+        }
+        return (remainingPercent, false)
+    }
+
+    public static func trayPercentLabel(_ remaining: Double?, error: Bool) -> String {
+        if error { return "!" }
+        guard let remaining else { return "–" }
+        let pct = min(100, max(0, remaining))
+        if pct >= 99.5 { return "100" }
+        return String(Int(pct.rounded()))
+    }
 }

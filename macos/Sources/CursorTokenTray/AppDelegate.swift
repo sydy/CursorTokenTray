@@ -21,12 +21,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let store = AppStore()
         self.store = store
-        statusItem = StatusItemController(store: store)
-        store.start()
+        // Next run-loop turn: the menu bar extra host is up. Creating the
+        // status item in this method (especially as a login item) can yield
+        // an extra that never appears.
+        Task { @MainActor in
+            await Task.yield()
+            self.statusItem = StatusItemController(store: store)
+            store.start()
+            AppLog.log("swift menubar status item installed")
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        statusItem?.ensureVisible()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         store?.stop()
         InstanceLock.release()
+    }
+
+    static func ensureStatusItemVisible() {
+        (NSApp.delegate as? AppDelegate)?.statusItem?.ensureVisible()
     }
 }

@@ -253,6 +253,7 @@ final class ReportWindowController: NSObject, NSWindowDelegate {
         FlyoutWindowController.shared.close()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        AppDelegate.ensureStatusItemVisible()
         if window == nil {
             let win = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
@@ -278,11 +279,13 @@ final class ReportWindowController: NSObject, NSWindowDelegate {
         if !SettingsWindowController.shared.isOpen {
             NSApp.setActivationPolicy(.accessory)
         }
+        AppDelegate.ensureStatusItemVisible()
     }
 
     func windowWillClose(_ notification: Notification) {
         if !SettingsWindowController.shared.isOpen {
             NSApp.setActivationPolicy(.accessory)
         }
+        AppDelegate.ensureStatusItemVisible()
     }
 }
