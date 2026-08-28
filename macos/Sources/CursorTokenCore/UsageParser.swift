@@ -267,49 +267,66 @@ public enum UsageParser {
 
         if isUnlimited {
             usedPercent = 0
-        } else if let total {
-            usedPercent = total
-            if let meter = meterWithLimit(planMeter) ?? meterWithLimit(overallMeter) {
-                usedCents = meter.0
-                limitCents = meter.1
-                remainingCents = meter.2
-            }
-        } else if auto != nil || api != nil {
-            usedPercent = [auto, api].compactMap { $0 }.max()
-            if let meter = meterWithLimit(planMeter) ?? meterWithLimit(overallMeter) {
-                usedCents = meter.0
-                limitCents = meter.1
-                remainingCents = meter.2
-            }
         } else {
-            var pickedSource = ""
-            let candidates: [(Meter?, String)] = [
-                (overallMeter, "overall"),
-                (planMeter, "plan"),
-                (planMeterBreakdown, "plan"),
-                (pooledMeter, "pooled"),
-                (odMeter, "on_demand"),
-            ]
-            for (meter, source) in candidates {
-                guard let picked = meterWithLimit(meter) else { continue }
-                usedCents = picked.0
-                limitCents = picked.1
-                remainingCents = picked.2
-                usedPercent = clampPercent(picked.0 / picked.1 * 100.0)
-                pickedSource = source
-                break
+            // Team usage page "Your monthly usage $X / $Y" comes from overall/pooled/plan cents.
+            // plan.totalPercentUsed is a separate cached metric and can freeze at 0% or 100%.
+            if isTeamMembership(membership, limitType: limitType) {
+                for meter in [overallMeter, pooledMeter, planMeter] {
+                    guard let applied = percentFromSpendMeter(meter) else { continue }
+                    usedCents = applied.used
+                    limitCents = applied.limit
+                    remainingCents = applied.remaining
+                    usedPercent = applied.percent
+                    billingMode = "amount"
+                    break
+                }
             }
             if usedPercent == nil {
-                usedPercent = 0
-            } else if ["overall", "pooled", "on_demand"].contains(pickedSource)
-                || isTeamMembership(membership, limitType: limitType)
-            {
-                billingMode = "amount"
-            } else {
-                usedCents = nil
-                limitCents = nil
-                remainingCents = nil
-                billingMode = "percent"
+                if let total {
+                    usedPercent = total
+                    if let meter = meterWithLimit(planMeter) ?? meterWithLimit(overallMeter) {
+                        usedCents = meter.0
+                        limitCents = meter.1
+                        remainingCents = meter.2
+                    }
+                } else if auto != nil || api != nil {
+                    usedPercent = [auto, api].compactMap { $0 }.max()
+                    if let meter = meterWithLimit(planMeter) ?? meterWithLimit(overallMeter) {
+                        usedCents = meter.0
+                        limitCents = meter.1
+                        remainingCents = meter.2
+                    }
+                } else {
+                    var pickedSource = ""
+                    let candidates: [(Meter?, String)] = [
+                        (overallMeter, "overall"),
+                        (planMeter, "plan"),
+                        (planMeterBreakdown, "plan"),
+                        (pooledMeter, "pooled"),
+                        (odMeter, "on_demand"),
+                    ]
+                    for (meter, source) in candidates {
+                        guard let applied = percentFromSpendMeter(meter) else { continue }
+                        usedCents = applied.used
+                        limitCents = applied.limit
+                        remainingCents = applied.remaining
+                        usedPercent = applied.percent
+                        pickedSource = source
+                        break
+                    }
+                    if usedPercent == nil {
+                        usedPercent = 0
+                    } else if ["overall", "pooled", "on_demand"].contains(pickedSource)
+                        || isTeamMembership(membership, limitType: limitType)
+                    {
+                        billingMode = "amount"
+                    } else {
+                        usedCents = nil
+                        limitCents = nil
+                        remainingCents = nil
+                        billingMode = "percent"
+                    }
+                }
             }
         }
 
@@ -432,6 +449,23 @@ public enum UsageParser {
     static func meterWithLimit(_ meter: Meter?) -> Meter? {
         guard let meter, meter.1 > 0 else { return nil }
         return meter
+    }
+
+    struct SpendPercent {
+        var used: Double
+        var limit: Double
+        var remaining: Double?
+        var percent: Double
+    }
+
+    static func percentFromSpendMeter(_ meter: Meter?) -> SpendPercent? {
+        guard let picked = meterWithLimit(meter) else { return nil }
+        return SpendPercent(
+            used: picked.0,
+            limit: picked.1,
+            remaining: picked.2,
+            percent: clampPercent(picked.0 / picked.1 * 100.0)
+        )
     }
 
     static func percentFromDisplayMessage(_ message: String?) -> Double? {

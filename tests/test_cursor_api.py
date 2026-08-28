@@ -93,6 +93,49 @@ ENTERPRISE_UNLIMITED = {
     "isUnlimited": True,
 }
 
+TEAM_OVERALL_STALE_ZERO = {
+    "billingCycleStart": "2026-08-19T00:00:00.000Z",
+    "billingCycleEnd": "2026-09-19T00:00:00.000Z",
+    "membershipType": "team",
+    "limitType": "team",
+    "isUnlimited": False,
+    "individualUsage": {
+        "plan": {
+            "enabled": True,
+            "used": 0,
+            "limit": 0,
+            "remaining": 0,
+            "autoPercentUsed": 0,
+            "apiPercentUsed": 0,
+            "totalPercentUsed": 0,
+        },
+        "overall": {"enabled": True, "used": 7180, "limit": 100000, "remaining": 92820},
+        "onDemand": {"enabled": False, "used": 0, "limit": None, "remaining": None},
+    },
+    "teamUsage": {"onDemand": {"enabled": True, "used": 0, "limit": None, "remaining": None}},
+}
+
+TEAM_OVERALL_STALE_FULL = {
+    "billingCycleStart": "2026-08-19T00:00:00.000Z",
+    "billingCycleEnd": "2026-09-19T00:00:00.000Z",
+    "membershipType": "team",
+    "limitType": "team",
+    "isUnlimited": False,
+    "individualUsage": {
+        "plan": {
+            "enabled": True,
+            "used": 0,
+            "limit": 0,
+            "remaining": 0,
+            "autoPercentUsed": 100,
+            "apiPercentUsed": 100,
+            "totalPercentUsed": 100,
+        },
+        "overall": {"enabled": True, "used": 7180, "limit": 100000, "remaining": 92820},
+    },
+    "teamUsage": {},
+}
+
 
 class ParseUsageSummaryTests(unittest.TestCase):
     def test_personal_percent_plan_unchanged(self) -> None:
@@ -194,6 +237,23 @@ class ParseUsageSummaryTests(unittest.TestCase):
         self.assertIsNone(snap.used_cents)
         self.assertFalse(snap.shows_amount())
 
+    def test_team_overall_spend_beats_stale_plan_percent(self) -> None:
+        snap = parse_usage_summary(TEAM_OVERALL_STALE_ZERO)
+        self.assertEqual(snap.billing_mode, "amount")
+        self.assertEqual(snap.used_percent, 7.2)
+        self.assertEqual(snap.remaining_percent, 92.8)
+        self.assertEqual(snap.used_cents, 7180)
+        self.assertEqual(snap.limit_cents, 100000)
+        self.assertEqual(snap.total_percent_used, 0.0)
+        self.assertTrue(snap.shows_amount())
+        self.assertEqual(format_spend_range(snap.used_cents, snap.limit_cents), "$71.80 / $1000")
+
+        capped = parse_usage_summary(TEAM_OVERALL_STALE_FULL)
+        self.assertEqual(capped.used_percent, 7.2)
+        self.assertEqual(capped.remaining_percent, 92.8)
+        self.assertEqual(capped.total_percent_used, 100.0)
+        self.assertEqual(capped.auto_percent_used, 100.0)
+
 
 class FormatHelpersTests(unittest.TestCase):
     def test_membership_and_money(self) -> None:
@@ -220,6 +280,15 @@ class StatusTextEnterpriseTests(unittest.TestCase):
         self.assertEqual(rows["金额"], "$73.84 / $100")
         self.assertIn("$", rows["团队额度"])
         self.assertEqual(rows["计划"], "Enterprise")
+
+    def test_stale_plan_percent_does_not_override_monthly_spend(self) -> None:
+        from status_text import build_status_lines
+
+        snap = parse_usage_summary(TEAM_OVERALL_STALE_ZERO)
+        rows = dict(build_status_lines(snap, None, "12:00"))
+        self.assertIn("92.8%", rows["剩余"])
+        self.assertIn("$71.80 / $1000", rows["剩余"])
+        self.assertEqual(rows["金额"], "$71.80 / $1000")
 
 
 class SourceGuardTests(unittest.TestCase):

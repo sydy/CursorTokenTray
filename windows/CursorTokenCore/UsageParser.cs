@@ -140,36 +140,56 @@ public static class UsageParser
         var billingMode = "percent";
         double? usedCents = null, limitCents = null, remainingCents = null, usedPercent = null;
         if (isUnlimited) usedPercent = 0;
-        else if (total is not null)
-        {
-            usedPercent = total;
-            var meter = MeterWithLimit(planMeter) ?? MeterWithLimit(overallMeter);
-            if (meter is { } m) { usedCents = m.used; limitCents = m.limit; remainingCents = m.remaining; }
-        }
-        else if (auto is not null || api is not null)
-        {
-            usedPercent = new[] { auto, api }.Where(x => x is not null).Select(x => x!.Value).Max();
-            var meter = MeterWithLimit(planMeter) ?? MeterWithLimit(overallMeter);
-            if (meter is { } m) { usedCents = m.used; limitCents = m.limit; remainingCents = m.remaining; }
-        }
         else
         {
-            var pickedSource = "";
-            foreach (var (meter, source) in new[] { (overallMeter, "overall"), (planMeter, "plan"), (planMeterBreakdown, "plan"), (pooledMeter, "pooled"), (odMeter, "on_demand") })
+            // Team usage page "Your monthly usage $X / $Y" comes from overall/pooled/plan cents.
+            // plan.totalPercentUsed is a separate cached metric and can freeze at 0% or 100%.
+            if (IsTeamMembership(membership, limitType))
             {
-                var picked = MeterWithLimit(meter);
-                if (picked is null) continue;
-                usedCents = picked.used;
-                limitCents = picked.limit;
-                remainingCents = picked.remaining;
-                usedPercent = Numbers.ClampPercent(picked.used / picked.limit * 100);
-                pickedSource = source;
-                break;
+                foreach (var meter in new[] { overallMeter, pooledMeter, planMeter })
+                {
+                    if (PercentFromSpendMeter(meter) is not { } applied) continue;
+                    usedCents = applied.used;
+                    limitCents = applied.limit;
+                    remainingCents = applied.remaining;
+                    usedPercent = applied.percent;
+                    billingMode = "amount";
+                    break;
+                }
             }
-            if (usedPercent is null) usedPercent = 0;
-            else if (pickedSource is "overall" or "pooled" or "on_demand" || IsTeamMembership(membership, limitType))
-                billingMode = "amount";
-            else { usedCents = limitCents = remainingCents = null; billingMode = "percent"; }
+            if (usedPercent is null)
+            {
+                if (total is not null)
+                {
+                    usedPercent = total;
+                    var meter = MeterWithLimit(planMeter) ?? MeterWithLimit(overallMeter);
+                    if (meter is { } m) { usedCents = m.used; limitCents = m.limit; remainingCents = m.remaining; }
+                }
+                else if (auto is not null || api is not null)
+                {
+                    usedPercent = new[] { auto, api }.Where(x => x is not null).Select(x => x!.Value).Max();
+                    var meter = MeterWithLimit(planMeter) ?? MeterWithLimit(overallMeter);
+                    if (meter is { } m) { usedCents = m.used; limitCents = m.limit; remainingCents = m.remaining; }
+                }
+                else
+                {
+                    var pickedSource = "";
+                    foreach (var (meter, source) in new[] { (overallMeter, "overall"), (planMeter, "plan"), (planMeterBreakdown, "plan"), (pooledMeter, "pooled"), (odMeter, "on_demand") })
+                    {
+                        if (PercentFromSpendMeter(meter) is not { } applied) continue;
+                        usedCents = applied.used;
+                        limitCents = applied.limit;
+                        remainingCents = applied.remaining;
+                        usedPercent = applied.percent;
+                        pickedSource = source;
+                        break;
+                    }
+                    if (usedPercent is null) usedPercent = 0;
+                    else if (pickedSource is "overall" or "pooled" or "on_demand" || IsTeamMembership(membership, limitType))
+                        billingMode = "amount";
+                    else { usedCents = limitCents = remainingCents = null; billingMode = "percent"; }
+                }
+            }
         }
         if (usedCents is null)
         {
@@ -288,6 +308,15 @@ public static class UsageParser
     }
 
     static Meter? MeterWithLimit(Meter? meter) => meter is { limit: > 0 } ? meter : null;
+
+    record SpendPercent(double used, double limit, double? remaining, double percent);
+
+    static SpendPercent? PercentFromSpendMeter(Meter? meter)
+    {
+        var picked = MeterWithLimit(meter);
+        if (picked is null) return null;
+        return new SpendPercent(picked.used, picked.limit, picked.remaining, Numbers.ClampPercent(picked.used / picked.limit * 100));
+    }
 
     static double? PercentFromDisplay(string? message)
     {
