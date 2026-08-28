@@ -22,4 +22,27 @@ public static class UiLayout
         if (y < workTop) y = workTop;
         return (x, y);
     }
+
+    /// <summary>
+    /// Size a dialog to measured content, never smaller than <paramref name="minWidth"/>/
+    /// <paramref name="minHeight"/> unless the working area cannot fit that minimum.
+    /// Values are in the same pixel space the caller measured after layout (already DPI-scaled).
+    /// </summary>
+    public static (int Width, int Height) FitDialog(
+        int preferredWidth, int preferredHeight,
+        int minWidth, int minHeight,
+        int workWidth, int workHeight,
+        int padding = 24, int workMargin = 48)
+    {
+        return (
+            ClampDialogAxis(preferredWidth, minWidth, workWidth, padding, workMargin),
+            ClampDialogAxis(preferredHeight, minHeight, workHeight, padding, workMargin));
+    }
+
+    static int ClampDialogAxis(int preferred, int min, int work, int padding, int margin)
+    {
+        var want = Math.Max(min, preferred + padding);
+        var max = Math.Max(1, work - margin);
+        return Math.Min(want, max);
+    }
 }
