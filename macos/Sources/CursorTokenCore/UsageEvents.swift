@@ -222,7 +222,7 @@ public enum UsageEvents {
         let keys: [String]
         let keyOf: (Int64) -> String
         if hourly {
-            var lastMs = floorHourMs(events.map(\.timestampMs).max() ?? 0)
+            let lastMs = floorHourMs(events.map(\.timestampMs).max() ?? 0)
             var firstMs = floorHourMs(events.map(\.timestampMs).min() ?? 0)
             let window = Int64(max(1, hourlyWindowHours))
             let span = (lastMs - firstMs) / msHour + 1

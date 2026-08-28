@@ -59,7 +59,7 @@ struct UsageChartView: View {
             let layout = PlotLayout(size: geo.size, series: series)
             ZStack(alignment: .topLeading) {
                 Canvas { context, size in
-                    drawChart(context: context, size: size, layout: layout)
+                    drawChart(context: context, layout: layout)
                 }
                 Color.clear
                     .contentShape(Rectangle())
@@ -101,7 +101,7 @@ struct UsageChartView: View {
         .allowsHitTesting(false)
     }
 
-    func drawChart(context: GraphicsContext, size: CGSize, layout: PlotLayout) {
+    private func drawChart(context: GraphicsContext, layout: PlotLayout) {
         let ticks = layout.ticks
         let yMax = CGFloat(max(1, ticks.last ?? 1))
         for tick in ticks {
@@ -197,7 +197,7 @@ private struct PlotLayout {
         var top = nice * pow(10, exp)
         if top < Double(maxTokens) { top *= 1.2 }
         let step = top / 4
-        return (0...4).map { Int(($0 * step).rounded()) }
+        return [0, 1, 2, 3, 4].map { Int((Double($0) * step).rounded()) }
     }
 }
 
