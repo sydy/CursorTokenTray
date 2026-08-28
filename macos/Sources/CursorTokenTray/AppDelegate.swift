@@ -2,7 +2,6 @@ import AppKit
 import CursorTokenCore
 import SwiftUI
 
-@main
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var store: AppStore!
@@ -11,7 +10,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppLog.log("swift menubar start pid=\(ProcessInfo.processInfo.processIdentifier)")
         if !InstanceLock.acquireReplacingStale() {
-            // Accessory apps can show no icon and no alert. Come forward first.
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
@@ -27,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = StatusItemController(store: store)
         store.start()
         AppLog.log("swift menubar status item installed")
+        Task { @MainActor in
+            self.statusItem?.ensureVisible()
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -35,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidChangeScreenParameters(_ notification: Notification) {
         statusItem?.ensureVisible()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        statusItem?.ensureVisible()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {

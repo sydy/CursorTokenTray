@@ -82,8 +82,9 @@ final class StatusItemController: NSObject {
     }
 
     private static func makeStatusItem() -> NSStatusItem {
+        // A previous build autosaved this extra as hidden; force it visible.
+        UserDefaults.standard.set(true, forKey: "NSStatusItem Visible com.harker.cursortokentray.status")
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.autosaveName = "com.harker.cursortokentray.status"
         item.isVisible = true
         return item
     }
@@ -119,7 +120,11 @@ final class StatusItemController: NSObject {
             for delayNs: UInt64 in [250_000_000, 800_000_000, 2_000_000_000] {
                 try? await Task.sleep(nanoseconds: delayNs)
                 guard let self, !Task.isCancelled else { return }
-                self.recreateItem()
+                if self.item.button?.window == nil {
+                    self.recreateItem()
+                } else {
+                    self.ensureVisible()
+                }
             }
         }
     }
