@@ -60,3 +60,11 @@ class DotnetPublishTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         self.assertNotIn("PublishTrimmed=true", workflow)
         self.assertNotIn("_SuppressWinFormsTrimError", workflow)
+
+    def test_report_form_applies_dpi_layout(self) -> None:
+        text = (ROOT / "windows" / "CursorTokenTray" / "ReportForm.cs").read_text(encoding="utf-8")
+        self.assertIn("OnDpiChanged", text)
+        self.assertIn("ApplyDpiLayout", text)
+        self.assertIn("UiLayout.ScalePx", text)
+        self.assertIn("UiLayout.FitWindow", text)
+        self.assertIn("MinimumWidth", text)

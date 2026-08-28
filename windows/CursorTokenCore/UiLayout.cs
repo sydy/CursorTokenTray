@@ -2,6 +2,10 @@ namespace CursorTokenCore;
 
 public static class UiLayout
 {
+    public const int DesignDpi = 96;
+    public const float MinUiScale = 1f;
+    public const float MaxUiScale = 3f;
+
     /// <summary>
     /// Place a popup above-left of <paramref name="anchorX"/>/<paramref name="anchorY"/>,
     /// flipping below the anchor when the work area does not have room above, and clamping
@@ -44,5 +48,53 @@ public static class UiLayout
         var want = Math.Max(min, preferred + padding);
         var max = Math.Max(1, work - margin);
         return Math.Min(want, max);
+    }
+
+    /// <summary>
+    /// Convert Win32 device DPI to a UI scale factor. Values outside 96–288 are treated as 96
+    /// (same clamp as the old Python helper) so a garbage reading cannot shrink or explode layout.
+    /// </summary>
+    public static float DpiScale(int deviceDpi)
+    {
+        if (deviceDpi < DesignDpi || deviceDpi > DesignDpi * (int)MaxUiScale)
+            return MinUiScale;
+        return ClampUiScale(deviceDpi / (float)DesignDpi);
+    }
+
+    public static float ClampUiScale(float scale)
+    {
+        if (float.IsNaN(scale) || float.IsInfinity(scale) || scale < MinUiScale)
+            return MinUiScale;
+        return Math.Min(MaxUiScale, scale);
+    }
+
+    /// <summary>
+    /// 96-DPI design pixels → screen pixels. Never smaller than the design size.
+    /// </summary>
+    public static int ScalePx(int designPx, int deviceDpi)
+    {
+        var n = (int)Math.Round(designPx * DpiScale(deviceDpi), MidpointRounding.AwayFromZero);
+        return Math.Max(designPx, n);
+    }
+
+    /// <summary>
+    /// Default window size from 96-DPI design values, grown for the current DPI and
+    /// clamped to the working area. Unlike <see cref="FitDialog"/>, this does not add
+    /// extra padding — the design size is already the intended client/outer size.
+    /// </summary>
+    public static (int Width, int Height) FitWindow(
+        int designWidth, int designHeight,
+        int minDesignWidth, int minDesignHeight,
+        int deviceDpi,
+        int workWidth, int workHeight,
+        int workMargin = 48)
+    {
+        var maxW = Math.Max(1, workWidth - workMargin);
+        var maxH = Math.Max(1, workHeight - workMargin);
+        var minW = Math.Min(maxW, ScalePx(minDesignWidth, deviceDpi));
+        var minH = Math.Min(maxH, ScalePx(minDesignHeight, deviceDpi));
+        return (
+            Math.Min(maxW, Math.Max(minW, ScalePx(designWidth, deviceDpi))),
+            Math.Min(maxH, Math.Max(minH, ScalePx(designHeight, deviceDpi))));
     }
 }

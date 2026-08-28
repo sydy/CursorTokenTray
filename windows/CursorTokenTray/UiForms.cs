@@ -535,7 +535,8 @@ sealed class SparklineBox : Control
             var y = Height * (1 - (float)((_values[i] - minV) / (maxV - minV)));
             pts[i] = new PointF(x, y);
         }
-        using var pen = new Pen(Color.DeepSkyBlue, 1.5f);
+        var penW = Math.Max(1.5f, 1.5f * UiLayout.DpiScale(DeviceDpi));
+        using var pen = new Pen(Color.DeepSkyBlue, penW);
         g.DrawLines(pen, pts);
     }
 }

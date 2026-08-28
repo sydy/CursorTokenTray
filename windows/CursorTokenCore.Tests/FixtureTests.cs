@@ -481,6 +481,49 @@ public class FixtureTests
     }
 
     [Fact]
+    public void ScalePxKeepsDesignPixelsAt96Dpi()
+    {
+        Assert.Equal(90, UiLayout.ScalePx(90, 96));
+        Assert.Equal(1040, UiLayout.ScalePx(1040, 96));
+        Assert.Equal(1f, UiLayout.DpiScale(96));
+    }
+
+    [Fact]
+    public void ScalePxGrowsForCommonWindowsFactors()
+    {
+        Assert.Equal(113, UiLayout.ScalePx(90, 120));
+        Assert.Equal(135, UiLayout.ScalePx(90, 144));
+        Assert.Equal(180, UiLayout.ScalePx(90, 192));
+        Assert.Equal(1560, UiLayout.ScalePx(1040, 144));
+    }
+
+    [Fact]
+    public void ScalePxNeverShrinksAndClampsGarbageDpi()
+    {
+        Assert.Equal(90, UiLayout.ScalePx(90, 0));
+        Assert.Equal(90, UiLayout.ScalePx(90, 48));
+        Assert.Equal(90, UiLayout.ScalePx(90, 11520));
+        Assert.Equal(1f, UiLayout.DpiScale(0));
+        Assert.Equal(1f, UiLayout.ClampUiScale(float.NaN));
+        Assert.Equal(3f, UiLayout.ClampUiScale(120f));
+    }
+
+    [Fact]
+    public void FitWindowGrowsForHighDpiAndClampsToWorkArea()
+    {
+        var at100 = UiLayout.FitWindow(1040, 760, 900, 600, 96, 1920, 1080);
+        Assert.Equal((1040, 760), at100);
+
+        var at150 = UiLayout.FitWindow(1040, 760, 900, 600, 144, 1920, 1080);
+        Assert.Equal(1560, at150.Width);
+        Assert.Equal(1032, at150.Height);
+
+        var tiny = UiLayout.FitWindow(1040, 760, 900, 600, 144, 800, 600);
+        Assert.Equal(752, tiny.Width);
+        Assert.Equal(552, tiny.Height);
+    }
+
+    [Fact]
     public void CrashLogWritesExceptionAndIgnoresNull()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt-crash-" + Guid.NewGuid().ToString("N"));
