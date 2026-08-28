@@ -7,40 +7,39 @@ sealed class ReportForm : Form
 {
     public readonly record struct ReportState(string Token, string AccountId, UsageSnapshot? Usage, bool IsTeam);
 
+    const int DesignWidth = 1040;
+    const int DesignHeight = 760;
+    const int DesignMinWidth = 900;
+    const int DesignMinHeight = 600;
+    const int DesignSparkRow = 88;
+    const int DesignModelRow = 210;
+    const int DesignHeaderH = 28;
+    const int DesignRowH = 24;
+
     readonly CursorClient _client;
     readonly Func<ReportState> _state;
-    readonly ComboBox _scope = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
-    readonly ComboBox _kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
-    readonly ComboBox _model = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 240 };
-    readonly ComboBox _cloud = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
+    readonly ComboBox _scope = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    readonly ComboBox _kind = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    readonly ComboBox _model = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    readonly ComboBox _cloud = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly Label _status = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 8, 0, 0) };
-    readonly Label _kpi = new() { AutoSize = true, MaximumSize = new Size(980, 0), Margin = new Padding(0, 8, 0, 8) };
-    readonly SparklineBox _spark = new() { Height = 52, Dock = DockStyle.Fill };
+    readonly Label _kpi = new() { AutoSize = true, Margin = new Padding(0, 8, 0, 8) };
+    readonly SparklineBox _spark = new() { Dock = DockStyle.Fill };
     readonly Label _sparkCaption = new() { AutoSize = true, ForeColor = Color.DimGray, Text = "按日 Token" };
-    readonly ListView _models = new()
-    {
-        View = View.Details,
-        FullRowSelect = true,
-        HeaderStyle = ColumnHeaderStyle.Nonclickable,
-        Height = 140,
-        Dock = DockStyle.Fill,
-    };
-    readonly DataGridView _grid = new()
-    {
-        Dock = DockStyle.Fill,
-        ReadOnly = true,
-        AllowUserToAddRows = false,
-        AllowUserToDeleteRows = false,
-        AllowUserToResizeRows = false,
-        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-        RowHeadersVisible = false,
-        SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-        MultiSelect = false,
-        BackgroundColor = Color.White,
-    };
+    readonly DataGridView _models = MakeGrid();
+    readonly DataGridView _grid = MakeGrid();
     readonly Button _syncBtn = new() { Text = "同步", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     readonly Button _exportBtn = new() { Text = "导出 CSV", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     readonly Label _scopeLabel = new() { Text = "范围", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 8, 6, 0) };
+    readonly TableLayoutPanel _root = new()
+    {
+        Dock = DockStyle.Fill,
+        ColumnCount = 1,
+        RowCount = 6,
+        Padding = new Padding(16),
+    };
+    static readonly int[] ModelMinWidths = [160, 72, 72, 56, 48];
+    static readonly int[] DetailMinWidths = [110, 100, 56, 140, 64, 72, 48];
     List<UsageEvent> _all = [];
     bool _syncing;
     bool _teamScope;
@@ -50,13 +49,14 @@ sealed class ReportForm : Form
     {
         _client = client;
         _state = state;
+        SuspendLayout();
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
         Text = "用量报表";
-        MinimumSize = new Size(820, 560);
+        MinimumSize = new Size(DesignMinWidth, DesignMinHeight);
         StartPosition = FormStartPosition.CenterScreen;
-        Width = 980;
-        Height = 720;
+        Width = DesignWidth;
+        Height = DesignHeight;
 
         _scope.Items.AddRange(["仅自己", "全员"]);
         _scope.SelectedIndex = 0;
@@ -67,11 +67,11 @@ sealed class ReportForm : Form
         _model.Items.Add("全部模型");
         _model.SelectedIndex = 0;
 
-        _models.Columns.Add("模型", 280);
-        _models.Columns.Add("Token", 90);
-        _models.Columns.Add("费用", 90);
-        _models.Columns.Add("次数", 70);
-        _models.Columns.Add("云端", 70);
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "model", HeaderText = "模型", FillWeight = 40 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "tokens", HeaderText = "Token", FillWeight = 18 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cost", HeaderText = "费用", FillWeight = 16 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "count", HeaderText = "次数", FillWeight = 14 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cloud", HeaderText = "云端", FillWeight = 12 });
 
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "date", HeaderText = "日期 (UTC)", FillWeight = 18 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "user", HeaderText = "用户", FillWeight = 18 });
@@ -97,37 +97,32 @@ sealed class ReportForm : Form
         filters.Controls.Add(_exportBtn);
         filters.Controls.Add(_status);
 
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 6,
-            Padding = new Padding(16),
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 160));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.Controls.Add(filters, 0, 0);
-        root.Controls.Add(_kpi, 0, 1);
+        _root.ColumnStyles.Clear();
+        _root.RowStyles.Clear();
+        _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignSparkRow));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignModelRow));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _root.Controls.Add(filters, 0, 0);
+        _root.Controls.Add(_kpi, 0, 1);
         var sparkWrap = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         sparkWrap.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         sparkWrap.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         sparkWrap.Controls.Add(_sparkCaption, 0, 0);
         sparkWrap.Controls.Add(_spark, 0, 1);
-        root.Controls.Add(sparkWrap, 0, 2);
+        _root.Controls.Add(sparkWrap, 0, 2);
         var modelWrap = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         modelWrap.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         modelWrap.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         modelWrap.Controls.Add(new Label { Text = "按模型", AutoSize = true, Margin = new Padding(0, 8, 0, 4) }, 0, 0);
         modelWrap.Controls.Add(_models, 0, 1);
-        root.Controls.Add(modelWrap, 0, 3);
-        root.Controls.Add(new Label { Text = "明细", AutoSize = true, Margin = new Padding(0, 8, 0, 4) }, 0, 4);
-        root.Controls.Add(_grid, 0, 5);
-        Controls.Add(root);
+        _root.Controls.Add(modelWrap, 0, 3);
+        _root.Controls.Add(new Label { Text = "明细", AutoSize = true, Margin = new Padding(0, 8, 0, 4) }, 0, 4);
+        _root.Controls.Add(_grid, 0, 5);
+        Controls.Add(_root);
 
         _scope.SelectedIndexChanged += (_, _) =>
         {
@@ -141,7 +136,89 @@ sealed class ReportForm : Form
         _syncBtn.Click += (_, _) => _ = SyncAsync(true);
         _exportBtn.Click += (_, _) => ExportCsv();
         Shown += (_, _) => _ = SyncAsync(false);
+        ResumeLayout(false);
     }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        ApplyDpiLayout(resizeWindow: true);
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        BeginInvoke(() => ApplyDpiLayout(resizeWindow: false));
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        WrapKpi();
+    }
+
+    void ApplyDpiLayout(bool resizeWindow)
+    {
+        var dpi = DeviceDpi;
+        _scope.Width = UiLayout.ScalePx(120, dpi);
+        _kind.Width = UiLayout.ScalePx(130, dpi);
+        _model.Width = UiLayout.ScalePx(280, dpi);
+        _cloud.Width = UiLayout.ScalePx(140, dpi);
+        _model.DropDownWidth = Math.Max(_model.Width, UiLayout.ScalePx(360, dpi));
+
+        if (_root.RowStyles.Count > 3)
+        {
+            _root.RowStyles[2].SizeType = SizeType.Absolute;
+            _root.RowStyles[2].Height = UiLayout.ScalePx(DesignSparkRow, dpi);
+            _root.RowStyles[3].SizeType = SizeType.Absolute;
+            _root.RowStyles[3].Height = UiLayout.ScalePx(DesignModelRow, dpi);
+        }
+
+        var headerH = UiLayout.ScalePx(DesignHeaderH, dpi);
+        var rowH = UiLayout.ScalePx(DesignRowH, dpi);
+        ApplyGridMetrics(_models, headerH, rowH, ModelMinWidths, dpi);
+        ApplyGridMetrics(_grid, headerH, rowH, DetailMinWidths, dpi);
+
+        var work = Screen.FromControl(this).WorkingArea;
+        var (w, h) = UiLayout.FitWindow(DesignWidth, DesignHeight, DesignMinWidth, DesignMinHeight, dpi, work.Width, work.Height);
+        MinimumSize = new Size(Math.Min(w, UiLayout.ScalePx(DesignMinWidth, dpi)), Math.Min(h, UiLayout.ScalePx(DesignMinHeight, dpi)));
+        if (resizeWindow)
+            Size = new Size(w, h);
+        WrapKpi();
+    }
+
+    static void ApplyGridMetrics(DataGridView grid, int headerH, int rowH, int[] minDesignWidths, int dpi)
+    {
+        grid.ColumnHeadersHeight = headerH;
+        grid.RowTemplate.Height = rowH;
+        for (var i = 0; i < grid.Columns.Count && i < minDesignWidths.Length; i++)
+            grid.Columns[i].MinimumWidth = UiLayout.ScalePx(minDesignWidths[i], dpi);
+        foreach (DataGridViewRow row in grid.Rows)
+            row.Height = rowH;
+    }
+
+    void WrapKpi()
+    {
+        var inner = Math.Max(200, ClientSize.Width - _root.Padding.Horizontal - 8);
+        _kpi.MaximumSize = new Size(inner, 0);
+        _status.MaximumSize = new Size(Math.Max(160, inner / 2), 0);
+    }
+
+    static DataGridView MakeGrid() => new()
+    {
+        Dock = DockStyle.Fill,
+        ReadOnly = true,
+        AllowUserToAddRows = false,
+        AllowUserToDeleteRows = false,
+        AllowUserToResizeRows = false,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+        RowHeadersVisible = false,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+        MultiSelect = false,
+        BackgroundColor = Color.White,
+        BorderStyle = BorderStyle.FixedSingle,
+    };
 
     public void RequestSync() => _ = SyncAsync(false);
 
@@ -252,18 +329,18 @@ sealed class ReportForm : Form
             : $"按日 Token（{report.Daily.First().Date} 至 {report.Daily.Last().Date}）";
         _spark.Values = report.Daily.Count >= 2 ? report.Daily.Select(d => (double)d.Tokens).ToList() : [];
 
-        _models.BeginUpdate();
-        _models.Items.Clear();
+        _models.Rows.Clear();
+        _models.SuspendLayout();
         foreach (var row in report.Models)
         {
-            var item = new ListViewItem(row.Name);
-            item.SubItems.Add(UsageParser.FormatTokenCount(row.Tokens));
-            item.SubItems.Add(row.Cents > 0 ? UsageParser.FormatUsdCents(row.Cents) : "—");
-            item.SubItems.Add(row.Count.ToString(CultureInfo.InvariantCulture));
-            item.SubItems.Add(row.HeadlessCount > 0 ? row.HeadlessCount.ToString(CultureInfo.InvariantCulture) : "—");
-            _models.Items.Add(item);
+            _models.Rows.Add(
+                row.Name,
+                UsageParser.FormatTokenCount(row.Tokens),
+                row.Cents > 0 ? UsageParser.FormatUsdCents(row.Cents) : "—",
+                row.Count.ToString(CultureInfo.InvariantCulture),
+                row.HeadlessCount > 0 ? row.HeadlessCount.ToString(CultureInfo.InvariantCulture) : "—");
         }
-        _models.EndUpdate();
+        _models.ResumeLayout();
 
         _grid.Rows.Clear();
         _grid.SuspendLayout();
@@ -280,6 +357,8 @@ sealed class ReportForm : Form
         }
         _grid.ResumeLayout();
         _exportBtn.Enabled = report.Events.Count > 0;
+        ApplyGridMetrics(_models, UiLayout.ScalePx(DesignHeaderH, DeviceDpi), UiLayout.ScalePx(DesignRowH, DeviceDpi), ModelMinWidths, DeviceDpi);
+        ApplyGridMetrics(_grid, UiLayout.ScalePx(DesignHeaderH, DeviceDpi), UiLayout.ScalePx(DesignRowH, DeviceDpi), DetailMinWidths, DeviceDpi);
     }
 
     void ExportCsv()
