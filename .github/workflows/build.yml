@@ -10,7 +10,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep main/tag publishes running to completion so the rolling latest
+  # release is not left with a stale description after a rapid second merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -115,6 +117,12 @@ jobs:
             Windows 为 .NET 8 单文件 exe，macOS 为 Swift `.app`。
             从浏览器下载的 macOS 包若提示「已损坏」，请双击 zip 内的「首次打开.command」，或执行 `xattr -cr CursorTokenTray.app`。
             正式版请打 `v*` 标签。
+      - name: Refresh latest release notes and tag
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: bash .github/scripts/update-latest-release.sh
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
@@ -162,6 +170,12 @@ jobs:
             Windows 为 .NET 8 单文件 exe，macOS 为 Swift `.app`。
             从浏览器下载的 macOS 包若提示「已损坏」，请双击 zip 内的「首次打开.command」，或执行 `xattr -cr CursorTokenTray.app`。
             正式版请打 `v*` 标签。
+      - name: Refresh latest release notes and tag
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: bash .github/scripts/update-latest-release.sh
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
