@@ -5,14 +5,34 @@ enum MenubarIcon {
     /// Template image for the menu bar extra: black + alpha, tinted by the system.
     static func image(remaining: Double?, error: Bool, mode: String, pointSize: CGFloat? = nil) -> NSImage {
         let size = pointSize ?? Self.pointSize()
-        let img = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            NSGraphicsContext.current?.imageInterpolation = .high
-            NSGraphicsContext.current?.shouldAntialias = true
-            draw(in: rect, remaining: remaining, error: error, mode: mode)
-            return true
+        let scale = max(NSScreen.main?.backingScaleFactor ?? 2, 2)
+        let px = max(32, Int((size * scale).rounded()))
+        let img = NSImage(size: NSSize(width: size, height: size))
+        if let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: px,
+            pixelsHigh: px,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) {
+            rep.size = NSSize(width: size, height: size)
+            NSGraphicsContext.saveGraphicsState()
+            if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+                ctx.imageInterpolation = .high
+                ctx.shouldAntialias = true
+                NSGraphicsContext.current = ctx
+                draw(in: NSRect(x: 0, y: 0, width: size, height: size), remaining: remaining, error: error, mode: mode)
+                ctx.flushGraphics()
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            img.addRepresentation(rep)
         }
         img.isTemplate = true
-        img.cacheMode = .never
         return img
     }
 

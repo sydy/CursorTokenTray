@@ -20,7 +20,17 @@ final class StatusItemController: NSObject {
         cancellable = store.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in self?.render() }
         }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
         scheduleAppearRetries()
+    }
+
+    @objc private func systemDidWake() {
+        recreateItem()
     }
 
     func ensureVisible() {
@@ -73,6 +83,7 @@ final class StatusItemController: NSObject {
 
     private static func makeStatusItem() -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.autosaveName = "com.harker.cursortokentray.status"
         item.isVisible = true
         return item
     }
@@ -103,14 +114,12 @@ final class StatusItemController: NSObject {
     private func scheduleAppearRetries() {
         retryTask?.cancel()
         retryTask = Task { [weak self] in
-            for delayNs: UInt64 in [200_000_000, 400_000_000, 1_000_000_000] {
+            // Sequoia/Tahoe often keep a "live" button that never attaches to
+            // Control Center. Recreate the extra instead of only toggling isVisible.
+            for delayNs: UInt64 in [250_000_000, 800_000_000, 2_000_000_000] {
                 try? await Task.sleep(nanoseconds: delayNs)
                 guard let self, !Task.isCancelled else { return }
-                if self.item.button == nil {
-                    self.recreateItem()
-                } else {
-                    self.ensureVisible()
-                }
+                self.recreateItem()
             }
         }
     }
