@@ -720,6 +720,20 @@ class NativePackageScriptTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         self.assertIn("macos/dist/release", workflow)
 
+    def test_swift_appkit_main_retains_delegate(self) -> None:
+        main_text = (ROOT / "macos" / "Sources" / "CursorTokenTray" / "Main.swift").read_text(encoding="utf-8")
+        delegate_text = (ROOT / "macos" / "Sources" / "CursorTokenTray" / "AppDelegate.swift").read_text(
+            encoding="utf-8"
+        )
+        plist = (ROOT / "macos" / "Resources" / "Info.plist").read_text(encoding="utf-8")
+        self.assertIn("@main", main_text)
+        self.assertIn("app.delegate = delegate", main_text)
+        self.assertIn("retainedDelegate", main_text)
+        self.assertIn("app.run()", main_text)
+        self.assertNotIn("@main", delegate_text)
+        self.assertIn("NSPrincipalClass", plist)
+        self.assertIn("NSApplication", plist)
+
 
 class MainGuardTests(unittest.TestCase):
     def test_main_rejects_linux(self) -> None:
