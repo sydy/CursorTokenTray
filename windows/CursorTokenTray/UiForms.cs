@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using CursorTokenCore;
 
 namespace CursorTokenTray;
@@ -6,49 +7,131 @@ sealed class FlyoutForm : Form
 {
     readonly Label _hero = new() { AutoSize = true, Font = new Font("Segoe UI", 22, FontStyle.Bold), ForeColor = Color.White };
     readonly Label _plan = new() { AutoSize = true, ForeColor = Color.Silver };
-    readonly Label _body = new() { AutoSize = false, ForeColor = Color.Gainsboro, Width = 360 };
-    readonly SparklineBox _spark = new() { Width = 360, Height = 36 };
-    readonly Action _refresh, _web, _settings, _copy;
+    readonly Label _body = new() { AutoSize = true, ForeColor = Color.Gainsboro, MaximumSize = new Size(388, 0) };
+    readonly SparklineBox _spark = new() { Width = 388, Height = 36 };
+    readonly Action _dismissBalloon, _refresh, _web, _settings, _copy;
+    readonly System.Windows.Forms.Timer _activateTimer = new() { Interval = 220 };
+    readonly System.Windows.Forms.Timer _holdTimer = new() { Interval = 180 };
+    readonly System.Windows.Forms.Timer _hideTimer = new() { Interval = 160 };
+    bool _holdOpen;
 
-    public FlyoutForm(Action _, Action refresh, Action web, Action settings, Action copy)
+    protected override bool ShowWithoutActivation => true;
+
+    public FlyoutForm(Action dismissBalloon, Action refresh, Action web, Action settings, Action copy)
     {
-        _refresh = refresh; _web = web; _settings = settings; _copy = copy;
+        _dismissBalloon = dismissBalloon;
+        _refresh = refresh;
+        _web = web;
+        _settings = settings;
+        _copy = copy;
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        Width = 420;
-        Height = 320;
+        MinimumSize = new Size(360, 220);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         BackColor = Color.FromArgb(32, 32, 32);
+        KeyPreview = true;
+
         var copyBtn = Link("复制", _copy);
         var refBtn = Link("刷新", _refresh);
         var webBtn = Link("账单", _web);
         var setBtn = Link("设置", _settings);
-        Controls.Add(_hero);
-        Controls.Add(_plan);
-        Controls.Add(_body);
-        Controls.Add(_spark);
-        Controls.Add(copyBtn);
-        Controls.Add(refBtn);
-        Controls.Add(webBtn);
-        Controls.Add(setBtn);
-        _hero.Location = new Point(16, 16);
-        _plan.Location = new Point(16, 56);
-        _body.Location = new Point(16, 88);
-        _body.Height = 140;
-        _spark.Location = new Point(16, 230);
-        copyBtn.Location = new Point(16, 276);
-        refBtn.Location = new Point(70, 276);
-        webBtn.Location = new Point(280, 276);
-        setBtn.Location = new Point(340, 276);
-        Deactivate += (_, _) => Hide();
-        KeyPreview = true;
-        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Hide(); };
+
+        var leftBtns = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = false,
+            FlowDirection = FlowDirection.LeftToRight,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0),
+        };
+        leftBtns.Controls.Add(copyBtn);
+        leftBtns.Controls.Add(refBtn);
+        var rightBtns = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = false,
+            FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0),
+        };
+        rightBtns.Controls.Add(setBtn);
+        rightBtns.Controls.Add(webBtn);
+        var bar = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 8, 0, 0),
+        };
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        bar.Controls.Add(leftBtns, 0, 0);
+        bar.Controls.Add(rightBtns, 1, 0);
+
+        var root = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(16),
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.Controls.Add(_hero);
+        root.Controls.Add(_plan);
+        root.Controls.Add(_body);
+        root.Controls.Add(_spark);
+        root.Controls.Add(bar);
+        Controls.Add(root);
+
+        _activateTimer.Tick += (_, _) =>
+        {
+            _activateTimer.Stop();
+            if (IsDisposed || !Visible) { _holdOpen = false; return; }
+            Activate();
+            if (IsHandleCreated) SetForegroundWindow(Handle);
+            _holdTimer.Stop();
+            _holdTimer.Start();
+        };
+        _holdTimer.Tick += (_, _) => { _holdOpen = false; _holdTimer.Stop(); };
+        _hideTimer.Tick += (_, _) =>
+        {
+            _hideTimer.Stop();
+            if (!_holdOpen && !ContainsFocus) Hide();
+        };
+        Deactivate += (_, _) =>
+        {
+            if (_holdOpen) return;
+            _hideTimer.Stop();
+            _hideTimer.Start();
+        };
+        KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Escape) return;
+            _holdOpen = false;
+            _activateTimer.Stop();
+            _holdTimer.Stop();
+            _hideTimer.Stop();
+            Hide();
+        };
     }
 
     static LinkLabel Link(string t, Action a)
     {
-        var l = new LinkLabel { Text = t, AutoSize = true, LinkColor = Color.DeepSkyBlue, ActiveLinkColor = Color.White };
+        var l = new LinkLabel
+        {
+            Text = t,
+            AutoSize = true,
+            LinkColor = Color.DeepSkyBlue,
+            ActiveLinkColor = Color.White,
+            Margin = new Padding(0, 0, 12, 0),
+        };
         l.LinkClicked += (_, _) => a();
         return l;
     }
@@ -72,26 +155,49 @@ sealed class FlyoutForm : Form
         var rows = StatusText.BuildStatusLines(usage, error, updated, cfg.ActiveAccount?.DisplayLabel);
         _body.Text = string.Join("\n", rows.Select(r => $"{r.Item1}  {r.Item2}"));
         foreach (Control c in Controls)
-            if (c is LinkLabel l && (l.Text == "账单" || l.Text == "用量"))
-                l.Text = UsageParser.DashboardButtonLabel(usage);
+            UpdateDashboardLinks(c, usage);
         if (history is not null) _spark.Values = history;
+    }
+
+    static void UpdateDashboardLinks(Control parent, UsageSnapshot? usage)
+    {
+        if (parent is LinkLabel l && (l.Text == "账单" || l.Text == "用量"))
+            l.Text = UsageParser.DashboardButtonLabel(usage);
+        foreach (Control child in parent.Controls)
+            UpdateDashboardLinks(child, usage);
     }
 
     public void PopupNear(Point anchor)
     {
+        try { _dismissBalloon(); } catch { }
+        _hideTimer.Stop();
+        _holdOpen = true;
+        _holdTimer.Stop();
+        _activateTimer.Stop();
+        PerformLayout();
         var screen = Screen.FromPoint(anchor).WorkingArea;
-        var x = anchor.X - Width;
-        var y = anchor.Y - Height - 12;
-        if (x < screen.Left + 8) x = screen.Left + 8;
-        if (x + Width > screen.Right - 8) x = screen.Right - Width - 8;
-        if (y < screen.Top + 8) y = Math.Min(anchor.Y + 12, screen.Bottom - Height - 8);
-        if (y + Height > screen.Bottom - 8) y = screen.Bottom - Height - 8;
-        Location = new Point(Math.Max(screen.Left, x), Math.Max(screen.Top, y));
-        Show();
-        Activate();
+        var (x, y) = UiLayout.FitPopup(screen.Left, screen.Top, screen.Right, screen.Bottom, Width, Height, anchor.X, anchor.Y);
+        Location = new Point(x, y);
+        if (!Visible) Show();
+        else BringToFront();
+        _activateTimer.Start();
     }
 
     public void PopupNearTray() => PopupNear(Cursor.Position);
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _activateTimer.Dispose();
+            _holdTimer.Dispose();
+            _hideTimer.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 
 sealed class SettingsForm : Form
@@ -114,8 +220,12 @@ sealed class SettingsForm : Form
     public SettingsForm(AppConfig cfg, Action<AppConfig> onSaved, Func<string?, Task<ImportResult>> import, bool startImport)
     {
         _cfg = cfg; _onSaved = onSaved; _import = import;
+        Font = new Font("Segoe UI", 9F);
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScroll = true;
         Text = "Cursor Token 设置";
-        Width = 520; Height = 600;
+        ClientSize = new Size(500, 560);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -178,6 +288,8 @@ sealed class SettingsForm : Form
                 Height = 140,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
+                AutoScaleDimensions = new SizeF(96F, 96F),
+                AutoScaleMode = AutoScaleMode.Dpi,
             };
             var field = new TextBox { Left = 16, Top = 16, Width = 310, Text = _cfg.ActiveAccount.Label };
             var ok = new Button { Text = "确定", Left = 160, Top = 56, Width = 80, DialogResult = DialogResult.OK };

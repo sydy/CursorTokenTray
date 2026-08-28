@@ -185,6 +185,7 @@ public static class AppPaths
     }
 
     public static string ConfigPath(string? dir = null) => Path.Combine(ConfigDirectory(dir), "config.json");
+    public static string ErrorLogPath(string? dir = null) => Path.Combine(ConfigDirectory(dir), "error.log");
     public static string HistoryPath(string? accountId, string? dir = null)
     {
         var root = ConfigDirectory(dir);

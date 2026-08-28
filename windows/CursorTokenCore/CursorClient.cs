@@ -9,8 +9,7 @@ public sealed class CursorClient
     readonly HttpClient _http;
     public CursorClient(HttpClient? http = null)
     {
-        _http = http ?? new HttpClient();
-        _http.Timeout = Timeout.InfiniteTimeSpan;
+        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
     }
 
     public async Task<UsageSnapshot> FetchUsageSummary(string sessionToken, double timeout = 30, CancellationToken ct = default)
