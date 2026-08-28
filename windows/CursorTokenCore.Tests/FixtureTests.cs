@@ -311,6 +311,46 @@ public class FixtureTests
         Assert.Equal(0, snap.UsedPercent);
     }
 
+    [Fact]
+    public void FitPopupSitsAboveLeftOfTrayAnchor()
+    {
+        var (x, y) = UiLayout.FitPopup(0, 0, 1920, 1040, 420, 320, 1900, 1040);
+        Assert.Equal(1480, x);
+        Assert.Equal(708, y);
+    }
+
+    [Fact]
+    public void FitPopupFlipsBelowWhenTaskbarIsOnTop()
+    {
+        var (x, y) = UiLayout.FitPopup(0, 40, 1920, 1080, 420, 320, 1900, 40);
+        Assert.Equal(1480, x);
+        Assert.Equal(52, y);
+    }
+
+    [Fact]
+    public void FitPopupClampsToLeftAndBottomEdges()
+    {
+        var (x, y) = UiLayout.FitPopup(0, 0, 800, 600, 420, 320, 10, 620);
+        Assert.Equal(8, x);
+        Assert.Equal(272, y);
+    }
+
+    [Fact]
+    public void CrashLogWritesExceptionAndIgnoresNull()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ctt-crash-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            CrashLog.Write(null, dir);
+            Assert.False(File.Exists(CrashLog.PathFor(dir)));
+            CrashLog.Write(new InvalidOperationException("boom-ui"), dir);
+            var text = File.ReadAllText(CrashLog.PathFor(dir));
+            Assert.Contains("boom-ui", text);
+            Assert.Contains("InvalidOperationException", text);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
     sealed class SeqHandler(int[] statuses) : HttpMessageHandler
     {
         public int Calls;
