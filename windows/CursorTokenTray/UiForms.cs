@@ -202,15 +202,31 @@ sealed class FlyoutForm : Form
 
 sealed class SettingsForm : Form
 {
-    readonly TextBox _token = new() { Multiline = true, Height = 56, Width = 460, ScrollBars = ScrollBars.Vertical };
-    readonly TextBox _interval = new() { Width = 72 };
-    readonly TextBox _thresholds = new() { Width = 160 };
-    readonly CheckBox _notify = new() { Text = "启用用量通知", AutoSize = true };
-    readonly CheckBox _exhaust = new() { Text = "启用耗尽风险通知", AutoSize = true };
-    readonly ComboBox _mode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
-    readonly CheckBox _auto = new() { Text = "开机自启", AutoSize = true };
-    readonly ComboBox _accounts = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 460 };
-    readonly Label _status = new() { AutoSize = false, Width = 460, Height = 40 };
+    readonly TableLayoutPanel _root = new()
+    {
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        ColumnCount = 1,
+        Dock = DockStyle.Top,
+        Padding = new Padding(16),
+    };
+    readonly TextBox _token = new() { Multiline = true, Height = 64, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
+    readonly TextBox _interval = new() { Width = 80 };
+    readonly TextBox _thresholds = new() { Width = 180 };
+    readonly CheckBox _notify = new() { Text = "启用用量通知", AutoSize = true, Margin = new Padding(0, 6, 0, 4) };
+    readonly CheckBox _exhaust = new() { Text = "启用耗尽风险通知", AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
+    readonly ComboBox _mode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    readonly CheckBox _auto = new() { Text = "开机自启", AutoSize = true, Margin = new Padding(0, 6, 0, 8) };
+    readonly ComboBox _accounts = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    readonly Label _addCaption = Caption("添加账号（粘贴 Token，请勿分享；已保存的不会显示）");
+    readonly Label _status = new() { AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
+    readonly Label _hint = new()
+    {
+        Text = "Windows 可从 Cursor 应用或 Firefox 导入；Chrome / Edge 因系统加密无法读取。",
+        AutoSize = true,
+        ForeColor = Color.DimGray,
+        Margin = new Padding(0, 4, 0, 8),
+    };
     AppConfig _cfg;
     readonly Action<AppConfig> _onSaved;
     readonly Func<string?, Task<ImportResult>> _import;
@@ -220,86 +236,51 @@ sealed class SettingsForm : Form
     public SettingsForm(AppConfig cfg, Action<AppConfig> onSaved, Func<string?, Task<ImportResult>> import, bool startImport)
     {
         _cfg = cfg; _onSaved = onSaved; _import = import;
-        Font = new Font("Segoe UI", 9F);
-        AutoScaleDimensions = new SizeF(96F, 96F);
+        SuspendLayout();
         AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScroll = true;
         Text = "Cursor Token 设置";
-        ClientSize = new Size(500, 560);
+        ClientSize = new Size(540, 640);
+        MinimumSize = new Size(480, 360);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        var y = 16;
-        Controls.Add(new Label { Text = "当前账号", Left = 20, Top = y, AutoSize = true });
-        y += 22; _accounts.Left = 20; _accounts.Top = y; Controls.Add(_accounts);
-        y += 36;
-        var rename = new Button { Text = "重命名", Left = 20, Top = y, Width = 80 };
-        var del = new Button { Text = "删除", Left = 110, Top = y, Width = 80 };
-        Controls.Add(rename); Controls.Add(del);
-        y += 40;
-        Controls.Add(new Label { Text = "添加账号（粘贴 Token，请勿分享；已保存的不会显示）", Left = 20, Top = y, AutoSize = true });
-        y += 22; _token.Left = 20; _token.Top = y; Controls.Add(_token);
-        y += 66;
-        var cur = new Button { Text = "从 Cursor 导入", Left = 20, Top = y, Width = 140 };
-        var add = new Button { Text = "添加此 Token", Left = 170, Top = y, Width = 120 };
-        var ff = new Button { Text = "Firefox 登录", Left = 300, Top = y, Width = 110 };
-        Controls.Add(cur); Controls.Add(add); Controls.Add(ff);
-        y += 40; _status.Left = 20; _status.Top = y; Controls.Add(_status);
-        y += 36;
-        Controls.Add(new Label
-        {
-            Text = "Windows 可从 Cursor 应用或 Firefox 导入；Chrome / Edge 因系统加密无法读取。",
-            Left = 20,
-            Top = y,
-            Width = 460,
-            Height = 32,
-            ForeColor = Color.DimGray,
-        });
-        y += 36;
-        Controls.Add(new Label { Text = "刷新间隔（分钟）", Left = 20, Top = y, AutoSize = true });
-        _interval.Left = 200; _interval.Top = y - 4; Controls.Add(_interval);
-        y += 32;
-        Controls.Add(new Label { Text = "告警阈值", Left = 20, Top = y, AutoSize = true });
-        _thresholds.Left = 200; _thresholds.Top = y - 4; Controls.Add(_thresholds);
-        y += 32; _notify.Left = 20; _notify.Top = y; Controls.Add(_notify);
-        y += 28; _exhaust.Left = 20; _exhaust.Top = y; Controls.Add(_exhaust);
-        y += 32;
-        Controls.Add(new Label { Text = "托盘图标", Left = 20, Top = y, AutoSize = true });
+        _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _root.Controls.Add(Caption("当前账号"));
+        _root.Controls.Add(_accounts);
+        var rename = ActionButton("重命名");
+        var del = ActionButton("删除");
+        _root.Controls.Add(Flow(rename, del));
+        _root.Controls.Add(_addCaption);
+        _root.Controls.Add(_token);
+        var cur = ActionButton("从 Cursor 导入");
+        var add = ActionButton("添加此 Token");
+        var ff = ActionButton("Firefox 登录");
+        _root.Controls.Add(Flow(cur, add, ff));
+        _root.Controls.Add(_status);
+        _root.Controls.Add(_hint);
+        _root.Controls.Add(FieldRow("刷新间隔（分钟）", _interval));
+        _root.Controls.Add(FieldRow("告警阈值", _thresholds));
+        _root.Controls.Add(_notify);
+        _root.Controls.Add(_exhaust);
         _mode.Items.AddRange(["圆环百分比", "纯数字", "仅色点"]);
-        _mode.Left = 200; _mode.Top = y - 4; Controls.Add(_mode);
-        y += 36; _auto.Left = 20; _auto.Top = y; Controls.Add(_auto);
-        y += 40;
-        var cancel = new Button { Text = "取消", Left = 220, Top = y, Width = 80 };
-        var apply = new Button { Text = "应用", Left = 310, Top = y, Width = 80 };
-        var save = new Button { Text = "保存", Left = 400, Top = y, Width = 80 };
-        Controls.Add(cancel); Controls.Add(apply); Controls.Add(save);
+        _root.Controls.Add(FieldRow("托盘图标", _mode));
+        _root.Controls.Add(_auto);
+        var cancel = ActionButton("取消");
+        var apply = ActionButton("应用");
+        var save = ActionButton("保存");
+        var actions = Flow(save, apply, cancel);
+        actions.FlowDirection = FlowDirection.RightToLeft;
+        actions.Dock = DockStyle.Fill;
+        _root.Controls.Add(actions);
+        Controls.Add(_root);
         LoadFrom(_cfg);
         _accounts.SelectedIndexChanged += (_, _) =>
         {
             if (_accounts.SelectedItem is AccountItem item) { _cfg.SetActiveAccount(item.Id); _onSaved(_cfg); }
         };
-        rename.Click += (_, _) =>
-        {
-            if (_cfg.ActiveAccount is null) return;
-            using var prompt = new Form
-            {
-                Text = "重命名",
-                Width = 360,
-                Height = 140,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.CenterParent,
-                AutoScaleDimensions = new SizeF(96F, 96F),
-                AutoScaleMode = AutoScaleMode.Dpi,
-            };
-            var field = new TextBox { Left = 16, Top = 16, Width = 310, Text = _cfg.ActiveAccount.Label };
-            var ok = new Button { Text = "确定", Left = 160, Top = 56, Width = 80, DialogResult = DialogResult.OK };
-            var cancelR = new Button { Text = "取消", Left = 246, Top = 56, Width = 80, DialogResult = DialogResult.Cancel };
-            prompt.Controls.AddRange([field, ok, cancelR]);
-            prompt.AcceptButton = ok;
-            if (prompt.ShowDialog(this) != DialogResult.OK) return;
-            _cfg.RenameAccount(_cfg.ActiveAccount.Id, field.Text);
-            LoadFrom(_cfg); _onSaved(_cfg);
-        };
+        rename.Click += (_, _) => RenameActive();
         del.Click += (_, _) =>
         {
             if (_cfg.ActiveAccount is null) return;
@@ -317,7 +298,133 @@ sealed class SettingsForm : Form
         cancel.Click += (_, _) => Close();
         apply.Click += (_, _) => Persist(false);
         save.Click += (_, _) => { Persist(true); Close(); };
+        ResumeLayout(false);
         if (startImport) BeginInvoke(async () => await DoImport("cursor-app"));
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        FitToContent();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        BeginInvoke(FitToContent);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        WrapText();
+    }
+
+    void FitToContent()
+    {
+        WrapText();
+        _root.PerformLayout();
+        var pref = _root.PreferredSize;
+        var work = Screen.FromControl(this).WorkingArea;
+        var (w, h) = UiLayout.FitDialog(pref.Width, pref.Height, 520, 420, work.Width, work.Height);
+        ClientSize = new Size(w, h);
+        WrapText();
+    }
+
+    void WrapText()
+    {
+        var inner = Math.Max(200, ClientSize.Width - _root.Padding.Horizontal - 8);
+        foreach (var label in new[] { _addCaption, _status, _hint })
+            label.MaximumSize = new Size(inner, 0);
+    }
+
+    void RenameActive()
+    {
+        if (_cfg.ActiveAccount is null) return;
+        using var prompt = new Form
+        {
+            Text = "重命名",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            AutoScaleDimensions = new SizeF(96F, 96F),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            Padding = new Padding(16),
+        };
+        var field = new TextBox { Text = _cfg.ActiveAccount.Label, Width = 320, MinimumSize = new Size(260, 0) };
+        var ok = ActionButton("确定");
+        ok.DialogResult = DialogResult.OK;
+        var cancelR = ActionButton("取消");
+        cancelR.DialogResult = DialogResult.Cancel;
+        var box = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 1,
+            Dock = DockStyle.Fill,
+        };
+        box.Controls.Add(field);
+        box.Controls.Add(Flow(ok, cancelR));
+        prompt.Controls.Add(box);
+        prompt.AcceptButton = ok;
+        prompt.CancelButton = cancelR;
+        if (prompt.ShowDialog(this) != DialogResult.OK) return;
+        _cfg.RenameAccount(_cfg.ActiveAccount.Id, field.Text);
+        LoadFrom(_cfg); _onSaved(_cfg);
+    }
+
+    static Label Caption(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        Margin = new Padding(0, 8, 0, 4),
+    };
+
+    static Button ActionButton(string text) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Margin = new Padding(0, 0, 8, 4),
+    };
+
+    static FlowLayoutPanel Flow(params Control[] items)
+    {
+        var p = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            Margin = new Padding(0, 4, 0, 4),
+        };
+        foreach (var c in items) p.Controls.Add(c);
+        return p;
+    }
+
+    static TableLayoutPanel FieldRow(string label, Control field)
+    {
+        var row = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 6, 0, 6),
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        row.Controls.Add(new Label
+        {
+            Text = label,
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 6, 12, 0),
+        }, 0, 0);
+        field.Anchor = AnchorStyles.Left;
+        field.Margin = new Padding(0, 2, 0, 2);
+        row.Controls.Add(field, 1, 0);
+        return row;
     }
 
     public void FocusToken() { _token.Focus(); _token.SelectAll(); }

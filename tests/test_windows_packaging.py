@@ -54,6 +54,7 @@ class DotnetPublishTests(unittest.TestCase):
         self.assertIn("<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>", csproj)
         self.assertIn("<InvariantGlobalization>true</InvariantGlobalization>", csproj)
         self.assertIn("<PublishTrimmed>false</PublishTrimmed>", csproj)
+        self.assertIn("<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>", csproj)
         self.assertNotIn("_SuppressWinFormsTrimError", csproj)
         self.assertNotIn("<PublishTrimmed>true</PublishTrimmed>", csproj)
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")

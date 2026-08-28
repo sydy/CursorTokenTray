@@ -336,6 +336,30 @@ public class FixtureTests
     }
 
     [Fact]
+    public void FitDialogUsesMinimumWhenContentIsSmaller()
+    {
+        var (w, h) = UiLayout.FitDialog(400, 300, 520, 420, 1920, 1080);
+        Assert.Equal(520, w);
+        Assert.Equal(420, h);
+    }
+
+    [Fact]
+    public void FitDialogGrowsForHighDpiPreferredSize()
+    {
+        var (w, h) = UiLayout.FitDialog(780, 900, 520, 420, 1920, 1080);
+        Assert.Equal(804, w);
+        Assert.Equal(924, h);
+    }
+
+    [Fact]
+    public void FitDialogClampsToWorkingArea()
+    {
+        var (w, h) = UiLayout.FitDialog(900, 1200, 520, 420, 800, 600);
+        Assert.Equal(752, w);
+        Assert.Equal(552, h);
+    }
+
+    [Fact]
     public void CrashLogWritesExceptionAndIgnoresNull()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt-crash-" + Guid.NewGuid().ToString("N"));
