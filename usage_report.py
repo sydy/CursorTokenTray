@@ -71,6 +71,37 @@ class ModelUsageRow:
     headless_count: int
 
 
+@dataclass(frozen=True)
+class ChartSlice:
+    model: str
+    tokens: int
+    cents: float
+    count: int
+
+
+@dataclass(frozen=True)
+class ChartBucket:
+    key: str
+    label: str
+    tokens: int
+    cents: float
+    count: int
+    slices: tuple[ChartSlice, ...]
+
+
+@dataclass(frozen=True)
+class UsageChartSeries:
+    hourly: bool
+    caption: str
+    models: tuple[str, ...]
+    buckets: tuple[ChartBucket, ...]
+
+
+HOURLY_CHART_WINDOW_HOURS = 48
+_MS_HOUR = 3_600_000
+_MS_DAY = 86_400_000
+
+
 @dataclass
 class UsageReport:
     event_count: int
@@ -151,6 +182,153 @@ def format_event_time(timestamp_ms: int) -> str:
 def event_date_utc(timestamp_ms: int) -> str:
     dt = datetime.fromtimestamp(max(0, timestamp_ms) / 1000.0, tz=timezone.utc)
     return dt.strftime("%Y-%m-%d")
+
+
+def event_hour_utc(timestamp_ms: int) -> str:
+    dt = datetime.fromtimestamp(_floor_hour_ms(timestamp_ms) / 1000.0, tz=timezone.utc)
+    return dt.strftime("%Y-%m-%d %H:00")
+
+
+def chart_model_label(name: str) -> str:
+    text = (name or "").strip()
+    return text[7:] if text.startswith("cursor-") else text
+
+
+def _floor_hour_ms(timestamp_ms: int) -> int:
+    return max(0, timestamp_ms) // _MS_HOUR * _MS_HOUR
+
+
+def _floor_day_ms(timestamp_ms: int) -> int:
+    return max(0, timestamp_ms) // _MS_DAY * _MS_DAY
+
+
+def _chart_models(events: list[UsageEvent]) -> tuple[str, ...]:
+    totals: dict[str, list[int | float]] = {}
+    for event in events:
+        name = event.model or "—"
+        row = totals.setdefault(name, [0, 0.0, 0])
+        row[0] = int(row[0]) + event.tokens
+        row[1] = float(row[1]) + event_cost_cents(event)
+        row[2] = int(row[2]) + 1
+    ranked = sorted(
+        totals.items(),
+        key=lambda kv: (-int(kv[1][0]), -float(kv[1][1]), -int(kv[1][2]), kv[0]),
+    )
+    return tuple(name for name, _ in ranked)
+
+
+def _bucket_label(key: str, hourly: bool, multi_day: bool) -> str:
+    if not hourly:
+        return key[5:] if len(key) >= 10 else key
+    hour = key[11:13] if len(key) >= 13 else key
+    if multi_day:
+        return f"{key[5:10]} {hour}"
+    return hour
+
+
+def _chart_caption(hourly: bool, keys: list[str]) -> str:
+    if hourly:
+        if not keys:
+            return "按小时 Token（UTC）"
+        first, last = keys[0], keys[-1]
+        if first == last:
+            return f"按小时 Token（UTC · {first}）"
+        if first[:10] == last[:10]:
+            return f"按小时 Token（UTC · {first[:10]} {first[11:]}–{last[11:]}）"
+        return f"按小时 Token（UTC · {first} 至 {last}）"
+    if not keys:
+        return "按日 Token（UTC）"
+    first, last = keys[0], keys[-1]
+    if first == last:
+        return f"按日 Token（UTC · {first}）"
+    return f"按日 Token（UTC · {first} 至 {last}）"
+
+
+def build_usage_chart(
+    events: list[UsageEvent] | tuple[UsageEvent, ...],
+    hourly: bool = False,
+    hidden_models: set[str] | frozenset[str] | None = None,
+    hourly_window_hours: int = HOURLY_CHART_WINDOW_HOURS,
+) -> UsageChartSeries:
+    selected = list(events)
+    models = _chart_models(selected)
+    hidden = hidden_models or set()
+    visible = [name for name in models if name not in hidden]
+    if not selected:
+        return UsageChartSeries(hourly=hourly, caption=_chart_caption(hourly, []), models=models, buckets=())
+
+    if hourly:
+        last_ms = _floor_hour_ms(max(ev.timestamp_ms for ev in selected))
+        first_ms = _floor_hour_ms(min(ev.timestamp_ms for ev in selected))
+        window = max(1, hourly_window_hours)
+        span = (last_ms - first_ms) // _MS_HOUR + 1
+        if span > window:
+            first_ms = last_ms - (window - 1) * _MS_HOUR
+        keys = [
+            event_hour_utc(first_ms + i * _MS_HOUR)
+            for i in range((last_ms - first_ms) // _MS_HOUR + 1)
+        ]
+        key_of = event_hour_utc
+    else:
+        last_ms = _floor_day_ms(max(ev.timestamp_ms for ev in selected))
+        first_ms = _floor_day_ms(min(ev.timestamp_ms for ev in selected))
+        keys = [
+            event_date_utc(first_ms + i * _MS_DAY)
+            for i in range((last_ms - first_ms) // _MS_DAY + 1)
+        ]
+        key_of = event_date_utc
+
+    cells: dict[tuple[str, str], list[int | float]] = {}
+    for event in selected:
+        key = key_of(event.timestamp_ms)
+        if key < keys[0] or key > keys[-1]:
+            continue
+        name = event.model or "—"
+        if name not in visible:
+            continue
+        cell = cells.setdefault((key, name), [0, 0.0, 0])
+        cell[0] = int(cell[0]) + event.tokens
+        cell[1] = float(cell[1]) + event_cost_cents(event)
+        cell[2] = int(cell[2]) + 1
+
+    multi_day = hourly and keys[0][:10] != keys[-1][:10]
+    buckets: list[ChartBucket] = []
+    for key in keys:
+        slices: list[ChartSlice] = []
+        tokens = 0
+        cents = 0.0
+        count = 0
+        for name in visible:
+            cell = cells.get((key, name))
+            if cell is None:
+                continue
+            slice_tokens = int(cell[0])
+            slice_cents = float(cell[1])
+            slice_count = int(cell[2])
+            if slice_tokens <= 0 and slice_cents <= 0 and slice_count <= 0:
+                continue
+            slices.append(
+                ChartSlice(model=name, tokens=slice_tokens, cents=slice_cents, count=slice_count)
+            )
+            tokens += slice_tokens
+            cents += slice_cents
+            count += slice_count
+        buckets.append(
+            ChartBucket(
+                key=key,
+                label=_bucket_label(key, hourly, multi_day),
+                tokens=tokens,
+                cents=cents,
+                count=count,
+                slices=tuple(slices),
+            )
+        )
+    return UsageChartSeries(
+        hourly=hourly,
+        caption=_chart_caption(hourly, keys),
+        models=models,
+        buckets=tuple(buckets),
+    )
 
 
 def parse_filtered_usage_events(payload: dict[str, Any] | None) -> tuple[tuple[UsageEvent, ...], int]:

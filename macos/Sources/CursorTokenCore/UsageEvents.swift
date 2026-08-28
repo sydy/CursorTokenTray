@@ -67,6 +67,30 @@ public struct ModelUsageRow: Equatable, Sendable {
     public var headlessCount: Int
 }
 
+public struct ChartSlice: Equatable, Sendable {
+    public var model: String
+    public var tokens: Int
+    public var cents: Double
+    public var count: Int
+}
+
+public struct ChartBucket: Equatable, Sendable, Identifiable {
+    public var id: String { key }
+    public var key: String
+    public var label: String
+    public var tokens: Int
+    public var cents: Double
+    public var count: Int
+    public var slices: [ChartSlice]
+}
+
+public struct UsageChartSeries: Equatable, Sendable {
+    public var hourly: Bool
+    public var caption: String
+    public var models: [String]
+    public var buckets: [ChartBucket]
+}
+
 public struct UsageReportFilter: Equatable, Sendable {
     public var kind: String
     public var model: String
@@ -109,6 +133,9 @@ public enum UsageEvents {
     public static let kindOnDemand = "on_demand"
     public static let kindOther = "other"
     public static let csvHeader = "日期(UTC),用户,类型,模型,Token,费用,云端Agent"
+    public static let hourlyChartWindowHours = 48
+    static let msHour: Int64 = 3_600_000
+    static let msDay: Int64 = 86_400_000
 
     public static func kindLabel(_ kind: String?) -> String {
         switch (kind ?? "").trimmingCharacters(in: .whitespaces).lowercased() {
@@ -161,6 +188,158 @@ public enum UsageEvents {
         f.timeZone = TimeZone(secondsFromGMT: 0)
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: dt)
+    }
+
+    public static func hourUtc(_ timestampMs: Int64) -> String {
+        let dt = Date(timeIntervalSince1970: Double(floorHourMs(timestampMs)) / 1000.0)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd HH:'00'"
+        return f.string(from: dt)
+    }
+
+    public static func chartModelLabel(_ name: String?) -> String {
+        let text = (name ?? "").trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("cursor-") {
+            return String(text.dropFirst(7))
+        }
+        return text
+    }
+
+    public static func buildChart(
+        _ events: [UsageEvent],
+        hourly: Bool,
+        hiddenModels: Set<String> = [],
+        hourlyWindowHours: Int = hourlyChartWindowHours
+    ) -> UsageChartSeries {
+        let models = chartModels(events)
+        let visible = models.filter { !hiddenModels.contains($0) }
+        if events.isEmpty {
+            return UsageChartSeries(hourly: hourly, caption: chartCaption(hourly: hourly, keys: []), models: models, buckets: [])
+        }
+
+        let keys: [String]
+        let keyOf: (Int64) -> String
+        if hourly {
+            let lastMs = floorHourMs(events.map(\.timestampMs).max() ?? 0)
+            var firstMs = floorHourMs(events.map(\.timestampMs).min() ?? 0)
+            let window = Int64(max(1, hourlyWindowHours))
+            let span = (lastMs - firstMs) / msHour + 1
+            if span > window { firstMs = lastMs - (window - 1) * msHour }
+            let count = Int((lastMs - firstMs) / msHour + 1)
+            keys = (0..<count).map { hourUtc(firstMs + Int64($0) * msHour) }
+            keyOf = hourUtc
+        } else {
+            let lastMs = floorDayMs(events.map(\.timestampMs).max() ?? 0)
+            let firstMs = floorDayMs(events.map(\.timestampMs).min() ?? 0)
+            let count = Int((lastMs - firstMs) / msDay + 1)
+            keys = (0..<count).map { dateUtc(firstMs + Int64($0) * msDay) }
+            keyOf = dateUtc
+        }
+
+        var cells: [String: (Int, Double, Int)] = [:]
+        for ev in events {
+            let key = keyOf(ev.timestampMs)
+            if key < keys[0] || key > keys[keys.count - 1] { continue }
+            let name = ev.model.isEmpty ? "—" : ev.model
+            if !visible.contains(name) { continue }
+            let cellKey = key + "\u{1f}" + name
+            let cell = cells[cellKey] ?? (0, 0, 0)
+            cells[cellKey] = (cell.0 + ev.tokens, cell.1 + costCents(ev), cell.2 + 1)
+        }
+
+        let multiDay = hourly && keys[0].prefix(10) != keys[keys.count - 1].prefix(10)
+        var buckets: [ChartBucket] = []
+        buckets.reserveCapacity(keys.count)
+        for key in keys {
+            var slices: [ChartSlice] = []
+            var tokens = 0
+            var cents = 0.0
+            var count = 0
+            for name in visible {
+                let cellKey = key + "\u{1f}" + name
+                guard let cell = cells[cellKey] else { continue }
+                if cell.0 <= 0 && cell.1 <= 0 && cell.2 <= 0 { continue }
+                slices.append(ChartSlice(model: name, tokens: cell.0, cents: cell.1, count: cell.2))
+                tokens += cell.0
+                cents += cell.1
+                count += cell.2
+            }
+            buckets.append(ChartBucket(
+                key: key,
+                label: bucketLabel(key, hourly: hourly, multiDay: multiDay),
+                tokens: tokens,
+                cents: cents,
+                count: count,
+                slices: slices
+            ))
+        }
+        return UsageChartSeries(
+            hourly: hourly,
+            caption: chartCaption(hourly: hourly, keys: keys),
+            models: models,
+            buckets: buckets
+        )
+    }
+
+    static func floorHourMs(_ timestampMs: Int64) -> Int64 {
+        max(0, timestampMs) / msHour * msHour
+    }
+
+    static func floorDayMs(_ timestampMs: Int64) -> Int64 {
+        max(0, timestampMs) / msDay * msDay
+    }
+
+    static func chartModels(_ events: [UsageEvent]) -> [String] {
+        var totals: [String: (Int, Double, Int)] = [:]
+        for ev in events {
+            let name = ev.model.isEmpty ? "—" : ev.model
+            let row = totals[name] ?? (0, 0, 0)
+            totals[name] = (row.0 + ev.tokens, row.1 + costCents(ev), row.2 + 1)
+        }
+        return totals.keys.sorted { lhs, rhs in
+            let a = totals[lhs]!, b = totals[rhs]!
+            if a.0 != b.0 { return a.0 > b.0 }
+            if a.1 != b.1 { return a.1 > b.1 }
+            if a.2 != b.2 { return a.2 > b.2 }
+            return lhs < rhs
+        }
+    }
+
+    static func bucketLabel(_ key: String, hourly: Bool, multiDay: Bool) -> String {
+        if !hourly {
+            return key.count >= 10 ? String(key.dropFirst(5)) : key
+        }
+        let hour: String
+        if key.count >= 13 {
+            let start = key.index(key.startIndex, offsetBy: 11)
+            let end = key.index(start, offsetBy: 2)
+            hour = String(key[start..<end])
+        } else {
+            hour = key
+        }
+        if multiDay {
+            let mdStart = key.index(key.startIndex, offsetBy: 5)
+            let mdEnd = key.index(mdStart, offsetBy: 5)
+            return "\(key[mdStart..<mdEnd]) \(hour)"
+        }
+        return hour
+    }
+
+    static func chartCaption(hourly: Bool, keys: [String]) -> String {
+        if hourly {
+            if keys.isEmpty { return "按小时 Token（UTC）" }
+            let first = keys[0], last = keys[keys.count - 1]
+            if first == last { return "按小时 Token（UTC · \(first)）" }
+            if first.prefix(10) == last.prefix(10) {
+                return "按小时 Token（UTC · \(first.prefix(10)) \(first.dropFirst(11))–\(last.dropFirst(11))）"
+            }
+            return "按小时 Token（UTC · \(first) 至 \(last)）"
+        }
+        if keys.isEmpty { return "按日 Token（UTC）" }
+        if keys[0] == keys[keys.count - 1] { return "按日 Token（UTC · \(keys[0])）" }
+        return "按日 Token（UTC · \(keys[0]) 至 \(keys[keys.count - 1])）"
     }
 
     public static func parsePage(_ payload: JSONValue) -> (events: [UsageEvent], totalCount: Int) {
