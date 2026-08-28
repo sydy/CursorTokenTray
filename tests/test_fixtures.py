@@ -174,3 +174,56 @@ class GoldenFixtureTests(unittest.TestCase):
         self.assertTrue(csv_text.lstrip("\ufeff").startswith(data["csv_header"]))
         self.assertEqual(CSV_HEADER, data["csv_header"])
 
+    def test_usage_chart_fixtures_match_python(self) -> None:
+        from usage_report import (
+            HOURLY_CHART_WINDOW_HOURS,
+            build_usage_chart,
+            chart_model_label,
+            usage_event_from_dict,
+        )
+
+        data = json.loads((ROOT / "fixtures" / "usage_chart_cases.json").read_text(encoding="utf-8"))
+        self.assertEqual(HOURLY_CHART_WINDOW_HOURS, data["hourly_window_hours"])
+        for row in data["model_labels"]:
+            self.assertEqual(chart_model_label(row["input"]), row["output"])
+        for cse in data["cases"]:
+            with self.subTest(cse["name"]):
+                events = [usage_event_from_dict(row) for row in cse["events"]]
+                events = [e for e in events if e is not None]
+                series = build_usage_chart(
+                    events,
+                    hourly=cse["hourly"],
+                    hidden_models=set(cse["hidden_models"]),
+                )
+                self._assert_chart_series(series, cse["expected"])
+
+    def _assert_chart_series(self, series, exp) -> None:
+        self.assertEqual(series.hourly, exp["hourly"])
+        self.assertEqual(series.caption, exp["caption"])
+        self.assertEqual(list(series.models), exp["models"])
+        if "buckets" in exp:
+            self.assertEqual(self._chart_buckets(series.buckets), exp["buckets"])
+            return
+        self.assertEqual(len(series.buckets), exp["bucket_count"])
+        self.assertEqual(series.buckets[0].key, exp["first_key"])
+        self.assertEqual(series.buckets[-1].key, exp["last_key"])
+        nonzero = [b for b in series.buckets if b.tokens or b.cents or b.count]
+        self.assertEqual(self._chart_buckets(nonzero), exp["nonzero"])
+
+    @staticmethod
+    def _chart_buckets(buckets) -> list[dict]:
+        return [
+            {
+                "key": b.key,
+                "label": b.label,
+                "tokens": b.tokens,
+                "cents": b.cents,
+                "count": b.count,
+                "slices": [
+                    {"model": s.model, "tokens": s.tokens, "cents": s.cents, "count": s.count}
+                    for s in b.slices
+                ],
+            }
+            for b in buckets
+        ]
+

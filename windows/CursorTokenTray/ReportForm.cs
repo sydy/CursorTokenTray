@@ -8,11 +8,11 @@ sealed class ReportForm : Form
     public readonly record struct ReportState(string Token, string AccountId, UsageSnapshot? Usage, bool IsTeam);
 
     const int DesignWidth = 1040;
-    const int DesignHeight = 760;
+    const int DesignHeight = 880;
     const int DesignMinWidth = 900;
-    const int DesignMinHeight = 600;
-    const int DesignSparkRow = 88;
-    const int DesignModelRow = 210;
+    const int DesignMinHeight = 640;
+    const int DesignChartRow = 250;
+    const int DesignModelRow = 180;
     const int DesignHeaderH = 28;
     const int DesignRowH = 24;
 
@@ -24,8 +24,7 @@ sealed class ReportForm : Form
     readonly ComboBox _cloud = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly Label _status = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 8, 0, 0) };
     readonly Label _kpi = new() { AutoSize = true, Margin = new Padding(0, 8, 0, 8) };
-    readonly SparklineBox _spark = new() { Dock = DockStyle.Fill };
-    readonly Label _sparkCaption = new() { AutoSize = true, ForeColor = Color.DimGray, Text = "按日 Token" };
+    readonly UsageChartPanel _chart = new();
     readonly DataGridView _models = MakeGrid();
     readonly DataGridView _grid = MakeGrid();
     readonly Button _syncBtn = new() { Text = "同步", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
@@ -102,18 +101,13 @@ sealed class ReportForm : Form
         _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignSparkRow));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignChartRow));
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignModelRow));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _root.Controls.Add(filters, 0, 0);
         _root.Controls.Add(_kpi, 0, 1);
-        var sparkWrap = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-        sparkWrap.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        sparkWrap.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        sparkWrap.Controls.Add(_sparkCaption, 0, 0);
-        sparkWrap.Controls.Add(_spark, 0, 1);
-        _root.Controls.Add(sparkWrap, 0, 2);
+        _root.Controls.Add(_chart, 0, 2);
         var modelWrap = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         modelWrap.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         modelWrap.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -169,10 +163,11 @@ sealed class ReportForm : Form
         if (_root.RowStyles.Count > 3)
         {
             _root.RowStyles[2].SizeType = SizeType.Absolute;
-            _root.RowStyles[2].Height = UiLayout.ScalePx(DesignSparkRow, dpi);
+            _root.RowStyles[2].Height = UiLayout.ScalePx(DesignChartRow, dpi);
             _root.RowStyles[3].SizeType = SizeType.Absolute;
             _root.RowStyles[3].Height = UiLayout.ScalePx(DesignModelRow, dpi);
         }
+        _chart.ApplyDpi(dpi);
 
         var headerH = UiLayout.ScalePx(DesignHeaderH, dpi);
         var rowH = UiLayout.ScalePx(DesignRowH, dpi);
@@ -324,10 +319,7 @@ sealed class ReportForm : Form
         if (report.HeadlessCount > 0) mix += $" · 云端 {report.HeadlessCount}";
         var cost = report.HasCost ? $"    费用 {UsageParser.FormatUsdCents(report.TotalCents)}" : "";
         _kpi.Text = $"请求 {report.EventCount}    Token {UsageParser.FormatTokenCount(report.TotalTokens)}    {mix}{cost}";
-        _sparkCaption.Text = report.Daily.Count == 0
-            ? "按日 Token"
-            : $"按日 Token（{report.Daily.First().Date} 至 {report.Daily.Last().Date}）";
-        _spark.Values = report.Daily.Count >= 2 ? report.Daily.Select(d => (double)d.Tokens).ToList() : [];
+        _chart.Bind(report.Events);
 
         _models.Rows.Clear();
         _models.SuspendLayout();

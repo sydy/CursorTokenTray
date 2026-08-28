@@ -216,6 +216,37 @@ public class FixtureTests
     }
 
     [Fact]
+    public void UsageChartCases()
+    {
+        var root = Load("usage_chart_cases.json");
+        Assert.Equal(UsageEvents.HourlyChartWindowHours, root.GetProperty("hourly_window_hours").GetInt32());
+        foreach (var row in root.GetProperty("model_labels").EnumerateArray())
+            Assert.Equal(row.GetProperty("output").GetString(), UsageEvents.ChartModelLabel(row.GetProperty("input").GetString()));
+        foreach (var cse in root.GetProperty("cases").EnumerateArray())
+        {
+            var events = cse.GetProperty("events").EnumerateArray()
+                .Select(row => UsageEvents.FromDict(JsonBag.Parse(row.GetRawText()))!)
+                .ToList();
+            var hidden = cse.GetProperty("hidden_models").EnumerateArray().Select(x => x.GetString()!).ToList();
+            var series = UsageEvents.BuildChart(events, cse.GetProperty("hourly").GetBoolean(), hidden);
+            var exp = cse.GetProperty("expected");
+            Assert.Equal(exp.GetProperty("hourly").GetBoolean(), series.Hourly);
+            Assert.Equal(exp.GetProperty("caption").GetString(), series.Caption);
+            Assert.Equal(exp.GetProperty("models").EnumerateArray().Select(x => x.GetString()!).ToList(), series.Models);
+            if (exp.TryGetProperty("buckets", out var buckets))
+            {
+                AssertBuckets(buckets, series.Buckets);
+                continue;
+            }
+            Assert.Equal(exp.GetProperty("bucket_count").GetInt32(), series.Buckets.Count);
+            Assert.Equal(exp.GetProperty("first_key").GetString(), series.Buckets[0].Key);
+            Assert.Equal(exp.GetProperty("last_key").GetString(), series.Buckets[^1].Key);
+            var nonzero = series.Buckets.Where(b => b.Tokens != 0 || b.Cents != 0 || b.Count != 0).ToList();
+            AssertBuckets(exp.GetProperty("nonzero"), nonzero);
+        }
+    }
+
+    [Fact]
     public void UsageEventsStoreMergeAndRoundtrip()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt_ev_" + Guid.NewGuid().ToString("N"));
@@ -249,6 +280,29 @@ public class FixtureTests
         Assert.Equal(Opt(exp, "charged_cents"), got.ChargedCents);
         Assert.Equal(Opt(exp, "total_cents"), got.TotalCents);
         Assert.Equal(exp.GetProperty("is_headless").GetBoolean(), got.IsHeadless);
+    }
+
+    static void AssertBuckets(JsonElement expected, List<ChartBucket> got)
+    {
+        var rows = expected.EnumerateArray().ToList();
+        Assert.Equal(rows.Count, got.Count);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            Assert.Equal(rows[i].GetProperty("key").GetString(), got[i].Key);
+            Assert.Equal(rows[i].GetProperty("label").GetString(), got[i].Label);
+            Assert.Equal(rows[i].GetProperty("tokens").GetInt64(), got[i].Tokens);
+            Assert.Equal(rows[i].GetProperty("cents").GetDouble(), got[i].Cents, 3);
+            Assert.Equal(rows[i].GetProperty("count").GetInt32(), got[i].Count);
+            var slices = rows[i].GetProperty("slices").EnumerateArray().ToList();
+            Assert.Equal(slices.Count, got[i].Slices.Count);
+            for (var j = 0; j < slices.Count; j++)
+            {
+                Assert.Equal(slices[j].GetProperty("model").GetString(), got[i].Slices[j].Model);
+                Assert.Equal(slices[j].GetProperty("tokens").GetInt64(), got[i].Slices[j].Tokens);
+                Assert.Equal(slices[j].GetProperty("cents").GetDouble(), got[i].Slices[j].Cents, 3);
+                Assert.Equal(slices[j].GetProperty("count").GetInt32(), got[i].Slices[j].Count);
+            }
+        }
     }
 
     [Fact]

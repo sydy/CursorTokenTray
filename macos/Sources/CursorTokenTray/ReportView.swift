@@ -10,6 +10,8 @@ final class ReportStore: ObservableObject {
     @Published var kind = ""
     @Published var model = ""
     @Published var cloud = ""
+    @Published var chartHourly = false
+    @Published var hiddenChartModels: Set<String> = []
     @Published var status = "正在同步本周期明细…"
     @Published var syncing = false
     @Published var events: [UsageEvent] = []
@@ -32,6 +34,18 @@ final class ReportStore: ObservableObject {
 
     var report: UsageReport {
         UsageEvents.buildReport(events, filter: filter)
+    }
+
+    var chartSeries: UsageChartSeries {
+        UsageEvents.buildChart(report.events, hourly: chartHourly, hiddenModels: hiddenChartModels)
+    }
+
+    func toggleChartModel(_ name: String) {
+        if hiddenChartModels.contains(name) {
+            hiddenChartModels.remove(name)
+        } else {
+            hiddenChartModels.insert(name)
+        }
     }
 
     func loadCache() {
@@ -124,12 +138,18 @@ struct ReportRootView: View {
                 .foregroundStyle(.secondary)
             Text(kpiText)
                 .font(.subheadline)
-            dailyChart
+            UsageChartView(
+                series: store.chartSeries,
+                hiddenModels: store.hiddenChartModels,
+                hourly: store.chartHourly,
+                onHourlyChange: { store.chartHourly = $0 },
+                onToggleModel: { store.toggleChartModel($0) }
+            )
             models
             details
         }
         .padding(16)
-        .frame(minWidth: 860, minHeight: 560)
+        .frame(minWidth: 860, minHeight: 620)
         .task { await store.sync() }
         .onChange(of: store.teamScope) { _ in
             Task { await store.sync() }
@@ -179,21 +199,6 @@ struct ReportRootView: View {
         if report.headlessCount > 0 { mix += " · 云端 \(report.headlessCount)" }
         let cost = report.hasCost ? "    费用 \(UsageParser.formatUSDCents(report.totalCents))" : ""
         return "请求 \(report.eventCount)    Token \(UsageParser.formatTokenCount(Double(report.totalTokens)))    \(mix)\(cost)"
-    }
-
-    var dailyChart: some View {
-        let daily = store.report.daily
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(daily.isEmpty ? "按日 Token" : "按日 Token（\(daily.first!.date) 至 \(daily.last!.date)）")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if daily.count >= 2 {
-                Sparkline(values: daily.map { Double($0.tokens) })
-                    .frame(height: 48)
-            } else {
-                Rectangle().fill(Color.secondary.opacity(0.08)).frame(height: 48)
-            }
-        }
     }
 
     var models: some View {
@@ -256,7 +261,7 @@ final class ReportWindowController: NSObject, NSWindowDelegate {
                 defer: false
             )
             win.title = "用量报表"
-            win.minSize = NSSize(width: 820, height: 520)
+            win.minSize = NSSize(width: 820, height: 580)
             win.isReleasedWhenClosed = false
             win.delegate = self
             window = win

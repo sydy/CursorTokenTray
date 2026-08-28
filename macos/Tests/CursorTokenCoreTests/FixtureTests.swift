@@ -224,6 +224,51 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertEqual(UsageEvents.csvHeader, str(root["csv_header"]))
     }
 
+    func testUsageChartCases() throws {
+        let root = try XCTUnwrap(try json("usage_chart_cases.json") as? [String: Any])
+        XCTAssertEqual(UsageEvents.hourlyChartWindowHours, int(root["hourly_window_hours"]) ?? -1)
+        for row in root["model_labels"] as! [[String: Any]] {
+            XCTAssertEqual(UsageEvents.chartModelLabel(str(row["input"])), str(row["output"]))
+        }
+        for cse in root["cases"] as! [[String: Any]] {
+            let events = (cse["events"] as! [[String: Any]]).compactMap(UsageEvents.fromDict)
+            let hidden = Set(stringArray(cse["hidden_models"]))
+            let series = UsageEvents.buildChart(events, hourly: bool(cse["hourly"]), hiddenModels: hidden)
+            let exp = cse["expected"] as! [String: Any]
+            XCTAssertEqual(series.hourly, bool(exp["hourly"]), str(cse["name"]))
+            XCTAssertEqual(series.caption, str(exp["caption"]), str(cse["name"]))
+            XCTAssertEqual(series.models, stringArray(exp["models"]), str(cse["name"]))
+            if let buckets = exp["buckets"] as? [[String: Any]] {
+                assertBuckets(buckets, series.buckets, str(cse["name"]))
+                continue
+            }
+            XCTAssertEqual(series.buckets.count, int(exp["bucket_count"]) ?? -1, str(cse["name"]))
+            XCTAssertEqual(series.buckets.first?.key, str(exp["first_key"]), str(cse["name"]))
+            XCTAssertEqual(series.buckets.last?.key, str(exp["last_key"]), str(cse["name"]))
+            let nonzero = series.buckets.filter { $0.tokens != 0 || $0.cents != 0 || $0.count != 0 }
+            assertBuckets(exp["nonzero"] as! [[String: Any]], nonzero, str(cse["name"]))
+        }
+    }
+
+    private func assertBuckets(_ expected: [[String: Any]], _ got: [ChartBucket], _ name: String) {
+        XCTAssertEqual(got.count, expected.count, name)
+        for (row, bucket) in zip(expected, got) {
+            XCTAssertEqual(bucket.key, str(row["key"]), name)
+            XCTAssertEqual(bucket.label, str(row["label"]), name)
+            XCTAssertEqual(bucket.tokens, int(row["tokens"]) ?? -1, name)
+            XCTAssertEqual(bucket.cents, try! XCTUnwrap(num(row["cents"])), accuracy: 0.001, name)
+            XCTAssertEqual(bucket.count, int(row["count"]) ?? -1, name)
+            let slices = row["slices"] as! [[String: Any]]
+            XCTAssertEqual(bucket.slices.count, slices.count, name)
+            for (srow, slice) in zip(slices, bucket.slices) {
+                XCTAssertEqual(slice.model, str(srow["model"]), name)
+                XCTAssertEqual(slice.tokens, int(srow["tokens"]) ?? -1, name)
+                XCTAssertEqual(slice.cents, try! XCTUnwrap(num(srow["cents"])), accuracy: 0.001, name)
+                XCTAssertEqual(slice.count, int(srow["count"]) ?? -1, name)
+            }
+        }
+    }
+
     private func number64(_ value: Any?) -> Int64? {
         num(value).map { Int64($0.rounded()) }
     }
