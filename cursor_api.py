@@ -500,44 +500,56 @@ def parse_usage_summary(payload: dict[str, Any]) -> UsageSnapshot:
 
     if is_unlimited:
         used_percent = 0.0
-    elif total is not None:
-        used_percent = total
-        meter = _meter_with_limit(plan_meter) or _meter_with_limit(overall_meter)
-        if meter:
-            used_cents, limit_cents, remaining_cents = meter
-    elif auto is not None or api is not None:
-        used_percent = max(p for p in (auto, api) if p is not None)
-        meter = _meter_with_limit(plan_meter) or _meter_with_limit(overall_meter)
-        if meter:
-            used_cents, limit_cents, remaining_cents = meter
     else:
-        picked_source = ""
-        for meter, source in (
-            (overall_meter, "overall"),
-            (plan_meter, "plan"),
-            (plan_meter_breakdown, "plan"),
-            (pooled_meter, "pooled"),
-            (od_meter, "on_demand"),
-        ):
-            picked = _meter_with_limit(meter)
-            if picked is None:
-                continue
-            used_cents, limit_cents, remaining_cents = picked
-            used_percent = min(100.0, max(0.0, used_cents / limit_cents * 100.0))
-            picked_source = source
-            break
+        # 团队用量页「Your monthly usage $X / $Y」来自 overall / pooled / plan 金额。
+        # plan.totalPercentUsed 是另一套内部缓存指标，可能冻在 0% 或 100%，
+        # 不能拿来画托盘剩余环，否则会出现本地 100% 但 Dashboard 已用 $71 / $1000。
+        if is_team_membership(membership, limit_type):
+            for meter in (overall_meter, pooled_meter, plan_meter):
+                applied = _percent_from_spend_meter(meter)
+                if applied is None:
+                    continue
+                used_cents, limit_cents, remaining_cents, used_percent = applied
+                billing_mode = "amount"
+                break
         if used_percent is None:
-            used_percent = 0.0
-        elif picked_source in {"overall", "pooled", "on_demand"} or is_team_membership(
-            membership, limit_type
-        ):
-            billing_mode = "amount"
-        else:
-            # 个人套餐只有 plan.used/limit、没有百分比：沿用比例，不当美元
-            used_cents = None
-            limit_cents = None
-            remaining_cents = None
-            billing_mode = "percent"
+            if total is not None:
+                used_percent = total
+                meter = _meter_with_limit(plan_meter) or _meter_with_limit(overall_meter)
+                if meter:
+                    used_cents, limit_cents, remaining_cents = meter
+            elif auto is not None or api is not None:
+                used_percent = max(p for p in (auto, api) if p is not None)
+                meter = _meter_with_limit(plan_meter) or _meter_with_limit(overall_meter)
+                if meter:
+                    used_cents, limit_cents, remaining_cents = meter
+            else:
+                picked_source = ""
+                for meter, source in (
+                    (overall_meter, "overall"),
+                    (plan_meter, "plan"),
+                    (plan_meter_breakdown, "plan"),
+                    (pooled_meter, "pooled"),
+                    (od_meter, "on_demand"),
+                ):
+                    applied = _percent_from_spend_meter(meter)
+                    if applied is None:
+                        continue
+                    used_cents, limit_cents, remaining_cents, used_percent = applied
+                    picked_source = source
+                    break
+                if used_percent is None:
+                    used_percent = 0.0
+                elif picked_source in {"overall", "pooled", "on_demand"} or is_team_membership(
+                    membership, limit_type
+                ):
+                    billing_mode = "amount"
+                else:
+                    # 个人套餐只有 plan.used/limit、没有百分比：沿用比例，不当美元
+                    used_cents = None
+                    limit_cents = None
+                    remaining_cents = None
+                    billing_mode = "percent"
 
     if used_cents is None:
         fallback = _meter_with_limit(overall_meter) or _meter_with_limit(pooled_meter)
@@ -706,6 +718,17 @@ def _meter_with_limit(
     if limit is None or limit <= 0:
         return None
     return used, limit, remaining
+
+
+def _percent_from_spend_meter(
+    meter: tuple[float, float, float | None] | None,
+) -> tuple[float, float, float | None, float] | None:
+    picked = _meter_with_limit(meter)
+    if picked is None:
+        return None
+    used, limit, remaining = picked
+    percent = min(100.0, max(0.0, used / limit * 100.0))
+    return used, limit, remaining, percent
 
 
 def _percent_from_display_message(message: Any) -> float | None:
