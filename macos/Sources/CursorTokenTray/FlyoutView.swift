@@ -3,44 +3,69 @@ import Combine
 import CursorTokenCore
 import SwiftUI
 
+enum FlyoutLayout {
+    static let width: CGFloat = 500
+    static let height: CGFloat = 300
+    static let size = CGSize(width: width, height: height)
+    static let cornerRadius: CGFloat = 16
+    static let padding: CGFloat = 16
+    static let columnGap: CGFloat = 16
+    static let leftWidth: CGFloat = 176
+    static let ringSize: CGFloat = 148
+    static let ringLine: CGFloat = 10
+    static let cardRadius: CGFloat = 10
+    static let cardPadding: CGFloat = 10
+    static let cardGap: CGFloat = 8
+    static let barHeight: CGFloat = 5
+    static let sparkHeight: CGFloat = 36
+}
+
 struct FlyoutView: View {
     @ObservedObject var store: AppStore
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: FlyoutLayout.columnGap) {
             leftColumn
-            Divider()
             rightColumn
         }
-        .padding(18)
-        .frame(width: 456, height: 236)
+        .padding(FlyoutLayout.padding)
+        .frame(width: FlyoutLayout.width, height: FlyoutLayout.height)
         .background(.ultraThinMaterial)
     }
 
     var remaining: Double? { store.usage?.remainingPercent }
     var isError: Bool { store.usage == nil && store.errorMessage != nil }
+    var isUnlimited: Bool { store.usage?.isUnlimited == true }
 
     var leftColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("剩余").font(.caption).foregroundStyle(.secondary)
-            if let remaining, !isError {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(String(format: "%.1f", remaining)).font(.system(size: 34, weight: .bold))
-                    Text("%").font(.title3).foregroundStyle(.secondary)
-                }
-                Text(planCaption).font(.subheadline).foregroundStyle(.secondary)
-                pill
-            } else {
-                Text(store.errorMessage ?? "等待刷新…").font(.subheadline).frame(maxWidth: 180, alignment: .leading)
+        VStack(spacing: 10) {
+            RemainingGauge(
+                remaining: remaining,
+                error: isError,
+                unlimited: isUnlimited,
+                color: gaugeColor
+            ) {
                 pill
             }
-            Spacer()
+            if let remaining, !isError {
+                Text(planCaption)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text(store.errorMessage ?? "等待刷新…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: FlyoutLayout.leftWidth, alignment: .center)
+            }
             Button(UsageParser.dashboardLinkLabel(store.usage)) { store.openDashboard() }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
                 .font(.caption)
+            Spacer(minLength: 0)
         }
-        .frame(width: 190, alignment: .leading)
+        .frame(width: FlyoutLayout.leftWidth)
     }
 
     var planCaption: String {
@@ -50,67 +75,116 @@ struct FlyoutView: View {
         return text
     }
 
+    var gaugeColor: Color { RemainingTone.color(remaining: remaining, error: isError, unlimited: isUnlimited) }
+
     var pill: some View {
         let text = StatusText.statusPillText(remaining, error: isError)
-        let color: Color = {
-            if isError || remaining == nil { return Color(nsColor: .systemGray) }
-            if let remaining, remaining < 20 { return .red }
-            if let remaining, remaining < 50 { return .yellow }
-            return .green
-        }()
         return Text(text)
             .font(.caption)
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.25), in: Capsule())
+            .padding(.vertical, 3)
+            .background(gaugeColor.opacity(0.25), in: Capsule())
     }
 
     var rightColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: FlyoutLayout.cardGap) {
             if let usage = store.usage, !isError {
                 if usage.showsAmount {
-                    labeled("金额", UsageParser.formatSpendRange(used: usage.usedCents, limit: usage.limitCents))
+                    card {
+                        labeled("金额", UsageParser.formatSpendRange(used: usage.usedCents, limit: usage.limitCents))
+                        if let used = usage.usedCents, let limit = usage.limitCents, limit > 0 {
+                            bar(used / limit, color: Color(red: 48 / 255, green: 209 / 255, blue: 88 / 255))
+                        }
+                    }
                 }
-                if let auto = usage.autoPercentUsed {
-                    labeled("First-party", String(format: "%.1f%%", auto))
-                    bar(auto / 100, color: Color(red: 92 / 255, green: 163 / 255, blue: 152 / 255))
+                if usage.autoPercentUsed != nil || usage.apiPercentUsed != nil {
+                    card {
+                        if let auto = usage.autoPercentUsed {
+                            meterRow("First-party", auto, color: Color(red: 50 / 255, green: 180 / 255, blue: 170 / 255))
+                        }
+                        if let api = usage.apiPercentUsed {
+                            meterRow("API", api, color: Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255))
+                        }
+                    }
                 }
-                if let api = usage.apiPercentUsed {
-                    labeled("API", String(format: "%.1f%%", api))
-                    bar(api / 100, color: Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255))
-                }
-                if let tokens = usage.totalTokens, tokens > 0 {
-                    Text("Token  \(UsageParser.formatTokenCount(Double(tokens)))")
+                if hasMeta(usage) {
+                    card {
+                        HStack(spacing: 12) {
+                            if let tokens = usage.totalTokens, tokens > 0 {
+                                Text("Token  \(UsageParser.formatTokenCount(Double(tokens)))")
+                            }
+                            if let end = usage.billingCycleEnd {
+                                Text("重置  \(StatusText.formatResetDate(end))")
+                            }
+                        }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        Text(StatusText.formatEstimateCaption(usage))
+                            .font(.caption)
+                            .foregroundStyle(estimateColor(usage))
+                    }
                 }
-                if let end = usage.billingCycleEnd {
-                    Text("重置  \(StatusText.formatResetDate(end))").font(.caption).foregroundStyle(.secondary)
-                }
-                Text(StatusText.formatEstimateCaption(usage)).font(.caption).foregroundStyle(.secondary)
                 sparkline
             } else if let updated = store.updatedAt {
                 Text("更新  \(updated)").font(.caption).foregroundStyle(.secondary)
             }
-            Spacer()
-            HStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 6) {
                 Spacer()
-                Button("复制") { store.copySummary() }.buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
-                Button("刷新") { store.requestRefresh() }.buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
-                Button("报表") { FlyoutWindowController.shared.close(); store.openReport() }
-                    .buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
-                Button("设置") { FlyoutWindowController.shared.close(); store.openSettings() }
-                    .buttonStyle(.plain).foregroundStyle(Color.accentColor).font(.caption)
+                toolButton("复制", "doc.on.doc") { store.copySummary() }
+                toolButton("刷新", "arrow.clockwise") { store.requestRefresh() }
+                toolButton("报表", "chart.bar") {
+                    FlyoutWindowController.shared.close()
+                    store.openReport()
+                }
+                toolButton("设置", "gearshape") {
+                    FlyoutWindowController.shared.close()
+                    store.openSettings()
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    func hasMeta(_ usage: UsageSnapshot) -> Bool {
+        if let tokens = usage.totalTokens, tokens > 0 { return true }
+        if usage.billingCycleEnd != nil { return true }
+        return true
+    }
+
+    func estimateColor(_ usage: UsageSnapshot) -> Color {
+        let text = StatusText.formatEstimateCaption(usage)
+        if text.contains("可撑过") { return Color(red: 48 / 255, green: 209 / 255, blue: 88 / 255) }
+        if text.contains("耗尽") || text.contains("紧张") { return Color(red: 231 / 255, green: 76 / 255, blue: 60 / 255) }
+        return .secondary
+    }
+
+    func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            content()
+        }
+        .padding(FlyoutLayout.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: FlyoutLayout.cardRadius, style: .continuous))
     }
 
     func labeled(_ title: String, _ value: String) -> some View {
         HStack {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Spacer()
-            Text(value).font(.caption)
+            Text(value).font(.caption.monospacedDigit()).fontWeight(.medium)
+        }
+    }
+
+    func meterRow(_ title: String, _ percent: Double, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.1f%%", percent)).font(.caption.monospacedDigit())
+            }
+            bar(percent / 100, color: color)
         }
     }
 
@@ -118,10 +192,28 @@ struct FlyoutView: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.secondary.opacity(0.2))
-                Capsule().fill(color).frame(width: max(4, geo.size.width * min(1, max(0, fraction))))
+                Capsule()
+                    .fill(color)
+                    .frame(width: geo.size.width * min(1, max(0, fraction)))
             }
         }
-        .frame(height: 5)
+        .frame(height: FlyoutLayout.barHeight)
+    }
+
+    func toolButton(_ title: String, _ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                Text(title)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.08), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(title)
     }
 
     var sparkline: some View {
@@ -129,10 +221,66 @@ struct FlyoutView: View {
         return Group {
             if values.count >= 2 {
                 Sparkline(values: values)
-                    .frame(height: 36)
-                    .padding(.top, 4)
+                    .frame(height: FlyoutLayout.sparkHeight)
+                    .padding(.top, 2)
             }
         }
+    }
+}
+
+enum RemainingTone {
+    static func color(remaining: Double?, error: Bool, unlimited: Bool = false) -> Color {
+        if error { return Color(nsColor: .systemGray) }
+        if unlimited { return Color(red: 48 / 255, green: 209 / 255, blue: 88 / 255) }
+        guard let remaining else { return Color(nsColor: .systemGray) }
+        if remaining < 20 { return Color(red: 231 / 255, green: 76 / 255, blue: 60 / 255) }
+        if remaining < 50 { return Color(red: 241 / 255, green: 196 / 255, blue: 15 / 255) }
+        return Color(red: 46 / 255, green: 204 / 255, blue: 113 / 255)
+    }
+}
+
+struct RemainingGauge<Pill: View>: View {
+    var remaining: Double?
+    var error: Bool
+    var unlimited: Bool
+    var color: Color
+    @ViewBuilder var pill: () -> Pill
+
+    var progress: CGFloat {
+        if error { return 0 }
+        if unlimited { return 1 }
+        return CGFloat(min(1, max(0, (remaining ?? 0) / 100)))
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.12), lineWidth: FlyoutLayout.ringLine)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(color, style: StrokeStyle(lineWidth: FlyoutLayout.ringLine, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 0.35), value: progress)
+            VStack(spacing: 4) {
+                Text("剩余").font(.caption).foregroundStyle(.secondary)
+                if unlimited {
+                    Text("不限量").font(.system(size: 22, weight: .bold, design: .rounded))
+                } else if let remaining, !error {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(String(format: "%.1f", remaining))
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                        Text("%").font(.headline).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(error ? "—" : "…")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                pill()
+            }
+        }
+        .frame(width: FlyoutLayout.ringSize, height: FlyoutLayout.ringSize)
     }
 }
 
@@ -142,14 +290,34 @@ struct Sparkline: View {
         GeometryReader { geo in
             let minV = min(values.min() ?? 0, 0)
             let maxV = max(values.max() ?? 100, minV + 1)
-            Path { p in
-                for (i, v) in values.enumerated() {
-                    let x = geo.size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                    let y = geo.size.height * (1 - CGFloat((v - minV) / (maxV - minV)))
-                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
-                }
+            let pts: [CGPoint] = values.enumerated().map { i, v in
+                CGPoint(
+                    x: geo.size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1)),
+                    y: geo.size.height * (1 - CGFloat((v - minV) / (maxV - minV)))
+                )
             }
-            .stroke(Color.accentColor, lineWidth: 1.5)
+            ZStack {
+                Path { p in
+                    guard let first = pts.first, let last = pts.last else { return }
+                    p.move(to: CGPoint(x: first.x, y: geo.size.height))
+                    for pt in pts { p.addLine(to: pt) }
+                    p.addLine(to: CGPoint(x: last.x, y: geo.size.height))
+                    p.closeSubpath()
+                }
+                .fill(
+                    LinearGradient(
+                        colors: [Color.accentColor.opacity(0.32), Color.accentColor.opacity(0.02)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                Path { p in
+                    for (i, pt) in pts.enumerated() {
+                        if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+                    }
+                }
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+            }
         }
     }
 }
@@ -177,7 +345,7 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
         store.flyoutVisible = true
         if window == nil {
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 456, height: 236),
+                contentRect: NSRect(origin: .zero, size: FlyoutLayout.size),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
@@ -192,7 +360,7 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window = panel
         }
-        window?.contentView = NSHostingView(rootView: FlyoutView(store: store).clipShape(RoundedRectangle(cornerRadius: 14)))
+        window?.contentView = hostedView(store: store)
         position(statusButton: statusButton)
         window?.makeKeyAndOrderFront(nil)
         installMonitor()
@@ -200,7 +368,13 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
 
     func update(store: AppStore) {
         guard window?.isVisible == true else { return }
-        window?.contentView = NSHostingView(rootView: FlyoutView(store: store).clipShape(RoundedRectangle(cornerRadius: 14)))
+        window?.contentView = hostedView(store: store)
+    }
+
+    func hostedView(store: AppStore) -> NSView {
+        let root = FlyoutView(store: store)
+            .clipShape(RoundedRectangle(cornerRadius: FlyoutLayout.cornerRadius, style: .continuous))
+        return NSHostingView(rootView: root)
     }
 
     func close() {
@@ -213,7 +387,7 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
 
     func position(statusButton: NSStatusBarButton?) {
         guard let window else { return }
-        let size = NSSize(width: 456, height: 236)
+        let size = FlyoutLayout.size
         var icon = NSRect(x: 0, y: 0, width: 22, height: 22)
         if let button = statusButton, let win = button.window {
             icon = win.convertToScreen(button.convert(button.bounds, to: nil))
