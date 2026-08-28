@@ -31,6 +31,11 @@ struct FlyoutView: View {
         .padding(FlyoutLayout.padding)
         .frame(width: FlyoutLayout.width, height: FlyoutLayout.height)
         .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: FlyoutLayout.cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: FlyoutLayout.cornerRadius, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+        )
     }
 
     var remaining: Double? { store.usage?.remainingPercent }
@@ -47,16 +52,18 @@ struct FlyoutView: View {
             ) {
                 pill
             }
-            if let remaining, !isError {
+            if store.usage != nil, !isError {
                 Text(planCaption)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(2)
             } else {
                 Text(store.errorMessage ?? "等待刷新…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(3)
                     .frame(maxWidth: FlyoutLayout.leftWidth, alignment: .center)
             }
             Button(UsageParser.dashboardLinkLabel(store.usage)) { store.openDashboard() }
@@ -70,9 +77,7 @@ struct FlyoutView: View {
 
     var planCaption: String {
         guard let usage = store.usage else { return "" }
-        var text = StatusText.formatPlanCaption(usage.membershipType, accountLabel: store.config.activeAccount?.displayLabel)
-        if usage.isUnlimited { text += " · 不限量" }
-        return text
+        return StatusText.formatPlanCaption(usage.membershipType, accountLabel: store.config.activeAccount?.displayLabel)
     }
 
     var gaugeColor: Color { RemainingTone.color(remaining: remaining, error: isError, unlimited: isUnlimited) }
@@ -107,22 +112,20 @@ struct FlyoutView: View {
                         }
                     }
                 }
-                if hasMeta(usage) {
-                    card {
-                        HStack(spacing: 12) {
-                            if let tokens = usage.totalTokens, tokens > 0 {
-                                Text("Token  \(UsageParser.formatTokenCount(Double(tokens)))")
-                            }
-                            if let end = usage.billingCycleEnd {
-                                Text("重置  \(StatusText.formatResetDate(end))")
-                            }
+                card {
+                    HStack(spacing: 12) {
+                        if let tokens = usage.totalTokens, tokens > 0 {
+                            Text("Token  \(UsageParser.formatTokenCount(Double(tokens)))")
                         }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        Text(StatusText.formatEstimateCaption(usage))
-                            .font(.caption)
-                            .foregroundStyle(estimateColor(usage))
+                        if let end = usage.billingCycleEnd {
+                            Text("重置  \(StatusText.formatResetDate(end))")
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Text(StatusText.formatEstimateCaption(usage))
+                        .font(.caption)
+                        .foregroundStyle(estimateColor(usage))
                 }
                 sparkline
             } else if let updated = store.updatedAt {
@@ -142,14 +145,9 @@ struct FlyoutView: View {
                     store.openSettings()
                 }
             }
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    func hasMeta(_ usage: UsageSnapshot) -> Bool {
-        if let tokens = usage.totalTokens, tokens > 0 { return true }
-        if usage.billingCycleEnd != nil { return true }
-        return true
     }
 
     func estimateColor(_ usage: UsageSnapshot) -> Color {
