@@ -343,6 +343,7 @@ public enum ConfigStore {
         return normalize(obj)
     }
 
+    @discardableResult
     static func saveUnlocked(_ cfg: AppConfig, to dir: URL) -> Bool {
         if cfg.loadError && cfg.accounts.isEmpty { return true }
         var normalized = cfg

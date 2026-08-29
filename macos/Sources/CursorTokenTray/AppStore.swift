@@ -132,7 +132,11 @@ final class AppStore: ObservableObject {
                 }
                 let minutes = max(1, self.config.refreshIntervalMinutes)
                 let seconds = UInt64(max(60, minutes * 60))
-                let waiter = Task { try? await Task.sleep(nanoseconds: seconds * 1_000_000_000) }
+                let waiter = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                    } catch {}
+                }
                 self.waitTask = waiter
                 await waiter.value
                 self.waitTask = nil

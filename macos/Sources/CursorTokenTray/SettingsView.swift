@@ -122,7 +122,7 @@ struct SettingsRootView: View {
     var footer: some View {
         HStack {
             Text(store.saveError.isEmpty ? hint : store.saveError)
-                .foregroundStyle(store.saveError.isEmpty ? .secondary : .red)
+                .foregroundStyle(store.saveError.isEmpty ? Color.secondary : Color.red)
                 .font(.caption)
             Spacer()
             Button("取消") { SettingsWindowController.shared.close() }
