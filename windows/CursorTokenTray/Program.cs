@@ -110,7 +110,9 @@ sealed class TrayContext : ApplicationContext
     FlyoutForm? _flyout;
     ReportForm? _report;
     CancellationTokenSource _cts = new();
+    CancellationTokenSource? _delayCts;
     bool _refreshNow;
+    (int? Remaining, bool Error, string Mode)? _iconKey;
 
     public TrayContext()
     {
@@ -156,7 +158,7 @@ sealed class TrayContext : ApplicationContext
     {
         _menu.Items.Clear();
         _menu.Items.Add("显示状态", null, (_, _) => ShowFlyout(Cursor.Position));
-        _menu.Items.Add("立即刷新", null, (_, _) => { _refreshNow = true; });
+        _menu.Items.Add("立即刷新", null, (_, _) => RequestRefresh());
         _dashboardItem.Text = UsageParser.DashboardMenuLabel(_usage);
         _dashboardItem.Click -= DashboardClick;
         _dashboardItem.Click += DashboardClick;
@@ -201,6 +203,12 @@ sealed class TrayContext : ApplicationContext
         }
     }
 
+    void RequestRefresh()
+    {
+        _refreshNow = true;
+        try { _delayCts?.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
     async Task LoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -208,13 +216,23 @@ sealed class TrayContext : ApplicationContext
             try { await RefreshAll(); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { CrashLog.Write(ex); }
-            var minutes = Math.Max(1, _config.RefreshIntervalMinutes);
-            var until = DateTime.UtcNow.AddSeconds(Math.Max(60, minutes * 60));
-            while (DateTime.UtcNow < until && !ct.IsCancellationRequested)
+            if (ct.IsCancellationRequested) break;
+            if (_refreshNow)
             {
-                if (_refreshNow) { _refreshNow = false; break; }
-                await Task.Delay(250, ct).ContinueWith(_ => { }, CancellationToken.None);
+                _refreshNow = false;
+                continue;
             }
+            var minutes = Math.Max(1, _config.RefreshIntervalMinutes);
+            var delay = TimeSpan.FromSeconds(Math.Max(60, minutes * 60));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _delayCts = linked;
+            try { await Task.Delay(delay, linked.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+            finally
+            {
+                if (ReferenceEquals(_delayCts, linked)) _delayCts = null;
+            }
+            _refreshNow = false;
         }
     }
 
@@ -232,30 +250,8 @@ sealed class TrayContext : ApplicationContext
             return;
         }
         var activeId = _config.ActiveAccountId;
-        var outcomes = new List<RefreshOutcome>();
-        foreach (var acc in targets.OrderBy(a => a.Id == activeId ? 0 : 1))
-        {
-            var stamp = DateTime.Now.ToString("HH:mm:ss");
-            if (acc.TokenDecryptFailed || string.IsNullOrWhiteSpace(acc.Token))
-            {
-                outcomes.Add(new RefreshOutcome(acc.Id, null, TokenProtector.DecryptFailedMessage, false, stamp));
-                continue;
-            }
-            try
-            {
-                var snap = await _client.FetchUsageSummary(acc.Token, 20);
-                outcomes.Add(new RefreshOutcome(acc.Id, snap, null, false, stamp));
-                UsageHistory.Append(snap.RemainingPercent, snap.AutoPercentUsed, snap.ApiPercentUsed, accountId: acc.Id);
-            }
-            catch (CursorApiException err)
-            {
-                outcomes.Add(new RefreshOutcome(acc.Id, null, err.Message, err.IsAuthError, stamp));
-            }
-            catch (Exception ex)
-            {
-                outcomes.Add(new RefreshOutcome(acc.Id, null, "刷新失败: " + ex.Message, false, stamp));
-            }
-        }
+        var ordered = targets.OrderBy(a => a.Id == activeId ? 0 : 1).ToList();
+        var outcomes = (await Task.WhenAll(ordered.Select(FetchOne))).ToList();
 
         var notices = new List<(string Title, string Body, bool Warn)>();
         AppConfig cfg;
@@ -309,6 +305,29 @@ sealed class TrayContext : ApplicationContext
         });
     }
 
+    async Task<RefreshOutcome> FetchOne((string Id, string Token, bool TokenDecryptFailed) acc)
+    {
+        var stamp = DateTime.Now.ToString("HH:mm:ss");
+        if (acc.TokenDecryptFailed)
+            return new RefreshOutcome(acc.Id, null, TokenProtector.DecryptFailedMessage, false, stamp);
+        if (string.IsNullOrWhiteSpace(acc.Token))
+            return new RefreshOutcome(acc.Id, null, "未配置 Token，请打开设置粘贴", false, stamp);
+        try
+        {
+            var snap = await _client.FetchUsageSummary(acc.Token, 20);
+            UsageHistory.Append(snap.RemainingPercent, snap.AutoPercentUsed, snap.ApiPercentUsed, accountId: acc.Id);
+            return new RefreshOutcome(acc.Id, snap, null, false, stamp);
+        }
+        catch (CursorApiException err)
+        {
+            return new RefreshOutcome(acc.Id, null, err.Message, err.IsAuthError, stamp);
+        }
+        catch (Exception ex)
+        {
+            return new RefreshOutcome(acc.Id, null, "刷新失败: " + ex.Message, false, stamp);
+        }
+    }
+
     void UpdateUi()
     {
         OnUi(() =>
@@ -322,9 +341,16 @@ sealed class TrayContext : ApplicationContext
     {
         var remaining = _error is not null && !_error.StartsWith("未配置") ? (double?)null : _usage?.RemainingPercent;
         var error = _error is not null && !_error.StartsWith("未配置");
-        var old = _icon.Icon;
-        _icon.Icon = IconRenderer.Make(remaining, error, _config.TrayDisplayMode);
-        old?.Dispose();
+        var mode = _config.TrayDisplayMode;
+        var bucket = remaining is null ? (int?)null : (int)Math.Round(remaining.Value);
+        var iconKey = (bucket, error, mode);
+        if (_iconKey != iconKey)
+        {
+            _iconKey = iconKey;
+            var old = _icon.Icon;
+            _icon.Icon = IconRenderer.Make(remaining, error, mode);
+            old?.Dispose();
+        }
         var label = _config.ActiveAccount?.DisplayLabel ?? "";
         var tip = error ? (_error ?? "异常")
             : remaining is { } r ? (string.IsNullOrEmpty(label) ? $"{r:0}%" : $"{label} · {r:0}%")
@@ -333,7 +359,11 @@ sealed class TrayContext : ApplicationContext
         _icon.Text = tip;
         _dashboardItem.Text = UsageParser.DashboardMenuLabel(_usage);
         if (!_menu.Visible) RefreshAccountMenu();
-        _flyout?.Render(_usage, _error, _updated, _config);
+        if (_flyout is { Visible: true, IsDisposed: false })
+        {
+            var hist = UsageHistory.LoadRecent(7, _config.ActiveAccount?.Id);
+            _flyout.Render(_usage, _error, _updated, _config, hist.Select(p => p.Remaining).ToList(), UsageHistory.DailyAvgBurn(hist));
+        }
     }
 
     void ShowFlyout(Point? anchor = null)
@@ -348,17 +378,21 @@ sealed class TrayContext : ApplicationContext
                     {
                         try { _icon.ShowBalloonTip(1, " ", " ", ToolTipIcon.None); } catch { }
                     },
-                    () => { _refreshNow = true; },
+                    RequestRefresh,
                     OpenDashboard,
-                    () => OpenSettings(true, true),
+                    () => OpenSettings(_error is not null, false),
                     () =>
                     {
-                        var text = StatusText.FormatSummary(_usage, _error, _updated, _config.ActiveAccount?.DisplayLabel);
-                        Clipboard.SetText(text);
+                        try
+                        {
+                            var text = StatusText.FormatSummary(_usage, _error, _updated, _config.ActiveAccount?.DisplayLabel);
+                            Clipboard.SetText(text);
+                        }
+                        catch { }
                     },
                     OpenReport);
-                var hist = UsageHistory.LoadRecent(7, _config.ActiveAccount?.Id).Select(p => p.Remaining).ToList();
-                _flyout.Render(_usage, _error, _updated, _config, hist);
+                var hist = UsageHistory.LoadRecent(7, _config.ActiveAccount?.Id);
+                _flyout.Render(_usage, _error, _updated, _config, hist.Select(p => p.Remaining).ToList(), UsageHistory.DailyAvgBurn(hist));
                 _flyout.PopupNear(anchor ?? Cursor.Position);
             }
             catch (Exception ex) { CrashLog.Write(ex); }
@@ -415,6 +449,7 @@ sealed class TrayContext : ApplicationContext
                 {
                     return await SessionImporter.ImportAndValidate(_client, SessionImporter.DefaultPreferBrowsers(), SessionImporter.OnlyBrowsers(prefer), _config.ExistingTokenVariants());
                 }, startImport);
+                _settings.FormClosed += (_, _) => _settings = null;
                 _settings.Show();
                 if (focusToken) _settings.FocusToken();
             }
@@ -432,13 +467,15 @@ sealed class TrayContext : ApplicationContext
             OnUi(() => _icon.ShowBalloonTip(4000, "保存失败", "无法写入配置（文件忙碌或加密失败），请稍后再试。", ToolTipIcon.Warning));
         }
         if (prevAuto != cfg.AutostartEnabled) Autostart.Apply(cfg.AutostartEnabled);
-        if (refresh) _refreshNow = true;
+        if (refresh) RequestRefresh();
         UpdateUi();
     }
 
     void Exit()
     {
         _cts.Cancel();
+        try { _delayCts?.Cancel(); } catch (ObjectDisposedException) { }
+        _delayCts?.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
         _menu.Dispose();

@@ -62,8 +62,11 @@ struct SettingsRootView: View {
             DisclosureGroup("其他导入方式", isExpanded: $extraOpen) {
                 HStack {
                     Button("Safari 登录") { Task { await loginAndImport(prefer: "safari") } }
+                        .disabled(importing)
                     Button("Firefox 登录") { Task { await loginAndImport(prefer: "firefox") } }
+                        .disabled(importing)
                     Button("仅扫描 Cookie") { Task { await importFrom(prefer: nil) } }
+                        .disabled(importing)
                 }
             }
             if !FullDiskAccess.safariCookiesReadable() {
@@ -118,7 +121,9 @@ struct SettingsRootView: View {
 
     var footer: some View {
         HStack {
-            Text(hint).foregroundStyle(.secondary).font(.caption)
+            Text(store.saveError.isEmpty ? hint : store.saveError)
+                .foregroundStyle(store.saveError.isEmpty ? .secondary : .red)
+                .font(.caption)
             Spacer()
             Button("取消") { SettingsWindowController.shared.close() }
             Button("应用") { save(close: false) }
@@ -134,19 +139,31 @@ struct SettingsRootView: View {
     }
 
     var notifyBinding: Binding<Bool> {
-        Binding(get: { store.config.notifyEnabled }, set: { v in var c = store.config; c.notifyEnabled = v; store.config = c })
+        Binding(
+            get: { store.config.notifyEnabled },
+            set: { v in var c = store.config; c.notifyEnabled = v; store.applyConfig(c, refresh: false) }
+        )
     }
 
     var exhaustBinding: Binding<Bool> {
-        Binding(get: { store.config.notifyExhaustionRisk }, set: { v in var c = store.config; c.notifyExhaustionRisk = v; store.config = c })
+        Binding(
+            get: { store.config.notifyExhaustionRisk },
+            set: { v in var c = store.config; c.notifyExhaustionRisk = v; store.applyConfig(c, refresh: false) }
+        )
     }
 
     var modeBinding: Binding<String> {
-        Binding(get: { store.config.trayDisplayMode }, set: { v in var c = store.config; c.trayDisplayMode = v; store.config = c })
+        Binding(
+            get: { store.config.trayDisplayMode },
+            set: { v in var c = store.config; c.trayDisplayMode = v; store.applyConfig(c, refresh: false) }
+        )
     }
 
     var autostartBinding: Binding<Bool> {
-        Binding(get: { store.config.autostartEnabled }, set: { v in var c = store.config; c.autostartEnabled = v; store.config = c })
+        Binding(
+            get: { store.config.autostartEnabled },
+            set: { v in var c = store.config; c.autostartEnabled = v; store.applyConfig(c, refresh: false) }
+        )
     }
 
     func addToken() {
@@ -234,6 +251,9 @@ struct SettingsRootView: View {
     }
 
     func loginAndImport(prefer: String) async {
+        if importing { return }
+        importing = true
+        defer { importing = false }
         let apps = SessionImporter.preferredMacAppNames(prefer)
         if let app = apps.first {
             let url = URL(string: "https://cursor.com/dashboard")!

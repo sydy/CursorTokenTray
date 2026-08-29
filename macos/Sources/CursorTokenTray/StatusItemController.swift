@@ -59,22 +59,22 @@ final class StatusItemController: NSObject {
             errorMessage: store.errorMessage,
             remainingPercent: store.usage?.remainingPercent
         )
-        let image = MenubarIcon.image(remaining: remaining, error: error, mode: mode)
-        button.title = ""
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleNone
-        button.image = image
+        let key = "\(mode)|\(remaining.map { String(Int($0.rounded())) } ?? "nil")|\(error)"
+        if key != lastIconLog {
+            let image = MenubarIcon.image(remaining: remaining, error: error, mode: mode)
+            button.title = ""
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleNone
+            button.image = image
+            lastIconLog = key
+            AppLog.log("menubar icon applied \(key) pt=\(MenubarIcon.pointSize())")
+        }
         if let usage = store.usage {
             let label = store.config.activeAccount?.displayLabel ?? ""
             let pct = String(format: "%.0f%%", usage.remainingPercent)
             button.toolTip = label.isEmpty ? pct : "\(label) · \(pct)"
         } else {
             button.toolTip = "Token"
-        }
-        let key = "\(mode)|\(remaining.map { String(Int($0.rounded())) } ?? "nil")|\(error)"
-        if key != lastIconLog {
-            lastIconLog = key
-            AppLog.log("menubar icon applied \(key) pt=\(MenubarIcon.pointSize())")
         }
         if store.flyoutVisible {
             FlyoutWindowController.shared.update(store: store)

@@ -94,7 +94,7 @@ sealed class UsageChartPanel : TableLayoutPanel
     public void Bind(IReadOnlyList<UsageEvent> events)
     {
         _events = events as List<UsageEvent> ?? events.ToList();
-        var models = UsageEvents.BuildChart(_events, false).Models;
+        var models = UsageEvents.ChartModels(_events);
         _hidden.RemoveWhere(n => !models.Contains(n));
         Rebuild();
     }

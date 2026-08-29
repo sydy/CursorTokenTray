@@ -451,6 +451,23 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertTrue(recent.contains { abs($0.remaining - 20) < 0.01 })
     }
 
+    func testDailyAvgBurn() {
+        let start = Date().timeIntervalSince1970 - 4 * 86_400
+        let points = [
+            HistoryPoint(ts: start, remaining: 80),
+            HistoryPoint(ts: start + 2 * 86_400, remaining: 60),
+        ]
+        XCTAssertEqual(UsageHistory.dailyAvgBurn(points: points), 10.0)
+        XCTAssertNil(UsageHistory.dailyAvgBurn(points: [HistoryPoint(ts: start, remaining: 80)]))
+        XCTAssertEqual(
+            UsageHistory.dailyAvgBurn(points: [
+                HistoryPoint(ts: start, remaining: 50),
+                HistoryPoint(ts: start + 86_400, remaining: 60),
+            ]),
+            0.0
+        )
+    }
+
     func testTokenProtectorRoundtrip() throws {
         let token = "user_01PROT%3A%3Aaaa.bbb.ccc"
         XCTAssertEqual(TokenProtector.unprotect(try TokenProtector.protect(token)), token)

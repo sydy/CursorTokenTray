@@ -218,6 +218,7 @@ public enum UsageEvents {
     ) -> UsageChartSeries {
         let models = chartModels(events)
         let visible = models.filter { !hiddenModels.contains($0) }
+        let visibleSet = Set(visible)
         if events.isEmpty {
             return UsageChartSeries(hourly: hourly, caption: chartCaption(hourly: hourly, keys: []), models: models, buckets: [])
         }
@@ -246,7 +247,7 @@ public enum UsageEvents {
             let key = keyOf(ev.timestampMs)
             if key < keys[0] || key > keys[keys.count - 1] { continue }
             let name = ev.model.isEmpty ? "—" : ev.model
-            if !visible.contains(name) { continue }
+            if !visibleSet.contains(name) { continue }
             let cellKey = key + "\u{1f}" + name
             let cell = cells[cellKey] ?? (0, 0, 0)
             cells[cellKey] = (cell.0 + ev.tokens, cell.1 + costCents(ev), cell.2 + 1)
@@ -590,6 +591,10 @@ public enum UsageEvents {
                 uid = counts.max(by: { $0.value < $1.value })?.key ?? 0
             }
             if uid > 0 { userId = uid }
+            else if rawTeam > 0 {
+                // Team feed without userId is the whole org; do not pollute the personal cache.
+                return UsageEventsSyncResult(events: existing, fetched: 0, totalAvailable: existing.count, truncated: false)
+            }
         }
         let fetched = try await client.fetchUsageEvents(
             sessionToken: token,

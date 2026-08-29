@@ -142,7 +142,7 @@ struct FlyoutView: View {
                 }
                 toolButton("设置", "gearshape") {
                     FlyoutWindowController.shared.close()
-                    store.openSettings()
+                    store.openSettings(focusToken: store.errorMessage != nil)
                 }
             }
             .padding(.top, 4)
@@ -215,12 +215,17 @@ struct FlyoutView: View {
     }
 
     var sparkline: some View {
-        let values = store.historyValues()
-        return Group {
+        let values = store.historyRemaining
+        return VStack(alignment: .leading, spacing: 4) {
             if values.count >= 2 {
                 Sparkline(values: values)
                     .frame(height: FlyoutLayout.sparkHeight)
                     .padding(.top, 2)
+            }
+            if values.count >= 2, let burn = store.dailyAvgBurn {
+                Text(burn <= 0 ? "近 7 日无明显消耗" : String(format: "近 7 日日均消耗 %.1f%%", burn))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -286,8 +291,20 @@ struct Sparkline: View {
     var values: [Double]
     var body: some View {
         GeometryReader { geo in
-            let minV = min(values.min() ?? 0, 0)
-            let maxV = max(values.max() ?? 100, minV + 1)
+            let minRaw = values.min() ?? 0
+            let maxRaw = values.max() ?? 100
+            let padded: (Double, Double) = {
+                var minV = minRaw
+                var maxV = maxRaw
+                if maxV - minV < 1 {
+                    minV -= 0.5
+                    maxV += 0.5
+                }
+                let pad = (maxV - minV) * 0.08
+                return (minV - pad, maxV + pad)
+            }()
+            let minV = padded.0
+            let maxV = padded.1
             let pts: [CGPoint] = values.enumerated().map { i, v in
                 CGPoint(
                     x: geo.size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1)),
@@ -325,6 +342,7 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
     static let shared = FlyoutWindowController()
     private var window: NSPanel?
     private var monitor: Any?
+    private var keyMonitor: Any?
     private weak var store: AppStore?
 
     func toggle(store: AppStore, statusButton: NSStatusBarButton?) {
@@ -365,8 +383,7 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
     }
 
     func update(store: AppStore) {
-        guard window?.isVisible == true else { return }
-        window?.contentView = hostedView(store: store)
+        self.store = store
     }
 
     func hostedView(store: AppStore) -> NSView {
@@ -423,10 +440,19 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
                 }
             }
         }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 {
+                Task { @MainActor in self?.close() }
+                return nil
+            }
+            return event
+        }
     }
 
     func removeMonitor() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
     }
 }

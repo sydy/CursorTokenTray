@@ -13,12 +13,16 @@ final class AppStore: ObservableObject {
     @Published var settingsVisible = false
     @Published var flyoutVisible = false
     @Published var importStatus = ""
+    @Published var saveError = ""
     @Published var focusToken = false
+    @Published var historyRemaining: [Double] = []
+    @Published var dailyAvgBurn: Double?
 
     let client = CursorClient()
     var settingsDirectory: URL?
 
     private var refreshTask: Task<Void, Never>?
+    private var waitTask: Task<Void, Never>?
     private var refreshNow = false
 
     init(directory: URL? = nil) {
@@ -32,6 +36,7 @@ final class AppStore: ObservableObject {
             UsageHistory.adoptLegacyHistory(accountId: acc.id, directory: settingsDirectory ?? AppPaths.configDirectory())
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        reloadHistory()
         loopRefresh()
         if config.sessionToken.isEmpty {
             Task { @MainActor in
@@ -44,11 +49,14 @@ final class AppStore: ObservableObject {
     func stop() {
         refreshTask?.cancel()
         refreshTask = nil
+        waitTask?.cancel()
+        waitTask = nil
         InstanceLock.release(directory: settingsDirectory)
     }
 
     func requestRefresh() {
         refreshNow = true
+        waitTask?.cancel()
     }
 
     func openDashboard() {
@@ -73,7 +81,12 @@ final class AppStore: ObservableObject {
         let prevActive = config.activeAccountId
         let prevAuto = config.autostartEnabled
         config = cfg
-        ConfigStore.save(cfg, to: settingsDirectory)
+        if !ConfigStore.save(cfg, to: settingsDirectory) {
+            saveError = "无法写入配置（文件忙碌或加密失败），请稍后再试。"
+            notify("保存失败", saveError)
+        } else {
+            saveError = ""
+        }
         if prevAuto != cfg.autostartEnabled {
             LoginItem.apply(cfg.autostartEnabled)
         }
@@ -89,15 +102,21 @@ final class AppStore: ObservableObject {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    func historyValues() -> [Double] {
+    func reloadHistory() {
         let aid = config.activeAccount?.id
-        return UsageHistory.loadRecent(days: 7, accountId: aid, directory: settingsDirectory).map(\.remaining)
+        let points = UsageHistory.loadRecent(days: 7, accountId: aid, directory: settingsDirectory)
+        historyRemaining = points.map(\.remaining)
+        dailyAvgBurn = UsageHistory.dailyAvgBurn(points: points)
     }
 
     func switchAccount(_ id: String) {
         var cfg = config
         guard cfg.setActiveAccount(id) else { return }
+        usage = nil
+        errorMessage = nil
+        updatedAt = nil
         applyConfig(cfg, refresh: true)
+        reloadHistory()
         flyoutVisible = false
         FlyoutWindowController.shared.close()
     }
@@ -106,64 +125,57 @@ final class AppStore: ObservableObject {
         refreshTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.refreshAll()
-                let minutes = max(1, self.config.refreshIntervalMinutes)
-                let deadline = Date().addingTimeInterval(Double(max(60, minutes * 60)))
-                while Date() < deadline, !Task.isCancelled {
-                    if self.refreshNow {
-                        self.refreshNow = false
-                        break
-                    }
-                    try? await Task.sleep(nanoseconds: 250_000_000)
+                if Task.isCancelled { break }
+                if self.refreshNow {
+                    self.refreshNow = false
+                    continue
                 }
+                let minutes = max(1, self.config.refreshIntervalMinutes)
+                let seconds = UInt64(max(60, minutes * 60))
+                let waiter = Task { try? await Task.sleep(nanoseconds: seconds * 1_000_000_000) }
+                self.waitTask = waiter
+                await waiter.value
+                self.waitTask = nil
+                self.refreshNow = false
             }
         }
     }
 
     func refreshAll() async {
-        let targets = config.accounts.map { (id: $0.id, token: $0.token, decryptFailed: $0.tokenDecryptFailed) }
+        let targets = config.accounts.map { RefreshTarget(id: $0.id, token: $0.token, decryptFailed: $0.tokenDecryptFailed) }
         if targets.isEmpty {
             usage = nil
             errorMessage = "未配置 Token，请打开设置粘贴"
             updatedAt = nil
+            historyRemaining = []
+            dailyAvgBurn = nil
             return
         }
         let activeId = config.activeAccountId
-        struct Outcome {
-            var id: String
-            var snap: UsageSnapshot?
-            var error: String?
-            var authError: Bool
-            var stamp: String
-        }
-        var outcomes: [Outcome] = []
         let ordered = targets.sorted { a, b in
             (a.id == activeId ? 0 : 1) < (b.id == activeId ? 0 : 1)
         }
-        for acc in ordered {
-            if Task.isCancelled { break }
-            let stamp: String = {
-                let f = DateFormatter()
-                f.dateFormat = "HH:mm:ss"
-                return f.string(from: Date())
-            }()
-            if acc.decryptFailed || acc.token.trimmingCharacters(in: .whitespaces).isEmpty {
-                outcomes.append(Outcome(id: acc.id, snap: nil, error: TokenProtector.decryptFailedMessage, authError: false, stamp: stamp))
-                continue
+        let client = self.client
+        var outcomes: [Outcome] = []
+        await withTaskGroup(of: Outcome.self) { group in
+            for acc in ordered {
+                group.addTask {
+                    await Self.fetchOne(client: client, account: acc)
+                }
             }
-            do {
-                let snap = try await client.fetchUsageSummary(sessionToken: acc.token, timeout: 20)
-                outcomes.append(Outcome(id: acc.id, snap: snap, error: nil, authError: false, stamp: stamp))
+            for await o in group {
+                outcomes.append(o)
+            }
+        }
+        for o in outcomes {
+            if let snap = o.snap {
                 UsageHistory.append(
                     remaining: snap.remainingPercent,
                     auto: snap.autoPercentUsed,
                     api: snap.apiPercentUsed,
-                    accountId: acc.id,
+                    accountId: o.id,
                     directory: settingsDirectory
                 )
-            } catch let err as CursorAPIError {
-                outcomes.append(Outcome(id: acc.id, snap: nil, error: err.message, authError: err.isAuthError, stamp: stamp))
-            } catch {
-                outcomes.append(Outcome(id: acc.id, snap: nil, error: "刷新失败: \(error.localizedDescription)", authError: false, stamp: stamp))
             }
         }
 
@@ -207,7 +219,44 @@ final class AppStore: ObservableObject {
             errorMessage = "未配置 Token，请打开设置粘贴"
             updatedAt = nil
         }
+        reloadHistory()
         for n in notices { notify(n.0, n.1) }
+    }
+
+    private struct RefreshTarget: Sendable {
+        var id: String
+        var token: String
+        var decryptFailed: Bool
+    }
+
+    private struct Outcome: @unchecked Sendable {
+        var id: String
+        var snap: UsageSnapshot?
+        var error: String?
+        var authError: Bool
+        var stamp: String
+    }
+
+    nonisolated private static func fetchOne(client: CursorClient, account: RefreshTarget) async -> Outcome {
+        let stamp: String = {
+            let f = DateFormatter()
+            f.dateFormat = "HH:mm:ss"
+            return f.string(from: Date())
+        }()
+        if account.decryptFailed {
+            return Outcome(id: account.id, snap: nil, error: TokenProtector.decryptFailedMessage, authError: false, stamp: stamp)
+        }
+        if account.token.trimmingCharacters(in: .whitespaces).isEmpty {
+            return Outcome(id: account.id, snap: nil, error: "未配置 Token，请打开设置粘贴", authError: false, stamp: stamp)
+        }
+        do {
+            let snap = try await client.fetchUsageSummary(sessionToken: account.token, timeout: 20)
+            return Outcome(id: account.id, snap: snap, error: nil, authError: false, stamp: stamp)
+        } catch let err as CursorAPIError {
+            return Outcome(id: account.id, snap: nil, error: err.message, authError: err.isAuthError, stamp: stamp)
+        } catch {
+            return Outcome(id: account.id, snap: nil, error: "刷新失败: \(error.localizedDescription)", authError: false, stamp: stamp)
+        }
     }
 
     func notify(_ title: String, _ body: String) {

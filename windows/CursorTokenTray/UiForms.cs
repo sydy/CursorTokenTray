@@ -9,6 +9,7 @@ sealed class FlyoutForm : Form
     readonly Label _plan = new() { AutoSize = true, ForeColor = Color.Silver };
     readonly Label _body = new() { AutoSize = true, ForeColor = Color.Gainsboro, MaximumSize = new Size(388, 0) };
     readonly SparklineBox _spark = new() { Width = 388, Height = 36 };
+    readonly Label _trend = new() { AutoSize = true, ForeColor = Color.Gray, Font = new Font("Segoe UI", 8f), Visible = false };
     readonly Action _dismissBalloon, _refresh, _web, _settings, _copy, _report;
     readonly System.Windows.Forms.Timer _activateTimer = new() { Interval = 220 };
     readonly System.Windows.Forms.Timer _holdTimer = new() { Interval = 180 };
@@ -90,6 +91,7 @@ sealed class FlyoutForm : Form
         root.Controls.Add(_plan);
         root.Controls.Add(_body);
         root.Controls.Add(_spark);
+        root.Controls.Add(_trend);
         root.Controls.Add(bar);
         Controls.Add(root);
 
@@ -139,14 +141,22 @@ sealed class FlyoutForm : Form
         return l;
     }
 
-    public void Render(UsageSnapshot? usage, string? error, string? updated, AppConfig cfg, List<double>? history = null)
+    public void Render(UsageSnapshot? usage, string? error, string? updated, AppConfig cfg, List<double>? history = null, double? dailyAvg = null)
     {
         if (usage is not null)
         {
-            _hero.Text = $"{usage.RemainingPercent:0.0}%";
-            _hero.ForeColor = usage.RemainingPercent > 50 ? Color.FromArgb(46, 204, 113)
-                : usage.RemainingPercent >= 20 ? Color.FromArgb(241, 196, 15)
-                : Color.FromArgb(231, 76, 60);
+            if (usage.IsUnlimited)
+            {
+                _hero.Text = "不限量";
+                _hero.ForeColor = Color.FromArgb(46, 204, 113);
+            }
+            else
+            {
+                _hero.Text = $"{usage.RemainingPercent:0.0}%";
+                _hero.ForeColor = usage.RemainingPercent > 50 ? Color.FromArgb(46, 204, 113)
+                    : usage.RemainingPercent >= 20 ? Color.FromArgb(241, 196, 15)
+                    : Color.FromArgb(231, 76, 60);
+            }
             _plan.Text = StatusText.FormatPlanCaption(usage.MembershipType, cfg.ActiveAccount?.DisplayLabel);
         }
         else
@@ -159,7 +169,15 @@ sealed class FlyoutForm : Form
         _body.Text = string.Join("\n", rows.Select(r => $"{r.Item1}  {r.Item2}"));
         foreach (Control c in Controls)
             UpdateDashboardLinks(c, usage);
-        if (history is not null) _spark.Values = history;
+        if (history is not null)
+        {
+            _spark.Values = history;
+            if (history.Count >= 2 && dailyAvg is { } burn)
+                _trend.Text = burn <= 0 ? "近 7 日无明显消耗" : $"近 7 日日均消耗 {burn:0.0}%";
+            else
+                _trend.Text = "";
+            _trend.Visible = _trend.Text.Length > 0;
+        }
     }
 
     static void UpdateDashboardLinks(Control parent, UsageSnapshot? usage)
@@ -235,6 +253,7 @@ sealed class SettingsForm : Form
     readonly Func<string?, Task<ImportResult>> _import;
 
     bool _importing;
+    bool _loading;
 
     public SettingsForm(AppConfig cfg, Action<AppConfig> onSaved, Func<string?, Task<ImportResult>> import, bool startImport)
     {
@@ -262,7 +281,8 @@ sealed class SettingsForm : Form
         var cur = ActionButton("从 Cursor 导入");
         var add = ActionButton("添加此 Token");
         var ff = ActionButton("Firefox 登录");
-        _root.Controls.Add(Flow(cur, add, ff));
+        var cookie = ActionButton("仅导入 Cookie");
+        _root.Controls.Add(Flow(cur, add, ff, cookie));
         _root.Controls.Add(_status);
         _root.Controls.Add(_hint);
         _root.Controls.Add(FieldRow("刷新间隔（分钟）", _interval));
@@ -283,7 +303,8 @@ sealed class SettingsForm : Form
         LoadFrom(_cfg);
         _accounts.SelectedIndexChanged += (_, _) =>
         {
-            if (_accounts.SelectedItem is AccountItem item) { _cfg.SetActiveAccount(item.Id); _onSaved(_cfg); }
+            if (_loading) return;
+            if (_accounts.SelectedItem is AccountItem item) { _cfg.SetActiveAccount(item.Id); NotifySaved(); }
         };
         rename.Click += (_, _) => RenameActive();
         del.Click += (_, _) =>
@@ -291,14 +312,15 @@ sealed class SettingsForm : Form
             if (_cfg.ActiveAccount is null) return;
             if (MessageBox.Show($"确定删除「{_cfg.ActiveAccount.DisplayLabel}」？", "删除账号", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
             _cfg.RemoveAccount(_cfg.ActiveAccount.Id);
-            LoadFrom(_cfg); _onSaved(_cfg);
+            LoadFrom(_cfg); NotifySaved();
         };
         add.Click += (_, _) => AddToken();
         cur.Click += async (_, _) => await DoImport("cursor-app");
+        cookie.Click += async (_, _) => await DoImport(null);
         ff.Click += async (_, _) =>
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://cursor.com/dashboard") { UseShellExecute = true }); } catch { }
-            await DoImport("firefox");
+            await DoImport("firefox", waitForLogin: true);
         };
         cancel.Click += (_, _) => Close();
         apply.Click += (_, _) => Persist(false);
@@ -377,7 +399,7 @@ sealed class SettingsForm : Form
         prompt.CancelButton = cancelR;
         if (prompt.ShowDialog(this) != DialogResult.OK) return;
         _cfg.RenameAccount(_cfg.ActiveAccount.Id, field.Text);
-        LoadFrom(_cfg); _onSaved(_cfg);
+        LoadFrom(_cfg); NotifySaved();
     }
 
     static Label Caption(string text) => new()
@@ -438,20 +460,25 @@ sealed class SettingsForm : Form
 
     void LoadFrom(AppConfig cfg)
     {
-        _cfg = cfg;
-        _accounts.Items.Clear();
-        foreach (var a in cfg.Accounts)
-            _accounts.Items.Add(new AccountItem(a.Id, a.Caption(a.Id == cfg.ActiveAccountId)));
-        var idx = cfg.Accounts.FindIndex(a => a.Id == cfg.ActiveAccountId);
-        if (idx >= 0) _accounts.SelectedIndex = idx;
-        _token.Text = "";
-        _token.PlaceholderText = "粘贴新 Token 以添加或更换账号（已保存的不会显示）";
-        _interval.Text = cfg.RefreshIntervalMinutes.ToString();
-        _thresholds.Text = string.Join(",", cfg.AlertThresholds);
-        _notify.Checked = cfg.NotifyEnabled;
-        _exhaust.Checked = cfg.NotifyExhaustionRisk;
-        _mode.SelectedIndex = cfg.TrayDisplayMode switch { "number" => 1, "dot" => 2, _ => 0 };
-        _auto.Checked = cfg.AutostartEnabled;
+        _loading = true;
+        try
+        {
+            _cfg = cfg;
+            _accounts.Items.Clear();
+            foreach (var a in cfg.Accounts)
+                _accounts.Items.Add(new AccountItem(a.Id, a.Caption(a.Id == cfg.ActiveAccountId)));
+            var idx = cfg.Accounts.FindIndex(a => a.Id == cfg.ActiveAccountId);
+            if (idx >= 0) _accounts.SelectedIndex = idx;
+            _token.Text = "";
+            _token.PlaceholderText = "粘贴新 Token 以添加或更换账号（已保存的不会显示）";
+            _interval.Text = cfg.RefreshIntervalMinutes.ToString();
+            _thresholds.Text = string.Join(",", cfg.AlertThresholds);
+            _notify.Checked = cfg.NotifyEnabled;
+            _exhaust.Checked = cfg.NotifyExhaustionRisk;
+            _mode.SelectedIndex = cfg.TrayDisplayMode switch { "number" => 1, "dot" => 2, _ => 0 };
+            _auto.Checked = cfg.AutostartEnabled;
+        }
+        finally { _loading = false; }
     }
 
     void AddToken()
@@ -465,25 +492,80 @@ sealed class SettingsForm : Form
         catch (Exception ex) { _status.Text = ex.Message; }
     }
 
-    async Task DoImport(string? prefer)
+    async Task DoImport(string? prefer, bool waitForLogin = false)
     {
         if (_importing) return;
         _importing = true;
-        _status.Text = "正在导入…";
+        _status.Text = waitForLogin ? "请在浏览器登录，正在等待 Cookie…" : "正在导入…";
         try
         {
-            var result = await _import(prefer);
-            _status.Text = result.Message;
-            if (!result.Ok) return;
-            _cfg.UpsertAccount(result.Token, membershipType: result.MembershipType, remaining: result.RemainingPercent, activate: true);
-            _token.Text = "";
-            Persist(false);
+            if (waitForLogin)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(180);
+                while (DateTime.UtcNow < deadline && !IsDisposed)
+                {
+                    var result = await _import(prefer);
+                    if (result.Ok)
+                    {
+                        ApplyImport(result);
+                        return;
+                    }
+                    await Task.Delay(2000);
+                }
+                if (!IsDisposed) _status.Text = "等待登录超时，请手动粘贴 Token。";
+                return;
+            }
+            var once = await _import(prefer);
+            _status.Text = once.Message;
+            if (!once.Ok) return;
+            ApplyImport(once);
         }
         finally { _importing = false; }
     }
 
+    void ApplyImport(ImportResult result)
+    {
+        _status.Text = result.Message;
+        _cfg.UpsertAccount(result.Token, membershipType: result.MembershipType, remaining: result.RemainingPercent, activate: true);
+        _token.Text = "";
+        Persist(false);
+    }
+
+    void CopyRuntimeFromDisk()
+    {
+        try
+        {
+            var live = ConfigStore.Load();
+            foreach (var acc in _cfg.Accounts)
+            {
+                var src = live.Accounts.FirstOrDefault(a => a.Id == acc.Id);
+                if (src is null) continue;
+                acc.AlertNotifiedLevels = [.. src.AlertNotifiedLevels];
+                acc.AuthErrorNotified = src.AuthErrorNotified;
+                acc.ExhaustionNotified = src.ExhaustionNotified;
+                acc.LowQuotaNotified = src.LowQuotaNotified;
+                acc.LastRemaining = src.LastRemaining;
+                acc.LastError = src.LastError;
+                acc.UpdatedAt = src.UpdatedAt;
+                if (string.IsNullOrEmpty(acc.MembershipType)) acc.MembershipType = src.MembershipType;
+            }
+            _cfg.LowQuotaNotified = live.LowQuotaNotified;
+            _cfg.AuthErrorNotified = live.AuthErrorNotified;
+            _cfg.AlertNotifiedLevels = [.. live.AlertNotifiedLevels];
+            _cfg.ExhaustionNotified = live.ExhaustionNotified;
+        }
+        catch { }
+    }
+
+    void NotifySaved()
+    {
+        CopyRuntimeFromDisk();
+        _onSaved(_cfg);
+    }
+
     void Persist(bool _)
     {
+        CopyRuntimeFromDisk();
         if (int.TryParse(_interval.Text, out var n) && n >= 1) _cfg.RefreshIntervalMinutes = n;
         _cfg.AlertThresholds = ConfigStore.ParseThresholds(_thresholds.Text);
         _cfg.NotifyEnabled = _notify.Checked;
@@ -528,8 +610,16 @@ sealed class SparklineBox : Control
         if (_values.Count < 2) return;
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        var minV = Math.Min(_values.Min(), 0);
-        var maxV = Math.Max(_values.Max(), minV + 1);
+        var minV = _values.Min();
+        var maxV = _values.Max();
+        if (maxV - minV < 1)
+        {
+            minV -= 0.5;
+            maxV += 0.5;
+        }
+        var pad = (maxV - minV) * 0.08;
+        minV -= pad;
+        maxV += pad;
         var pts = new PointF[_values.Count];
         for (var i = 0; i < _values.Count; i++)
         {

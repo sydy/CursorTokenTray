@@ -303,10 +303,11 @@ public enum ConfigStore {
         return withLock(dir) { loadUnlocked(from: dir) }
     }
 
-    public static func save(_ cfg: AppConfig, to directory: URL? = nil) {
+    @discardableResult
+    public static func save(_ cfg: AppConfig, to directory: URL? = nil) -> Bool {
         let dir = directory ?? AppPaths.configDirectory()
         AppPaths.ensureDirectory(dir)
-        withLock(dir) { saveUnlocked(cfg, to: dir) }
+        return withLock(dir) { saveUnlocked(cfg, to: dir) }
     }
 
     /// Reload from disk, apply `mutate`, and save under the same lock so a
@@ -342,18 +343,19 @@ public enum ConfigStore {
         return normalize(obj)
     }
 
-    static func saveUnlocked(_ cfg: AppConfig, to dir: URL) {
-        if cfg.loadError && cfg.accounts.isEmpty { return }
+    static func saveUnlocked(_ cfg: AppConfig, to dir: URL) -> Bool {
+        if cfg.loadError && cfg.accounts.isEmpty { return true }
         var normalized = cfg
         normalized.loadError = false
-        guard let first = try? toDictionary(normalized) else { return }
+        guard let first = try? toDictionary(normalized) else { return false }
         normalized = normalize(first)
         guard let dict = try? toDictionary(normalized),
               let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
-        else { return }
+        else { return false }
         let path = AppPaths.configPath(in: dir)
         atomicWrite(data, to: path)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        return true
     }
 
     @discardableResult
