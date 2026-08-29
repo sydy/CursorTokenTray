@@ -29,9 +29,9 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 
 - Windows 10/11 或 **macOS 13+**
 - 发布包为原生程序：Windows 是 .NET 8 单文件 exe，macOS 是 Swift 菜单栏 `.app`
-- 配置兼容旧版 Python 工具：仍读写同一份 `config.json`
+- 配置兼容旧版工具：仍读写同一份 `config.json`
 
-仓库里的 Python 源码仅作夹具对照与历史实现，**已弃用**。`快速启动.bat` / `快速启动.command` / `build.bat` / `build_mac.sh` 会提示并转向原生工程。日常请用下面的原生程序。
+仓库里的 Python 只保留解析对照（`cursor_api` / `usage_report` 等与 `fixtures/`），桌面壳已移除。日常请用下面的原生程序。`快速启动.bat` / `快速启动.command` / `build.bat` / `build_mac.sh` 会转向原生工程。
 
 配置里的 Session Token 在磁盘上加密保存：Windows 用当前用户 DPAPI，macOS 用钥匙串里的 AES-GCM 包装密钥。旧版明文 `config.json` 会在下次保存时自动升级；若回退到更早的原生版本，需要重新导入 Token。
 
@@ -154,10 +154,10 @@ macOS：`~/Library/Application Support/CursorTokenTray/config.json`
 ## 说明
 
 - 圆环颜色：剩余 &gt;50% 绿，20–50% 黄，&lt;20% 红
-- Windows：托盘、右键菜单、状态飞出层、设置都在**同一个 .NET 8 进程**里用 WinForms 完成（`NotifyIcon` + 系统菜单），不依赖 Python / Tk。若图标在溢出区，可拖到任务栏常显
+- Windows：托盘、右键菜单、状态飞出层、设置都在**同一个 .NET 8 进程**里用 WinForms 完成（`NotifyIcon` + 系统菜单）。若图标在溢出区，可拖到任务栏常显
 - 这是 **macOS 菜单栏**应用，不是 iOS；没有 Dock 图标，圆环在屏幕**最上方**菜单栏右侧（Wi‑Fi / 控制中心旁边），并带剩余百分比文字
 - macOS：若看不到图标，点菜单栏「•••」或「控制中心」展开隐藏项；也可在「活动监视器」结束 CursorTokenTray 后重新打开
 - 首次打开若立刻提示「已在后台运行」，多半是旧进程还在，先在活动监视器里退出再启动
-- macOS 点「设置…」会在**当前菜单栏进程**弹出系统原生设置窗（不用 Tk，也不另起子进程）。打开时 Dock 可能短暂出现图标，关掉后消失；菜单栏圆环应还在
+- macOS 点「设置…」会在**当前菜单栏进程**弹出系统原生设置窗，不另起子进程。打开时 Dock 可能短暂出现图标，关掉后消失；菜单栏圆环应还在
 - 升级后请先在「活动监视器」结束旧的 CursorTokenTray，再打开新下载的 `.app`，不要两个版本叠着跑
 - Token 过期后请重新导入或粘贴；飞出层会提示并可一键打开设置
