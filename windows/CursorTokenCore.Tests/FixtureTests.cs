@@ -406,6 +406,24 @@ public class FixtureTests
     }
 
     [Fact]
+    public void DailyAvgBurnFromPoints()
+    {
+        var start = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 4 * 86400;
+        var points = new List<HistoryPoint>
+        {
+            new(start, 80, null, null),
+            new(start + 2 * 86400, 60, null, null),
+        };
+        Assert.Equal(10.0, UsageHistory.DailyAvgBurn(points));
+        Assert.Null(UsageHistory.DailyAvgBurn(new List<HistoryPoint> { new(start, 80, null, null) }));
+        Assert.Equal(0.0, UsageHistory.DailyAvgBurn(new List<HistoryPoint>
+        {
+            new(start, 50, null, null),
+            new(start + 86400, 60, null, null),
+        }));
+    }
+
+    [Fact]
     public void TokenProtectorRoundtrip()
     {
         const string token = "user_01PROT%3A%3Aaaa.bbb.ccc";

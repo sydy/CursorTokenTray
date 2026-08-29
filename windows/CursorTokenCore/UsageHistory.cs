@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace CursorTokenCore;
@@ -7,6 +8,8 @@ public sealed record HistoryPoint(double Ts, double Remaining, double? Auto, dou
 public static class UsageHistory
 {
     public const int KeepDays = 90;
+    public static readonly TimeSpan PruneInterval = TimeSpan.FromHours(6);
+    static readonly ConcurrentDictionary<string, long> LastPruneMs = new(StringComparer.OrdinalIgnoreCase);
 
     public static void AdoptLegacy(string accountId, string directory)
     {
@@ -36,7 +39,16 @@ public static class UsageHistory
             ["account_id"] = aid,
         };
         File.AppendAllText(path, JsonSerializer.Serialize(obj) + "\n");
-        if (ts is null) Prune(path);
+        if (ts is null) MaybePrune(path);
+    }
+
+    static void MaybePrune(string path)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var intervalMs = (long)PruneInterval.TotalMilliseconds;
+        if (LastPruneMs.TryGetValue(path, out var prev) && now - prev < intervalMs) return;
+        LastPruneMs[path] = now;
+        Prune(path);
     }
 
     public static void Prune(string path, int keepDays = KeepDays)
@@ -83,6 +95,21 @@ public static class UsageHistory
             catch { }
         }
         return points.OrderBy(p => p.Ts).ToList();
+    }
+
+    public static double? DailyAvgBurn(int days = 7, string? accountId = null, string? directory = null) =>
+        DailyAvgBurn(LoadRecent(days, accountId, directory));
+
+    public static double? DailyAvgBurn(IReadOnlyList<HistoryPoint> points)
+    {
+        if (points.Count < 2) return null;
+        var first = points[0];
+        var last = points[^1];
+        var elapsed = (last.Ts - first.Ts) / 86400.0;
+        if (elapsed < 0.04) return null;
+        var delta = first.Remaining - last.Remaining;
+        if (delta <= 0) return 0;
+        return Numbers.Round2(delta / elapsed);
     }
 
     static double? Num(JsonElement r, string key) =>

@@ -153,6 +153,7 @@ public static class UsageEvents
         var models = ChartModels(selected);
         var hidden = hiddenModels is null ? new HashSet<string>(StringComparer.Ordinal) : new HashSet<string>(hiddenModels, StringComparer.Ordinal);
         var visible = models.Where(n => !hidden.Contains(n)).ToList();
+        var visibleSet = visible.ToHashSet(StringComparer.Ordinal);
         if (selected.Count == 0)
             return new UsageChartSeries { Hourly = hourly, Caption = ChartCaption(hourly, Array.Empty<string>()), Models = models, Buckets = [] };
 
@@ -184,7 +185,7 @@ public static class UsageEvents
             var key = keyOf(ev.TimestampMs);
             if (string.CompareOrdinal(key, keys[0]) < 0 || string.CompareOrdinal(key, keys[^1]) > 0) continue;
             var name = string.IsNullOrEmpty(ev.Model) ? "—" : ev.Model;
-            if (!visible.Contains(name)) continue;
+            if (!visibleSet.Contains(name)) continue;
             cells.TryGetValue((key, name), out var cell);
             cells[(key, name)] = (cell.tokens + ev.Tokens, cell.cents + CostCents(ev), cell.count + 1);
         }
@@ -224,7 +225,7 @@ public static class UsageEvents
         return shifted / MsDay * MsDay - MsBeijingOffset;
     }
 
-    static List<string> ChartModels(IList<UsageEvent> events)
+    public static List<string> ChartModels(IEnumerable<UsageEvent> events)
     {
         var totals = new Dictionary<string, (long tokens, double cents, int count)>(StringComparer.Ordinal);
         foreach (var ev in events)
@@ -518,6 +519,11 @@ public static class UsageEvents
                     .FirstOrDefault();
             }
             if (uid > 0) userId = uid;
+            else if (teamId > 0)
+            {
+                // Team feed without userId is the whole org; do not pollute the personal cache.
+                return new UsageEventsSyncResult(existing, 0, existing.Count, false);
+            }
         }
         var fetched = await client.FetchUsageEvents(token, startMs, cycleEnd, team, teamScope ? null : userId, stopAt, ct: ct);
         var merged = Merge(existing, fetched.events);

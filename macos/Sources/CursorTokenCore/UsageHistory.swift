@@ -16,6 +16,9 @@ public struct HistoryPoint: Equatable, Sendable {
 
 public enum UsageHistory {
     public static let keepDays = 90
+    public static let pruneInterval: TimeInterval = 6 * 3_600
+    static var lastPruneAt: [String: TimeInterval] = [:]
+    static let pruneLock = NSLock()
 
     public static func adoptLegacyHistory(accountId: String, directory: URL) {
         let dest = AppPaths.historyPath(accountId: accountId, in: directory)
@@ -77,7 +80,20 @@ public enum UsageHistory {
         } else {
             try? line.write(to: path, atomically: true, encoding: .utf8)
         }
-        if ts == nil { prune(path) }
+        if ts == nil { maybePrune(path) }
+    }
+
+    static func maybePrune(_ path: URL) {
+        let now = Date().timeIntervalSince1970
+        let key = path.standardizedFileURL.path
+        pruneLock.lock()
+        if let last = lastPruneAt[key], now - last < pruneInterval {
+            pruneLock.unlock()
+            return
+        }
+        lastPruneAt[key] = now
+        pruneLock.unlock()
+        prune(path)
     }
 
     public static func prune(_ path: URL, keepDays: Int = keepDays) {
@@ -114,7 +130,10 @@ public enum UsageHistory {
     }
 
     public static func dailyAvgBurn(days: Int = 7, accountId: String? = nil, directory: URL? = nil) -> Double? {
-        let points = loadRecent(days: days, accountId: accountId, directory: directory)
+        dailyAvgBurn(points: loadRecent(days: days, accountId: accountId, directory: directory))
+    }
+
+    public static func dailyAvgBurn(points: [HistoryPoint]) -> Double? {
         guard points.count >= 2 else { return nil }
         let first = points[0]
         let last = points[points.count - 1]

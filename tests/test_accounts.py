@@ -214,6 +214,24 @@ class HistoryPartitionTests(unittest.TestCase):
                 config.CONFIG_DIR = old_dir
                 config.CONFIG_PATH = old_path
 
+    def test_daily_avg_burn(self) -> None:
+        import config
+        import usage_history
+
+        old_dir = config.CONFIG_DIR
+        old_path = config.CONFIG_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            config.CONFIG_DIR = Path(tmp)
+            config.CONFIG_PATH = Path(tmp) / "config.json"
+            try:
+                start = 1_700_000_000.0
+                usage_history.append(remaining=80, account_id="user_burn", ts=start)
+                usage_history.append(remaining=60, account_id="user_burn", ts=start + 2 * 86400)
+                self.assertEqual(usage_history.daily_avg_burn(days=10_000, account_id="user_burn"), 10.0)
+            finally:
+                config.CONFIG_DIR = old_dir
+                config.CONFIG_PATH = old_path
+
 
 if __name__ == "__main__":
     unittest.main()

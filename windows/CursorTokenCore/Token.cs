@@ -30,7 +30,7 @@ public static class Token
         }
         if (value.Any(c => c > 255) || value.Contains('\uFFFD'))
             throw new CursorApiException(
-                "读到的 Token 已损坏（常见于 Chrome Cookie 解密失败，不是复制漏了）。请再点一次「导入」，钥匙串弹窗选「始终允许」；或改用 Safari / Firefox，或在开发者工具里完整复制 WorkosCursorSessionToken。",
+                "读到的 Token 已损坏（常见于 Chrome Cookie 解密失败，不是复制漏了）。请再点一次「导入」，或改用 Firefox，或在开发者工具里完整复制 WorkosCursorSessionToken。",
                 401);
         return value;
     }

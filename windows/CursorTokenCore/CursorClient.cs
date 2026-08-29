@@ -9,7 +9,12 @@ public sealed class CursorClient
     readonly HttpClient _http;
     public CursorClient(HttpClient? http = null)
     {
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
+        // Default HttpClientHandler stores Set-Cookie in a shared jar, which mixes
+        // sessions when one client refreshes multiple accounts.
+        _http = http ?? new HttpClient(new HttpClientHandler { UseCookies = false })
+        {
+            Timeout = TimeSpan.FromSeconds(90),
+        };
     }
 
     public async Task<UsageSnapshot> FetchUsageSummary(string sessionToken, double timeout = 30, CancellationToken ct = default)
@@ -273,7 +278,10 @@ public static class SessionImporter
         {
             ("firefox", Path.Combine(appdata, "Mozilla", "Firefox")),
             ("firefox-dev", Path.Combine(appdata, "Mozilla", "Firefox Developer Edition")),
+            ("firefox-nightly", Path.Combine(appdata, "Mozilla", "Firefox Nightly")),
             ("librewolf", Path.Combine(appdata, "librewolf")),
+            ("waterfox", Path.Combine(appdata, "Waterfox")),
+            ("zen", Path.Combine(appdata, "zen")),
         };
         foreach (var (name, support) in roots)
         {
