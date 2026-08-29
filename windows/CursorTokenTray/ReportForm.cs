@@ -52,6 +52,8 @@ sealed class ReportForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
         Text = "用量报表";
+        var icon = AppWindow.CreateIcon();
+        if (icon is not null) Icon = icon;
         MinimumSize = new Size(DesignMinWidth, DesignMinHeight);
         StartPosition = FormStartPosition.CenterScreen;
         Width = DesignWidth;

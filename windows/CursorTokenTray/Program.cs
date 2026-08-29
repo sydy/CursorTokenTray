@@ -32,6 +32,23 @@ static class Program
     }
 }
 
+static class AppWindow
+{
+    public static Icon? CreateIcon()
+    {
+        try
+        {
+            var path = Environment.ProcessPath ?? Application.ExecutablePath;
+            if (string.IsNullOrEmpty(path)) return null;
+            return Icon.ExtractAssociatedIcon(path);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
+
 sealed class HiddenSyncForm : Form
 {
     public HiddenSyncForm()
