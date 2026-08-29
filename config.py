@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
-import time
 from contextlib import contextmanager
 from copy import deepcopy
-from typing import Any, Callable, Iterator
+from pathlib import Path
+from typing import Any, Iterator
 
-from platform_util import app_config_dir
+
+def app_config_dir() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home())) / "CursorTokenTray"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "CursorTokenTray"
+    return Path.home() / ".config" / "CursorTokenTray"
+
 
 APP_NAME = "CursorToken剩余进度"
 CONFIG_DIR = app_config_dir()
@@ -44,7 +52,7 @@ def ensure_config_dir() -> None:
 
 @contextmanager
 def _interprocess_lock() -> Iterator[None]:
-    """托盘进程和设置进程可能同时写 config.json。"""
+    """避免并发写 config.json。"""
     ensure_config_dir()
     fp = (CONFIG_DIR / "config.lock").open("a+b")
     try:
@@ -86,39 +94,6 @@ def load_config() -> dict[str, Any]:
 def save_config(cfg: dict[str, Any]) -> None:
     with _THREAD_LOCK, _interprocess_lock():
         _save_unlocked(cfg)
-
-
-def config_mtime() -> float:
-    try:
-        return float(CONFIG_PATH.stat().st_mtime)
-    except OSError:
-        return 0.0
-
-
-def poll_config_changes(
-    is_running: Callable[[], bool],
-    *,
-    on_change: Callable[[dict[str, Any]], None] | None = None,
-    interval: float = 0.35,
-    last_mtime: float | None = None,
-) -> None:
-    """设置进程还在时轮询 config.json，点「应用」就能立刻刷新托盘。"""
-    last = config_mtime() if last_mtime is None else last_mtime
-    while is_running():
-        time.sleep(interval)
-        current = config_mtime()
-        if on_change is not None and current != last:
-            last = current
-            on_change(load_config())
-
-
-def update_config(**kwargs: Any) -> dict[str, Any]:
-    cfg = load_config()
-    for key, value in kwargs.items():
-        if key in DEFAULT_CONFIG:
-            cfg[key] = value
-    save_config(cfg)
-    return cfg
 
 
 def _load_unlocked() -> dict[str, Any]:

@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
-echo Python / PyInstaller 打包已弃用。请改用 .NET 8：
+echo 请用 .NET 8 打包 Windows 程序：
 echo   dotnet publish windows\CursorTokenTray\CursorTokenTray.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist
 echo.
 where dotnet >nul 2>&1

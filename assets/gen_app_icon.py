@@ -18,8 +18,8 @@ ASSETS = Path(__file__).resolve().parent
 SVG = ASSETS / "app_icon.svg"
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256, 512)
 # Win32 PE / Explorer: BMP DIB for small sizes, PNG only for 256 (Vista+).
-# All-PNG ICO looks fine in PyInstaller but the resource compiler leaves the
-# exe with a generic file icon.
+# All-PNG ICO can look fine at runtime, but the Windows resource compiler
+# then leaves the exe with a generic file icon.
 ICO_BMP_SIZES = (16, 24, 32, 48, 64)
 ICO_PNG_SIZES = (256,)
 ICO_SIZES = ICO_BMP_SIZES + ICO_PNG_SIZES

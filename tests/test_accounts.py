@@ -215,33 +215,5 @@ class HistoryPartitionTests(unittest.TestCase):
                 config.CONFIG_PATH = old_path
 
 
-class MultiAccountUiGuardTests(unittest.TestCase):
-    def test_native_menu_accepts_switch_key(self) -> None:
-        from win_menu import build_tray_menu_items
-
-        items = build_tray_menu_items(
-            {
-                "accounts": [{"id": "a1", "token": "tok", "name": "工作号", "last_remaining": 80}],
-                "active_account_id": "a1",
-            }
-        )
-        keys = [i.key for i in items]
-        self.assertIn("settings", keys)
-        self.assertIn("switch:a1", keys)
-        self.assertIn("quit", keys)
-
-    def test_tray_and_settings_have_account_switcher(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        tray = (root / "tray_app.py").read_text(encoding="utf-8")
-        self.assertIn("切换账号", tray)
-        self.assertIn("_switch_account", tray)
-        win_settings = (root / "win_settings.py").read_text(encoding="utf-8")
-        self.assertIn("添加此 Token", win_settings)
-        self.assertIn("upsert_account", win_settings)
-        mac_settings = (root / "macos_settings.py").read_text(encoding="utf-8")
-        self.assertIn("changeAccount_", mac_settings)
-        self.assertIn("添加此 Token", mac_settings)
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,6 @@ env/
 
 dist/
 build/
-*.spec.bak
 
 .idea/
 .vscode/
@@ -18,7 +17,6 @@ build/
 Thumbs.db
 desktop.ini
 .DS_Store
-_preview_out/
 
 macos/.build/
 macos/.swiftpm/

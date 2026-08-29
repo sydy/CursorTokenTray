@@ -292,21 +292,6 @@ class StatusTextEnterpriseTests(unittest.TestCase):
 
 
 class SourceGuardTests(unittest.TestCase):
-    def test_ui_opens_account_aware_dashboard(self) -> None:
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[1]
-        tray = (root / "tray_app.py").read_text(encoding="utf-8")
-        flyout = (root / "win_flyout.py").read_text(encoding="utf-8")
-        menu = (root / "win_menu.py").read_text(encoding="utf-8")
-        self.assertIn("dashboard_url_for", tray)
-        self.assertIn("dashboard_menu_label", tray)
-        self.assertIn("dashboard_menu_label", menu)
-        self.assertIn("dashboard_button_label", flyout)
-        self.assertNotIn("webbrowser.open(BILLING_URL)", tray)
-        self.assertNotIn("webbrowser.open(BILLING_URL)", flyout)
-        self.assertNotIn("webbrowser.open(BILLING_URL)", menu)
-
     def test_native_usage_report_entry_points(self) -> None:
         from pathlib import Path
 

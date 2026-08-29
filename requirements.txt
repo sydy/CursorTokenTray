@@ -1,6 +1,1 @@
-Pillow>=10.0.0
-pystray>=0.19.5; sys_platform == "darwin"
-cryptography>=42.0.0
 certifi>=2024.0.0
-pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
-pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
