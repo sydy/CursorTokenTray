@@ -239,6 +239,12 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertTrue(csv.hasPrefix("\u{FEFF}"))
         XCTAssertTrue(csv.drop(while: { $0 == "\u{FEFF}" }).hasPrefix(str(root["csv_header"])))
         XCTAssertEqual(UsageEvents.csvHeader, str(root["csv_header"]))
+        for row in root["times"] as! [[String: Any]] {
+            let ts = number64(row["timestamp_ms"]) ?? 0
+            XCTAssertEqual(UsageEvents.formatTime(ts), str(row["time"]))
+            XCTAssertEqual(UsageEvents.eventDate(ts), str(row["date"]))
+            XCTAssertEqual(UsageEvents.eventHour(ts), str(row["hour"]))
+        }
     }
 
     func testUsageChartCases() throws {

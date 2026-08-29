@@ -85,7 +85,7 @@ struct UsageChartView: View {
 
     func tooltip(_ bucket: ChartBucket) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(bucket.key)  UTC")
+            Text("\(bucket.key)  \(UsageEvents.tzLabel)")
             Text("合计 \(UsageParser.formatTokenCount(Double(bucket.tokens)))")
             ForEach(bucket.slices, id: \.model) { slice in
                 Text("\(UsageEvents.chartModelLabel(slice.model))  \(UsageParser.formatTokenCount(Double(slice.tokens)))")

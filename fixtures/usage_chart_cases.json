@@ -14,7 +14,7 @@
       "events": [],
       "expected": {
         "hourly": false,
-        "caption": "按日 Token（UTC）",
+        "caption": "按日 Token（北京时间）",
         "models": [],
         "buckets": []
       }
@@ -26,7 +26,7 @@
       "events": [],
       "expected": {
         "hourly": true,
-        "caption": "按小时 Token（UTC）",
+        "caption": "按小时 Token（北京时间）",
         "models": [],
         "buckets": []
       }
@@ -56,7 +56,7 @@
       ],
       "expected": {
         "hourly": false,
-        "caption": "按日 Token（UTC · 2026-08-28）",
+        "caption": "按日 Token（北京时间 · 2026-08-28）",
         "models": ["cursor-grok-4.6-high-fast"],
         "buckets": [
           {
@@ -136,7 +136,7 @@
       ],
       "expected": {
         "hourly": false,
-        "caption": "按日 Token（UTC · 2026-08-22 至 2026-08-24）",
+        "caption": "按日 Token（北京时间 · 2026-08-22 至 2026-08-24）",
         "models": ["cursor-grok-4.6-high-fast", "cursor-grok-4.6-high", "auto"],
         "buckets": [
           {
@@ -245,7 +245,7 @@
       ],
       "expected": {
         "hourly": false,
-        "caption": "按日 Token（UTC · 2026-08-22 至 2026-08-24）",
+        "caption": "按日 Token（北京时间 · 2026-08-22 至 2026-08-24）",
         "models": ["cursor-grok-4.6-high-fast", "cursor-grok-4.6-high", "auto"],
         "buckets": [
           {
@@ -348,12 +348,12 @@
       ],
       "expected": {
         "hourly": true,
-        "caption": "按小时 Token（UTC · 2026-08-28 01:00–03:00）",
+        "caption": "按小时 Token（北京时间 · 2026-08-28 09:00–11:00）",
         "models": ["cursor-grok-4.6-high-fast", "cursor-grok-4.6-high"],
         "buckets": [
           {
-            "key": "2026-08-28 01:00",
-            "label": "01",
+            "key": "2026-08-28 09:00",
+            "label": "09",
             "tokens": 100,
             "cents": 1.0,
             "count": 1,
@@ -367,16 +367,16 @@
             ]
           },
           {
-            "key": "2026-08-28 02:00",
-            "label": "02",
+            "key": "2026-08-28 10:00",
+            "label": "10",
             "tokens": 0,
             "cents": 0.0,
             "count": 0,
             "slices": []
           },
           {
-            "key": "2026-08-28 03:00",
-            "label": "03",
+            "key": "2026-08-28 11:00",
+            "label": "11",
             "tokens": 100,
             "cents": 2.5,
             "count": 2,
@@ -457,15 +457,15 @@
       ],
       "expected": {
         "hourly": true,
-        "caption": "按小时 Token（UTC · 2026-08-26 13:00 至 2026-08-28 12:00）",
+        "caption": "按小时 Token（北京时间 · 2026-08-26 21:00 至 2026-08-28 20:00）",
         "models": ["cursor-grok-4.6-high-fast", "cursor-grok-4.6-high"],
         "bucket_count": 48,
-        "first_key": "2026-08-26 13:00",
-        "last_key": "2026-08-28 12:00",
+        "first_key": "2026-08-26 21:00",
+        "last_key": "2026-08-28 20:00",
         "nonzero": [
           {
-            "key": "2026-08-27 12:00",
-            "label": "08-27 12",
+            "key": "2026-08-27 20:00",
+            "label": "08-27 20",
             "tokens": 300,
             "cents": 3.0,
             "count": 1,
@@ -479,8 +479,8 @@
             ]
           },
           {
-            "key": "2026-08-28 12:00",
-            "label": "08-28 12",
+            "key": "2026-08-28 20:00",
+            "label": "08-28 20",
             "tokens": 700,
             "cents": 7.0,
             "count": 1,
@@ -489,6 +489,84 @@
                 "model": "cursor-grok-4.6-high-fast",
                 "tokens": 700,
                 "cents": 7.0,
+                "count": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "daily_beijing_day_boundary",
+      "hourly": false,
+      "hidden_models": [],
+      "events": [
+        {
+          "id": "1",
+          "timestamp_ms": 1787932740000,
+          "model": "cursor-grok-4.6-high",
+          "kind": "included",
+          "user_email": "a@b.c",
+          "owning_user": "1",
+          "tokens": 100,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 1.0,
+          "total_cents": 1.0,
+          "is_headless": false,
+          "is_chargeable": false
+        },
+        {
+          "id": "2",
+          "timestamp_ms": 1787932800000,
+          "model": "cursor-grok-4.6-high-fast",
+          "kind": "included",
+          "user_email": "a@b.c",
+          "owning_user": "1",
+          "tokens": 200,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "charged_cents": 2.0,
+          "total_cents": 2.0,
+          "is_headless": false,
+          "is_chargeable": false
+        }
+      ],
+      "expected": {
+        "hourly": false,
+        "caption": "按日 Token（北京时间 · 2026-08-28 至 2026-08-29）",
+        "models": ["cursor-grok-4.6-high-fast", "cursor-grok-4.6-high"],
+        "buckets": [
+          {
+            "key": "2026-08-28",
+            "label": "08-28",
+            "tokens": 100,
+            "cents": 1.0,
+            "count": 1,
+            "slices": [
+              {
+                "model": "cursor-grok-4.6-high",
+                "tokens": 100,
+                "cents": 1.0,
+                "count": 1
+              }
+            ]
+          },
+          {
+            "key": "2026-08-29",
+            "label": "08-29",
+            "tokens": 200,
+            "cents": 2.0,
+            "count": 1,
+            "slices": [
+              {
+                "model": "cursor-grok-4.6-high-fast",
+                "tokens": 200,
+                "cents": 2.0,
                 "count": 1
               }
             ]

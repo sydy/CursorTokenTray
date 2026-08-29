@@ -213,6 +213,13 @@ public class FixtureTests
         Assert.StartsWith("\ufeff", csv);
         Assert.StartsWith(root.GetProperty("csv_header").GetString(), csv.TrimStart('\ufeff'));
         Assert.Equal(UsageEvents.CsvHeader, root.GetProperty("csv_header").GetString());
+        foreach (var row in root.GetProperty("times").EnumerateArray())
+        {
+            var ts = row.GetProperty("timestamp_ms").GetInt64();
+            Assert.Equal(row.GetProperty("time").GetString(), UsageEvents.FormatTime(ts));
+            Assert.Equal(row.GetProperty("date").GetString(), UsageEvents.EventDate(ts));
+            Assert.Equal(row.GetProperty("hour").GetString(), UsageEvents.EventHour(ts));
+        }
     }
 
     [Fact]

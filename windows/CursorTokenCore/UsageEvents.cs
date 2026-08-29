@@ -68,10 +68,13 @@ public static class UsageEvents
     public const string KindFree = "free";
     public const string KindOnDemand = "on_demand";
     public const string KindOther = "other";
-    public const string CsvHeader = "日期(UTC),用户,类型,模型,Token,费用,云端Agent";
+    public const string TzLabel = "北京时间";
+    public const string CsvHeader = "日期(北京时间),用户,类型,模型,Token,费用,云端Agent";
     public const int HourlyChartWindowHours = 48;
     const long MsHour = 3_600_000;
     const long MsDay = 86_400_000;
+    const long MsBeijingOffset = 8 * MsHour;
+    static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(8);
 
     static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -118,19 +121,19 @@ public static class UsageEvents
 
     public static string FormatTime(long timestampMs)
     {
-        var dt = DateTimeOffset.FromUnixTimeMilliseconds(Math.Max(0, timestampMs)).UtcDateTime;
+        var dt = DateTimeOffset.FromUnixTimeMilliseconds(Math.Max(0, timestampMs)).ToOffset(DisplayOffset);
         return dt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
     }
 
-    public static string DateUtc(long timestampMs)
+    public static string EventDate(long timestampMs)
     {
-        var dt = DateTimeOffset.FromUnixTimeMilliseconds(Math.Max(0, timestampMs)).UtcDateTime;
+        var dt = DateTimeOffset.FromUnixTimeMilliseconds(Math.Max(0, timestampMs)).ToOffset(DisplayOffset);
         return dt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
-    public static string HourUtc(long timestampMs)
+    public static string EventHour(long timestampMs)
     {
-        var dt = DateTimeOffset.FromUnixTimeMilliseconds(FloorHourMs(timestampMs)).UtcDateTime;
+        var dt = DateTimeOffset.FromUnixTimeMilliseconds(FloorHourMs(timestampMs)).ToOffset(DisplayOffset);
         return dt.ToString("yyyy-MM-dd HH:00", CultureInfo.InvariantCulture);
     }
 
@@ -163,16 +166,16 @@ public static class UsageEvents
             var span = (lastMs - firstMs) / MsHour + 1;
             if (span > window) firstMs = lastMs - (window - 1) * MsHour;
             var count = (int)((lastMs - firstMs) / MsHour + 1);
-            keys = Enumerable.Range(0, count).Select(i => HourUtc(firstMs + i * MsHour)).ToList();
-            keyOf = HourUtc;
+            keys = Enumerable.Range(0, count).Select(i => EventHour(firstMs + i * MsHour)).ToList();
+            keyOf = EventHour;
         }
         else
         {
             var lastMs = FloorDayMs(selected.Max(ev => ev.TimestampMs));
             var firstMs = FloorDayMs(selected.Min(ev => ev.TimestampMs));
             var count = (int)((lastMs - firstMs) / MsDay + 1);
-            keys = Enumerable.Range(0, count).Select(i => DateUtc(firstMs + i * MsDay)).ToList();
-            keyOf = DateUtc;
+            keys = Enumerable.Range(0, count).Select(i => EventDate(firstMs + i * MsDay)).ToList();
+            keyOf = EventDate;
         }
 
         var cells = new Dictionary<(string key, string model), (long tokens, double cents, int count)>();
@@ -215,7 +218,11 @@ public static class UsageEvents
     }
 
     static long FloorHourMs(long timestampMs) => Math.Max(0, timestampMs) / MsHour * MsHour;
-    static long FloorDayMs(long timestampMs) => Math.Max(0, timestampMs) / MsDay * MsDay;
+    static long FloorDayMs(long timestampMs)
+    {
+        var shifted = Math.Max(0, timestampMs) + MsBeijingOffset;
+        return shifted / MsDay * MsDay - MsBeijingOffset;
+    }
 
     static List<string> ChartModels(IList<UsageEvent> events)
     {
@@ -244,18 +251,14 @@ public static class UsageEvents
 
     static string ChartCaption(bool hourly, IReadOnlyList<string> keys)
     {
-        if (hourly)
-        {
-            if (keys.Count == 0) return "按小时 Token（UTC）";
-            var first = keys[0];
-            var last = keys[^1];
-            if (first == last) return $"按小时 Token（UTC · {first}）";
-            if (first[..10] == last[..10]) return $"按小时 Token（UTC · {first[..10]} {first[11..]}–{last[11..]}）";
-            return $"按小时 Token（UTC · {first} 至 {last}）";
-        }
-        if (keys.Count == 0) return "按日 Token（UTC）";
-        if (keys[0] == keys[^1]) return $"按日 Token（UTC · {keys[0]}）";
-        return $"按日 Token（UTC · {keys[0]} 至 {keys[^1]}）";
+        var kind = hourly ? "按小时 Token" : "按日 Token";
+        if (keys.Count == 0) return $"{kind}（{TzLabel}）";
+        var first = keys[0];
+        var last = keys[^1];
+        if (first == last) return $"{kind}（{TzLabel} · {first}）";
+        if (hourly && first[..10] == last[..10])
+            return $"{kind}（{TzLabel} · {first[..10]} {first[11..]}–{last[11..]}）";
+        return $"{kind}（{TzLabel} · {first} 至 {last}）";
     }
 
     public static (List<UsageEvent> events, int totalCount) ParsePage(JsonBag payload)
@@ -368,7 +371,7 @@ public static class UsageEvents
             else if (ev.Kind == KindOnDemand) onDemand++;
             else other++;
             if (ev.IsHeadless) headless++;
-            var day = DateUtc(ev.TimestampMs);
+            var day = EventDate(ev.TimestampMs);
             dailyMap.TryGetValue(day, out var d);
             dailyMap[day] = (d.tokens + ev.Tokens, d.cents + cents, d.count + 1);
             var name = string.IsNullOrEmpty(ev.Model) ? "—" : ev.Model;

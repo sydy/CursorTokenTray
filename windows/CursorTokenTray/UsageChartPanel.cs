@@ -33,7 +33,7 @@ sealed class UsageChartPanel : TableLayoutPanel
     const int DesignHeaderH = 28;
     const int DesignLegendH = 28;
 
-    readonly Label _caption = new() { AutoSize = true, ForeColor = Color.DimGray, Text = "按日 Token（UTC）", Anchor = AnchorStyles.Left };
+    readonly Label _caption = new() { AutoSize = true, ForeColor = Color.DimGray, Text = "按日 Token（北京时间）", Anchor = AnchorStyles.Left };
     readonly Button _dayBtn = MakeToggle("按日");
     readonly Button _hourBtn = MakeToggle("按小时");
     readonly FlowLayoutPanel _legend = new()
@@ -378,7 +378,7 @@ sealed class UsageChartBox : Control
 
     void DrawTooltip(Graphics g, Font font, ChartBucket bucket, float barX)
     {
-        var lines = new List<string> { bucket.Key + "  UTC", "合计 " + UsageParser.FormatTokenCount(bucket.Tokens) };
+        var lines = new List<string> { bucket.Key + "  " + UsageEvents.TzLabel, "合计 " + UsageParser.FormatTokenCount(bucket.Tokens) };
         foreach (var slice in bucket.Slices)
             lines.Add($"{UsageEvents.ChartModelLabel(slice.Model)}  {UsageParser.FormatTokenCount(slice.Tokens)}");
         if (bucket.Cents > 0)
