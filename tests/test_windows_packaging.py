@@ -55,6 +55,8 @@ class DotnetPublishTests(unittest.TestCase):
         self.assertIn("<InvariantGlobalization>true</InvariantGlobalization>", csproj)
         self.assertIn("<PublishTrimmed>false</PublishTrimmed>", csproj)
         self.assertIn("<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>", csproj)
+        self.assertIn(r"<ApplicationIcon>..\..\assets\app_icon.ico</ApplicationIcon>", csproj)
+        self.assertNotIn("<ApplicationIcon></ApplicationIcon>", csproj)
         self.assertNotIn("_SuppressWinFormsTrimError", csproj)
         self.assertNotIn("<PublishTrimmed>true</PublishTrimmed>", csproj)
         workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
@@ -74,3 +76,38 @@ class DotnetPublishTests(unittest.TestCase):
         self.assertIn("按小时", chart)
         self.assertIn("BuildChart", chart)
         self.assertIn("HourlyChartWindowHours", (ROOT / "windows" / "CursorTokenCore" / "UsageEvents.cs").read_text(encoding="utf-8"))
+
+    def test_windows_exe_icon_is_win32_compatible(self) -> None:
+        ico = ROOT / "assets" / "app_icon.ico"
+        self.assertTrue(ico.is_file())
+        kinds = _ico_entry_kinds(ico)
+        self.assertIn((16, "BMP"), kinds)
+        self.assertIn((32, "BMP"), kinds)
+        self.assertIn((48, "BMP"), kinds)
+        self.assertIn((256, "PNG"), kinds)
+        self.assertNotIn((16, "PNG"), kinds)
+        generator = (ROOT / "assets" / "gen_app_icon.py").read_text(encoding="utf-8")
+        self.assertIn("ICO_BMP_SIZES", generator)
+        self.assertIn("_bmp_dib", generator)
+        ui = (ROOT / "windows" / "CursorTokenTray" / "UiForms.cs").read_text(encoding="utf-8")
+        report = (ROOT / "windows" / "CursorTokenTray" / "ReportForm.cs").read_text(encoding="utf-8")
+        program = (ROOT / "windows" / "CursorTokenTray" / "Program.cs").read_text(encoding="utf-8")
+        self.assertIn("AppWindow.CreateIcon", ui)
+        self.assertIn("AppWindow.CreateIcon", report)
+        self.assertIn("ExtractAssociatedIcon", program)
+
+
+def _ico_entry_kinds(path: Path) -> list[tuple[int, str]]:
+    raw = path.read_bytes()
+    count = int.from_bytes(raw[4:6], "little")
+    kinds: list[tuple[int, str]] = []
+    png = b"\x89PNG\r\n\x1a\n"
+    for i in range(count):
+        base = 6 + i * 16
+        width = raw[base]
+        size = int.from_bytes(raw[base + 8 : base + 12], "little")
+        offset = int.from_bytes(raw[base + 12 : base + 16], "little")
+        blob = raw[offset : offset + size]
+        kind = "PNG" if blob[:8] == png else "BMP"
+        kinds.append((256 if width == 0 else width, kind))
+    return kinds

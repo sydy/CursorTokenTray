@@ -244,6 +244,8 @@ sealed class SettingsForm : Form
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScroll = true;
         Text = "Cursor Token 设置";
+        var icon = AppWindow.CreateIcon();
+        if (icon is not null) Icon = icon;
         ClientSize = new Size(540, 640);
         MinimumSize = new Size(480, 360);
         FormBorderStyle = FormBorderStyle.FixedDialog;

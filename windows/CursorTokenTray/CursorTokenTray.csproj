@@ -5,7 +5,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>..\..\assets\app_icon.ico</ApplicationIcon>
     <AssemblyName>CursorTokenTray</AssemblyName>
     <RootNamespace>CursorTokenTray</RootNamespace>
     <Version>2.0.0</Version>
