@@ -132,10 +132,13 @@ public enum UsageEvents {
     public static let kindFree = "free"
     public static let kindOnDemand = "on_demand"
     public static let kindOther = "other"
-    public static let csvHeader = "日期(UTC),用户,类型,模型,Token,费用,云端Agent"
+    public static let tzLabel = "北京时间"
+    public static let csvHeader = "日期(北京时间),用户,类型,模型,Token,费用,云端Agent"
     public static let hourlyChartWindowHours = 48
     static let msHour: Int64 = 3_600_000
     static let msDay: Int64 = 86_400_000
+    static let msBeijingOffset: Int64 = 8 * msHour
+    static let displayTimeZone = TimeZone(secondsFromGMT: 8 * 3600)!
 
     public static func kindLabel(_ kind: String?) -> String {
         switch (kind ?? "").trimmingCharacters(in: .whitespaces).lowercased() {
@@ -176,25 +179,25 @@ public enum UsageEvents {
         let dt = Date(timeIntervalSince1970: Double(max(0, timestampMs)) / 1000.0)
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.timeZone = displayTimeZone
         f.dateFormat = "yyyy-MM-dd HH:mm"
         return f.string(from: dt)
     }
 
-    public static func dateUtc(_ timestampMs: Int64) -> String {
+    public static func eventDate(_ timestampMs: Int64) -> String {
         let dt = Date(timeIntervalSince1970: Double(max(0, timestampMs)) / 1000.0)
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.timeZone = displayTimeZone
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: dt)
     }
 
-    public static func hourUtc(_ timestampMs: Int64) -> String {
+    public static func eventHour(_ timestampMs: Int64) -> String {
         let dt = Date(timeIntervalSince1970: Double(floorHourMs(timestampMs)) / 1000.0)
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.timeZone = displayTimeZone
         f.dateFormat = "yyyy-MM-dd HH:'00'"
         return f.string(from: dt)
     }
@@ -228,14 +231,14 @@ public enum UsageEvents {
             let span = (lastMs - firstMs) / msHour + 1
             if span > window { firstMs = lastMs - (window - 1) * msHour }
             let count = Int((lastMs - firstMs) / msHour + 1)
-            keys = (0..<count).map { hourUtc(firstMs + Int64($0) * msHour) }
-            keyOf = hourUtc
+            keys = (0..<count).map { eventHour(firstMs + Int64($0) * msHour) }
+            keyOf = eventHour
         } else {
             let lastMs = floorDayMs(events.map(\.timestampMs).max() ?? 0)
             let firstMs = floorDayMs(events.map(\.timestampMs).min() ?? 0)
             let count = Int((lastMs - firstMs) / msDay + 1)
-            keys = (0..<count).map { dateUtc(firstMs + Int64($0) * msDay) }
-            keyOf = dateUtc
+            keys = (0..<count).map { eventDate(firstMs + Int64($0) * msDay) }
+            keyOf = eventDate
         }
 
         var cells: [String: (Int, Double, Int)] = [:]
@@ -288,7 +291,8 @@ public enum UsageEvents {
     }
 
     static func floorDayMs(_ timestampMs: Int64) -> Int64 {
-        max(0, timestampMs) / msDay * msDay
+        let shifted = max(0, timestampMs) + msBeijingOffset
+        return shifted / msDay * msDay - msBeijingOffset
     }
 
     static func chartModels(_ events: [UsageEvent]) -> [String] {
@@ -328,18 +332,14 @@ public enum UsageEvents {
     }
 
     static func chartCaption(hourly: Bool, keys: [String]) -> String {
-        if hourly {
-            if keys.isEmpty { return "按小时 Token（UTC）" }
-            let first = keys[0], last = keys[keys.count - 1]
-            if first == last { return "按小时 Token（UTC · \(first)）" }
-            if first.prefix(10) == last.prefix(10) {
-                return "按小时 Token（UTC · \(first.prefix(10)) \(first.dropFirst(11))–\(last.dropFirst(11))）"
-            }
-            return "按小时 Token（UTC · \(first) 至 \(last)）"
+        let kind = hourly ? "按小时 Token" : "按日 Token"
+        if keys.isEmpty { return "\(kind)（\(tzLabel)）" }
+        let first = keys[0], last = keys[keys.count - 1]
+        if first == last { return "\(kind)（\(tzLabel) · \(first)）" }
+        if hourly && first.prefix(10) == last.prefix(10) {
+            return "\(kind)（\(tzLabel) · \(first.prefix(10)) \(first.dropFirst(11))–\(last.dropFirst(11))）"
         }
-        if keys.isEmpty { return "按日 Token（UTC）" }
-        if keys[0] == keys[keys.count - 1] { return "按日 Token（UTC · \(keys[0])）" }
-        return "按日 Token（UTC · \(keys[0]) 至 \(keys[keys.count - 1])）"
+        return "\(kind)（\(tzLabel) · \(first) 至 \(last)）"
     }
 
     public static func parsePage(_ payload: JSONValue) -> (events: [UsageEvent], totalCount: Int) {
@@ -450,7 +450,7 @@ public enum UsageEvents {
             default: other += 1
             }
             if ev.isHeadless { headless += 1 }
-            let day = dateUtc(ev.timestampMs)
+            let day = eventDate(ev.timestampMs)
             let d = dailyMap[day] ?? (0, 0, 0)
             dailyMap[day] = (d.0 + ev.tokens, d.1 + cents, d.2 + 1)
             let name = ev.model.isEmpty ? "—" : ev.model

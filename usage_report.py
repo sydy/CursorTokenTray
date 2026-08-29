@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from cursor_api import (
@@ -32,7 +32,9 @@ KIND_LABELS = {
     KIND_OTHER: "其他",
 }
 
-CSV_HEADER = "日期(UTC),用户,类型,模型,Token,费用,云端Agent"
+DISPLAY_TZ = timezone(timedelta(hours=8))
+TZ_LABEL = "北京时间"
+CSV_HEADER = f"日期({TZ_LABEL}),用户,类型,模型,Token,费用,云端Agent"
 
 
 @dataclass(frozen=True)
@@ -175,17 +177,17 @@ def format_event_cost(event: UsageEvent) -> str:
 
 
 def format_event_time(timestamp_ms: int) -> str:
-    dt = datetime.fromtimestamp(max(0, timestamp_ms) / 1000.0, tz=timezone.utc)
+    dt = datetime.fromtimestamp(max(0, timestamp_ms) / 1000.0, tz=DISPLAY_TZ)
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-def event_date_utc(timestamp_ms: int) -> str:
-    dt = datetime.fromtimestamp(max(0, timestamp_ms) / 1000.0, tz=timezone.utc)
+def event_date(timestamp_ms: int) -> str:
+    dt = datetime.fromtimestamp(max(0, timestamp_ms) / 1000.0, tz=DISPLAY_TZ)
     return dt.strftime("%Y-%m-%d")
 
 
-def event_hour_utc(timestamp_ms: int) -> str:
-    dt = datetime.fromtimestamp(_floor_hour_ms(timestamp_ms) / 1000.0, tz=timezone.utc)
+def event_hour(timestamp_ms: int) -> str:
+    dt = datetime.fromtimestamp(_floor_hour_ms(timestamp_ms) / 1000.0, tz=DISPLAY_TZ)
     return dt.strftime("%Y-%m-%d %H:00")
 
 
@@ -199,7 +201,8 @@ def _floor_hour_ms(timestamp_ms: int) -> int:
 
 
 def _floor_day_ms(timestamp_ms: int) -> int:
-    return max(0, timestamp_ms) // _MS_DAY * _MS_DAY
+    shifted = max(0, timestamp_ms) + 8 * _MS_HOUR
+    return (shifted // _MS_DAY * _MS_DAY) - 8 * _MS_HOUR
 
 
 def _chart_models(events: list[UsageEvent]) -> tuple[str, ...]:
@@ -227,21 +230,15 @@ def _bucket_label(key: str, hourly: bool, multi_day: bool) -> str:
 
 
 def _chart_caption(hourly: bool, keys: list[str]) -> str:
-    if hourly:
-        if not keys:
-            return "按小时 Token（UTC）"
-        first, last = keys[0], keys[-1]
-        if first == last:
-            return f"按小时 Token（UTC · {first}）"
-        if first[:10] == last[:10]:
-            return f"按小时 Token（UTC · {first[:10]} {first[11:]}–{last[11:]}）"
-        return f"按小时 Token（UTC · {first} 至 {last}）"
+    kind = "按小时 Token" if hourly else "按日 Token"
     if not keys:
-        return "按日 Token（UTC）"
+        return f"{kind}（{TZ_LABEL}）"
     first, last = keys[0], keys[-1]
     if first == last:
-        return f"按日 Token（UTC · {first}）"
-    return f"按日 Token（UTC · {first} 至 {last}）"
+        return f"{kind}（{TZ_LABEL} · {first}）"
+    if hourly and first[:10] == last[:10]:
+        return f"{kind}（{TZ_LABEL} · {first[:10]} {first[11:]}–{last[11:]}）"
+    return f"{kind}（{TZ_LABEL} · {first} 至 {last}）"
 
 
 def build_usage_chart(
@@ -265,18 +262,18 @@ def build_usage_chart(
         if span > window:
             first_ms = last_ms - (window - 1) * _MS_HOUR
         keys = [
-            event_hour_utc(first_ms + i * _MS_HOUR)
+            event_hour(first_ms + i * _MS_HOUR)
             for i in range((last_ms - first_ms) // _MS_HOUR + 1)
         ]
-        key_of = event_hour_utc
+        key_of = event_hour
     else:
         last_ms = _floor_day_ms(max(ev.timestamp_ms for ev in selected))
         first_ms = _floor_day_ms(min(ev.timestamp_ms for ev in selected))
         keys = [
-            event_date_utc(first_ms + i * _MS_DAY)
+            event_date(first_ms + i * _MS_DAY)
             for i in range((last_ms - first_ms) // _MS_DAY + 1)
         ]
-        key_of = event_date_utc
+        key_of = event_date
 
     cells: dict[tuple[str, str], list[int | float]] = {}
     for event in selected:
@@ -484,7 +481,7 @@ def build_usage_report(
             other += 1
         if event.is_headless:
             headless += 1
-        day = event_date_utc(event.timestamp_ms)
+        day = event_date(event.timestamp_ms)
         bucket = daily_map.setdefault(day, [0, 0.0, 0])
         bucket[0] = int(bucket[0]) + event.tokens
         bucket[1] = float(bucket[1]) + cents
@@ -535,7 +532,7 @@ def build_usage_report(
 def usage_events_to_csv(events: list[UsageEvent] | tuple[UsageEvent, ...]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["日期(UTC)", "用户", "类型", "模型", "Token", "费用", "云端Agent"])
+    writer.writerow(CSV_HEADER.split(","))
     for event in events:
         writer.writerow(
             [

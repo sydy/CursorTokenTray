@@ -93,7 +93,10 @@ class GoldenFixtureTests(unittest.TestCase):
             UsageReportFilter,
             build_usage_report,
             classify_usage_kind,
+            event_date,
+            event_hour,
             format_event_cost,
+            format_event_time,
             parse_filtered_usage_events,
             usage_event_from_dict,
             usage_events_to_csv,
@@ -173,6 +176,11 @@ class GoldenFixtureTests(unittest.TestCase):
         self.assertTrue(csv_text.startswith("\ufeff"))
         self.assertTrue(csv_text.lstrip("\ufeff").startswith(data["csv_header"]))
         self.assertEqual(CSV_HEADER, data["csv_header"])
+        for row in data["times"]:
+            ts = row["timestamp_ms"]
+            self.assertEqual(format_event_time(ts), row["time"])
+            self.assertEqual(event_date(ts), row["date"])
+            self.assertEqual(event_hour(ts), row["hour"])
 
     def test_usage_chart_fixtures_match_python(self) -> None:
         from usage_report import (

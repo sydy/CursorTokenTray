@@ -83,6 +83,8 @@ final class ReportStore: ObservableObject {
             }
             let stamp: String = {
                 let f = DateFormatter()
+                f.locale = Locale(identifier: "en_US_POSIX")
+                f.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
                 f.dateFormat = "HH:mm:ss"
                 return f.string(from: Date())
             }()
@@ -104,7 +106,7 @@ final class ReportStore: ObservableObject {
         panel.nameFieldStringValue = {
             let f = DateFormatter()
             f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = TimeZone(secondsFromGMT: 0)
+            f.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
             f.dateFormat = "yyyyMMdd"
             return "cursor-usage-\(f.string(from: Date())).csv"
         }()
@@ -219,7 +221,7 @@ struct ReportRootView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("明细").font(.caption).foregroundStyle(.secondary)
             Table(store.report.events) {
-                TableColumn("日期 (UTC)") { ev in Text(UsageEvents.formatTime(ev.timestampMs)) }
+                TableColumn("日期 (北京时间)") { ev in Text(UsageEvents.formatTime(ev.timestampMs)) }
                 TableColumn("用户") { ev in Text(ev.userEmail) }
                 TableColumn("类型") { ev in Text(UsageEvents.kindLabel(ev.kind)) }
                 TableColumn("模型") { ev in Text(ev.model) }
