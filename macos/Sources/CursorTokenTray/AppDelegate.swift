@@ -43,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        MenubarActivation.restoreAfterClosing()
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         store?.stop()
         InstanceLock.release()

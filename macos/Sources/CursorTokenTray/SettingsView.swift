@@ -317,12 +317,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private weak var store: AppStore?
 
-    var isOpen: Bool { window?.isVisible == true }
-
     func show(store: AppStore, focusToken: Bool, startImport: Bool) {
         self.store = store
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        MenubarActivation.promoteForWindow()
         AppDelegate.ensureStatusItemVisible()
         if window == nil {
             let win = NSWindow(
@@ -347,19 +344,22 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func close() {
-        window?.orderOut(nil)
-        if !ReportWindowController.shared.isOpen {
-            NSApp.setActivationPolicy(.accessory)
-        }
-        store?.settingsVisible = false
-        AppDelegate.ensureStatusItemVisible()
+        dismiss()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        dismiss()
+        return false
     }
 
     func windowWillClose(_ notification: Notification) {
-        if !ReportWindowController.shared.isOpen {
-            NSApp.setActivationPolicy(.accessory)
-        }
         store?.settingsVisible = false
-        AppDelegate.ensureStatusItemVisible()
+        MenubarActivation.restoreAfterClosing(notification.object as? NSWindow)
+    }
+
+    private func dismiss() {
+        window?.orderOut(nil)
+        store?.settingsVisible = false
+        MenubarActivation.restoreNow(excluding: window)
     }
 }
