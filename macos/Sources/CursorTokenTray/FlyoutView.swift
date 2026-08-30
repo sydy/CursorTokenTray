@@ -359,6 +359,9 @@ final class FlyoutWindowController: NSObject, NSWindowDelegate {
     func show(store: AppStore, statusButton: NSStatusBarButton?) {
         self.store = store
         store.flyoutVisible = true
+        if NSApp.isHidden {
+            NSApp.unhideWithoutActivation()
+        }
         if window == nil {
             let panel = NSPanel(
                 contentRect: NSRect(origin: .zero, size: FlyoutLayout.size),

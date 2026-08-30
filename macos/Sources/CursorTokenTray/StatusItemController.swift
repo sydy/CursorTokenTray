@@ -36,7 +36,7 @@ final class StatusItemController: NSObject {
     func ensureVisible() {
         item.isVisible = true
         item.length = NSStatusItem.squareLength
-        if item.button == nil {
+        if item.button == nil || item.button?.window == nil {
             recreateItem()
             return
         }
