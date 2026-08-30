@@ -23,7 +23,7 @@ enum MenubarActivation {
 
     /// `windowWillClose` fires while the window is still visible; wait a turn.
     static func restoreAfterClosing(_ closing: NSWindow? = nil) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             restoreNow(excluding: closing)
         }
     }
@@ -55,7 +55,8 @@ enum MenubarActivation {
         NSApp.unhideWithoutActivation()
         NSApp.deactivate()
         AppDelegate.ensureStatusItemVisible()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
             if NSApp.activationPolicy() != .accessory {
                 applyAccessory()
                 NSApp.deactivate()
@@ -69,7 +70,7 @@ enum MenubarActivation {
         let applied = NSApp.setActivationPolicy(.accessory)
         AppLog.log("activation policy -> accessory applied=\(applied)")
         if applied { return true }
-        DispatchQueue.main.async {
+        Task { @MainActor in
             let retry = NSApp.setActivationPolicy(.accessory)
             AppLog.log("activation policy accessory retry applied=\(retry)")
         }
