@@ -1,4 +1,3 @@
-using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using CursorTokenCore;
 
@@ -112,7 +111,7 @@ sealed class TrayContext : ApplicationContext
     CancellationTokenSource _cts = new();
     CancellationTokenSource? _delayCts;
     bool _refreshNow;
-    (int? Remaining, bool Error, string Mode)? _iconKey;
+    (int? Remaining, bool Error, string Mode, int Size)? _iconKey;
 
     public TrayContext()
     {
@@ -134,6 +133,11 @@ sealed class TrayContext : ApplicationContext
         _icon.MouseUp += (_, e) =>
         {
             if (e.Button == MouseButtons.Left) ShowFlyout(Cursor.Position);
+        };
+        _sync.DpiChanged += (_, _) =>
+        {
+            _iconKey = null;
+            UpdateUi();
         };
         _sync.BeginInvoke(() =>
         {
@@ -343,12 +347,13 @@ sealed class TrayContext : ApplicationContext
         var error = _error is not null && !_error.StartsWith("未配置");
         var mode = _config.TrayDisplayMode;
         var bucket = remaining is null ? (int?)null : (int)Math.Round(remaining.Value);
-        var iconKey = (bucket, error, mode);
+        var size = IconRenderer.PixelSize();
+        var iconKey = (bucket, error, mode, size);
         if (_iconKey != iconKey)
         {
             _iconKey = iconKey;
             var old = _icon.Icon;
-            _icon.Icon = IconRenderer.Make(remaining, error, mode);
+            _icon.Icon = IconRenderer.Make(remaining, error, mode, size);
             old?.Dispose();
         }
         var label = _config.ActiveAccount?.DisplayLabel ?? "";
@@ -520,61 +525,4 @@ static class Autostart
         }
         catch { }
     }
-}
-
-static class IconRenderer
-{
-    public static Icon Make(double? remaining, bool error, string mode, int size = 32)
-    {
-        var bmp = new Bitmap(size, size);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
-        var color = error ? Color.FromArgb(231, 76, 60)
-            : remaining is null ? Color.FromArgb(180, 180, 180)
-            : remaining > 50 ? Color.FromArgb(46, 204, 113)
-            : remaining >= 20 ? Color.FromArgb(241, 196, 15)
-            : Color.FromArgb(231, 76, 60);
-        using var brush = new SolidBrush(color);
-        if (mode == "dot")
-        {
-            g.FillEllipse(brush, size * 0.3f, size * 0.3f, size * 0.4f, size * 0.4f);
-        }
-        else if (mode == "number")
-        {
-            var label = error ? "!" : remaining is null ? "-" : remaining.Value.ToString("0");
-            using var font = new Font("Segoe UI Semibold", size * 0.42f, FontStyle.Bold, GraphicsUnit.Pixel);
-            var sz = g.MeasureString(label, font);
-            using var textBrush = new SolidBrush(color);
-            g.DrawString(label, font, textBrush, (size - sz.Width) / 2, (size - sz.Height) / 2);
-        }
-        else
-        {
-            using var track = new Pen(Color.FromArgb(72, 76, 84), size * 0.12f);
-            g.DrawEllipse(track, size * 0.12f, size * 0.12f, size * 0.76f, size * 0.76f);
-            if (!error && remaining is > 0)
-            {
-                using var pen = new Pen(color, size * 0.12f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-                g.DrawArc(pen, size * 0.12f, size * 0.12f, size * 0.76f, size * 0.76f, -90, (float)(-remaining.Value / 100 * 360));
-            }
-            else if (error)
-            {
-                using var pen = new Pen(color, size * 0.12f);
-                g.DrawEllipse(pen, size * 0.12f, size * 0.12f, size * 0.76f, size * 0.76f);
-            }
-            var label = error ? "!" : remaining is null ? "-" : remaining.Value.ToString("0");
-            using var font = new Font("Segoe UI Semibold", size * 0.32f, FontStyle.Bold, GraphicsUnit.Pixel);
-            var sz = g.MeasureString(label, font);
-            g.DrawString(label, font, Brushes.White, (size - sz.Width) / 2, (size - sz.Height) / 2);
-        }
-        var hicon = bmp.GetHicon();
-        var icon = Icon.FromHandle(hicon);
-        var clone = (Icon)icon.Clone();
-        DestroyIcon(hicon);
-        bmp.Dispose();
-        return clone;
-    }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    static extern bool DestroyIcon(IntPtr hIcon);
 }
