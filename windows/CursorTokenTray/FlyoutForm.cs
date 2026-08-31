@@ -289,7 +289,7 @@ sealed class FlyoutForm : Form
             {
                 var hasBar = usage.UsedCents is { } && usage.LimitCents is > 0;
                 var amountH = 16 * s + (hasBar ? 6 * s + barH : 0);
-                y = DrawCard(g, box.X, y, box.Width, pal, amountH, inner =>)
+                y = DrawCard(g, box.X, y, box.Width, pal, amountH, inner =>
                 {
                     var row = inner;
                     row.Height = 16 * s;
@@ -302,7 +302,7 @@ sealed class FlyoutForm : Form
             {
                 var rows = (usage.AutoPercentUsed is null ? 0 : 1) + (usage.ApiPercentUsed is null ? 0 : 1);
                 var meterH = rows * (18 * s + barH) + Math.Max(0, rows - 1) * 8 * s;
-                y = DrawCard(g, box.X, y, box.Width, pal, meterH, inner =>)
+                y = DrawCard(g, box.X, y, box.Width, pal, meterH, inner =>
                 {
                     if (usage.AutoPercentUsed is { } auto)
                     {
@@ -319,7 +319,7 @@ sealed class FlyoutForm : Form
             if (usage.BillingCycleEnd is { } end)
                 parts.Add("重置  " + StatusText.FormatResetDate(end));
             var infoH = 14 * s + (parts.Count > 0 ? 18 * s : 0);
-            y = DrawCard(g, box.X, y, box.Width, pal, infoH, inner =>)
+            y = DrawCard(g, box.X, y, box.Width, pal, infoH, inner =>
             {
                 if (parts.Count > 0)
                 {
