@@ -98,3 +98,69 @@ public static class UiLayout
             Math.Min(maxH, Math.Max(minH, ScalePx(designHeight, deviceDpi))));
     }
 }
+
+/// <summary>
+/// Flyout metrics shared with the macOS <c>FlyoutLayout</c> (design pixels at 96 DPI).
+/// </summary>
+public static class FlyoutLayout
+{
+    public const int Width = 500;
+    public const int Height = 300;
+    public const int CornerRadius = 16;
+    public const int Padding = 16;
+    public const int ColumnGap = 16;
+    public const int LeftWidth = 176;
+    public const int RingSize = 148;
+    public const int RingLine = 10;
+    public const int CardRadius = 10;
+    public const int CardPadding = 10;
+    public const int CardGap = 8;
+    public const int BarHeight = 5;
+    public const int SparkHeight = 36;
+}
+
+public static class RemainingTone
+{
+    public static (int R, int G, int B) Rgb(double? remaining, bool error, bool unlimited = false)
+    {
+        if (error) return (142, 142, 147);
+        if (unlimited) return (48, 209, 88);
+        if (remaining is null) return (142, 142, 147);
+        if (remaining < 20) return (231, 76, 60);
+        if (remaining < 50) return (241, 196, 15);
+        return (46, 204, 113);
+    }
+}
+
+public static class SparklineGeometry
+{
+    public static (double Min, double Max) Range(IReadOnlyList<double> values)
+    {
+        if (values.Count == 0) return (0, 100);
+        var minV = values.Min();
+        var maxV = values.Max();
+        if (maxV - minV < 1)
+        {
+            minV -= 0.5;
+            maxV += 0.5;
+        }
+        var pad = (maxV - minV) * 0.08;
+        return (minV - pad, maxV + pad);
+    }
+
+    public static (float X, float Y)[] Points(IReadOnlyList<double> values, float width, float height)
+    {
+        var (minV, maxV) = Range(values);
+        var span = maxV - minV;
+        if (span <= 0) span = 1;
+        var n = Math.Max(values.Count - 1, 1);
+        var pts = new (float X, float Y)[values.Count];
+        for (var i = 0; i < values.Count; i++)
+        {
+            pts[i] = (
+                width * i / n,
+                height * (1 - (float)((values[i] - minV) / span)));
+        }
+        return pts;
+    }
+}

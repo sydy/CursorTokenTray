@@ -319,3 +319,32 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("按小时", mac_chart)
         self.assertIn("buildChart", mac_report)
         self.assertNotIn("dailyChart", mac_report)
+
+    def test_flyout_layout_matches_macos(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        win_layout = (root / "windows" / "CursorTokenCore" / "UiLayout.cs").read_text(encoding="utf-8")
+        win_flyout = (root / "windows" / "CursorTokenTray" / "FlyoutForm.cs").read_text(encoding="utf-8")
+        mac_flyout = (root / "macos" / "Sources" / "CursorTokenTray" / "FlyoutView.swift").read_text(encoding="utf-8")
+        for snippet in (
+            "static let width: CGFloat = 500",
+            "static let height: CGFloat = 300",
+            "static let cornerRadius: CGFloat = 16",
+            "static let leftWidth: CGFloat = 176",
+            "static let ringSize: CGFloat = 148",
+        ):
+            self.assertIn(snippet, mac_flyout)
+        for snippet in (
+            "public const int Width = 500",
+            "public const int Height = 300",
+            "public const int CornerRadius = 16",
+            "public const int LeftWidth = 176",
+            "public const int RingSize = 148",
+        ):
+            self.assertIn(snippet, win_layout)
+        self.assertIn("DrawGauge", win_flyout)
+        self.assertIn("DrawCard", win_flyout)
+        self.assertIn("DashboardLinkLabel", win_flyout)
+        self.assertIn("toolButton", mac_flyout)
+        self.assertNotIn("_body.Text", win_flyout)

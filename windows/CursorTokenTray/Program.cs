@@ -442,6 +442,7 @@ sealed class TrayContext : ApplicationContext
         {
             try
             {
+                _flyout?.Hide();
                 if (_settings is { IsDisposed: false })
                 {
                     _settings.Show();
