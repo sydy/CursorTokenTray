@@ -603,6 +603,55 @@ public class FixtureTests
     }
 
     [Fact]
+    public void FlyoutLayoutMatchesMacosMetrics()
+    {
+        Assert.Equal(500, FlyoutLayout.Width);
+        Assert.Equal(300, FlyoutLayout.Height);
+        Assert.Equal(16, FlyoutLayout.CornerRadius);
+        Assert.Equal(16, FlyoutLayout.Padding);
+        Assert.Equal(16, FlyoutLayout.ColumnGap);
+        Assert.Equal(176, FlyoutLayout.LeftWidth);
+        Assert.Equal(148, FlyoutLayout.RingSize);
+        Assert.Equal(10, FlyoutLayout.RingLine);
+        Assert.Equal(10, FlyoutLayout.CardRadius);
+        Assert.Equal(10, FlyoutLayout.CardPadding);
+        Assert.Equal(8, FlyoutLayout.CardGap);
+        Assert.Equal(5, FlyoutLayout.BarHeight);
+        Assert.Equal(36, FlyoutLayout.SparkHeight);
+        Assert.True(FlyoutLayout.LeftWidth + FlyoutLayout.Padding * 2 + FlyoutLayout.ColumnGap < FlyoutLayout.Width);
+    }
+
+    [Theory]
+    [InlineData(null, true, false, 142, 142, 147)]
+    [InlineData(null, false, false, 142, 142, 147)]
+    [InlineData(80.0, false, true, 48, 209, 88)]
+    [InlineData(80.0, false, false, 46, 204, 113)]
+    [InlineData(50.0, false, false, 46, 204, 113)]
+    [InlineData(49.9, false, false, 241, 196, 15)]
+    [InlineData(20.0, false, false, 241, 196, 15)]
+    [InlineData(19.9, false, false, 231, 76, 60)]
+    [InlineData(5.0, true, false, 142, 142, 147)]
+    public void RemainingToneMatchesMacos(double? remaining, bool error, bool unlimited, int r, int g, int b)
+    {
+        Assert.Equal((r, g, b), RemainingTone.Rgb(remaining, error, unlimited));
+    }
+
+    [Fact]
+    public void SparklineGeometryPadsFlatSeriesAndMapsEndpoints()
+    {
+        var values = new[] { 50.0, 50.0, 50.0 };
+        var (minV, maxV) = SparklineGeometry.Range(values);
+        Assert.True(maxV - minV > 1);
+        var pts = SparklineGeometry.Points(new[] { 10.0, 90.0 }, 100, 40);
+        Assert.Equal(2, pts.Length);
+        Assert.Equal(0, pts[0].X, 3);
+        Assert.Equal(100, pts[1].X, 3);
+        Assert.True(pts[0].Y > pts[1].Y);
+        Assert.InRange(pts[0].Y, 0, 40);
+        Assert.InRange(pts[1].Y, 0, 40);
+    }
+
+    [Fact]
     public void CrashLogWritesExceptionAndIgnoresNull()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt-crash-" + Guid.NewGuid().ToString("N"));
