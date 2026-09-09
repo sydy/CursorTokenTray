@@ -36,6 +36,7 @@ final class AppStore: ObservableObject {
             UsageHistory.adoptLegacyHistory(accountId: acc.id, directory: settingsDirectory ?? AppPaths.configDirectory())
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        reconcileAccounts(refresh: false)
         reloadHistory()
         loopRefresh()
         if config.sessionToken.isEmpty {
@@ -87,10 +88,11 @@ final class AppStore: ObservableObject {
         } else {
             saveError = ""
         }
+        let synced = reconcileAccounts(refresh: false)
         if prevAuto != cfg.autostartEnabled {
             LoginItem.apply(cfg.autostartEnabled)
         }
-        if refresh || prevToken != cfg.sessionToken || prevActive != cfg.activeAccountId {
+        if refresh || prevToken != cfg.sessionToken || prevActive != cfg.activeAccountId || synced {
             requestRefresh()
         }
         objectWillChange.send()
@@ -145,7 +147,26 @@ final class AppStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    func reconcileAccounts(refresh: Bool) -> Bool {
+        guard config.syncEnabled else { return false }
+        var cfg = config
+        let status = AccountSync.reconcile(&cfg)
+        if status.ok || status.changed {
+            config = cfg
+            _ = ConfigStore.save(cfg, to: settingsDirectory)
+        } else {
+            config.syncLastError = status.message
+        }
+        if refresh && status.changed {
+            requestRefresh()
+        }
+        objectWillChange.send()
+        return status.changed
+    }
+
     func refreshAll() async {
+        reconcileAccounts(refresh: false)
         let targets = config.accounts.map { RefreshTarget(id: $0.id, token: $0.token, decryptFailed: $0.tokenDecryptFailed) }
         if targets.isEmpty {
             usage = nil

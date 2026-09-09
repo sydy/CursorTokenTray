@@ -66,6 +66,7 @@ public struct Account: Equatable, Sendable, Codable {
     public var lastRemaining: Double?
     public var lastError: String
     public var updatedAt: String
+    public var syncUpdatedAt: String
     public var alertNotifiedLevels: [Int]
     public var authErrorNotified: Bool
     public var exhaustionNotified: Bool
@@ -81,6 +82,7 @@ public struct Account: Equatable, Sendable, Codable {
         lastRemaining: Double? = nil,
         lastError: String = "",
         updatedAt: String = "",
+        syncUpdatedAt: String = "",
         alertNotifiedLevels: [Int] = [],
         authErrorNotified: Bool = false,
         exhaustionNotified: Bool = false,
@@ -95,6 +97,7 @@ public struct Account: Equatable, Sendable, Codable {
         self.lastRemaining = lastRemaining
         self.lastError = lastError
         self.updatedAt = updatedAt
+        self.syncUpdatedAt = syncUpdatedAt
         self.alertNotifiedLevels = alertNotifiedLevels
         self.authErrorNotified = authErrorNotified
         self.exhaustionNotified = exhaustionNotified
@@ -148,6 +151,15 @@ public struct AppConfig: Equatable, Sendable {
     public var authErrorNotified: Bool
     public var alertNotifiedLevels: [Int]
     public var exhaustionNotified: Bool
+    public var syncEnabled: Bool
+    public var syncPath: String
+    public var syncSecret: String
+    public var syncDeviceId: String
+    public var syncLastAt: String
+    public var syncLastError: String
+    public var syncSecretDecryptFailed: Bool
+    public var storedSyncSecret: String
+    public var deletedAccounts: [DeletedAccount]
     /// True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.
     public var loadError: Bool
     public var decryptError: Bool
@@ -170,6 +182,15 @@ public struct AppConfig: Equatable, Sendable {
         authErrorNotified: false,
         alertNotifiedLevels: [],
         exhaustionNotified: false,
+        syncEnabled: false,
+        syncPath: "",
+        syncSecret: "",
+        syncDeviceId: "",
+        syncLastAt: "",
+        syncLastError: "",
+        syncSecretDecryptFailed: false,
+        storedSyncSecret: "",
+        deletedAccounts: [],
         loadError: false,
         decryptError: false,
         storedSessionToken: ""
@@ -193,14 +214,23 @@ public struct AppConfig: Equatable, Sendable {
         let accountId = Token.accountId(from: token)
         if accountId.isEmpty { throw CursorAPIError("无法从 Token 识别账号") }
         if let idx = accounts.firstIndex(where: { $0.id == accountId }) {
+            var identityChanged = accounts[idx].token != token
             accounts[idx].token = token
-            if let label { accounts[idx].label = label.trimmingCharacters(in: .whitespaces) }
+            if let label {
+                let newLabel = label.trimmingCharacters(in: .whitespaces)
+                if accounts[idx].label != newLabel { identityChanged = true }
+                accounts[idx].label = newLabel
+            }
             if let membershipType { accounts[idx].membershipType = membershipType.trimmingCharacters(in: .whitespaces) }
             if let remaining {
                 accounts[idx].lastRemaining = round2(remaining)
                 accounts[idx].lastError = ""
             }
             if let error { accounts[idx].lastError = error }
+            if identityChanged || accounts[idx].syncUpdatedAt.trimmingCharacters(in: .whitespaces).isEmpty {
+                AccountSync.touchAccount(&accounts[idx])
+                AccountSync.forgetDeleted(&self, accountId: accountId)
+            }
             if activate { activeAccountId = accountId }
             syncLegacyFields()
             return (accounts[idx], false)
@@ -211,6 +241,8 @@ public struct AppConfig: Equatable, Sendable {
         if let membershipType { acc.membershipType = membershipType.trimmingCharacters(in: .whitespaces) }
         if let remaining { acc.lastRemaining = round2(remaining) }
         if let error { acc.lastError = error }
+        AccountSync.touchAccount(&acc)
+        AccountSync.forgetDeleted(&self, accountId: accountId)
         accounts.append(acc)
         if activate { activeAccountId = accountId }
         syncLegacyFields()
@@ -226,7 +258,13 @@ public struct AppConfig: Equatable, Sendable {
 
     public mutating func renameAccount(_ accountId: String, label: String) -> Bool {
         guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else { return false }
-        accounts[idx].label = label.trimmingCharacters(in: .whitespaces)
+        let newLabel = label.trimmingCharacters(in: .whitespaces)
+        if accounts[idx].label != newLabel {
+            accounts[idx].label = newLabel
+            AccountSync.touchAccount(&accounts[idx])
+        } else {
+            accounts[idx].label = newLabel
+        }
         return true
     }
 
@@ -237,6 +275,7 @@ public struct AppConfig: Equatable, Sendable {
         if activeAccountId == accountId {
             activeAccountId = accounts.first?.id ?? ""
         }
+        AccountSync.rememberDeleted(&self, accountId: accountId)
         syncLegacyFields()
         return true
     }
@@ -432,6 +471,22 @@ public enum ConfigStore {
         cfg.alertNotifiedLevels = parseIntList(raw["alert_notified_levels"])
         cfg.accounts = parseAccounts(raw["accounts"])
         if cfg.accounts.contains(where: \.tokenDecryptFailed) { cfg.decryptError = true }
+        if let v = raw["sync_enabled"] as? Bool { cfg.syncEnabled = v }
+        if let v = raw["sync_path"] as? String { cfg.syncPath = v.trimmingCharacters(in: .whitespaces) }
+        if let v = raw["sync_secret"] as? String {
+            let result = TokenProtector.tryUnprotect(v)
+            if result.ok {
+                cfg.syncSecret = result.value
+            } else {
+                cfg.syncSecret = ""
+                cfg.syncSecretDecryptFailed = true
+                cfg.storedSyncSecret = v
+            }
+        }
+        if let v = raw["sync_device_id"] as? String { cfg.syncDeviceId = v.trimmingCharacters(in: .whitespaces) }
+        if let v = raw["sync_last_at"] as? String { cfg.syncLastAt = v.trimmingCharacters(in: .whitespaces) }
+        if let v = raw["sync_last_error"] as? String { cfg.syncLastError = v }
+        cfg.deletedAccounts = parseDeleted(raw["deleted_accounts"])
         cfg = normalizeAccounts(cfg, raw: raw)
         return cfg
     }
@@ -499,6 +554,7 @@ public enum ConfigStore {
             .trimmingCharacters(in: .whitespaces)
         if !decryptFailed { acc.lastError = raw["last_error"] as? String ?? "" }
         acc.updatedAt = raw["updated_at"] as? String ?? ""
+        acc.syncUpdatedAt = raw["sync_updated_at"] as? String ?? ""
         if let remaining = raw["last_remaining"] {
             if remaining is NSNull {
                 acc.lastRemaining = nil
@@ -566,6 +622,7 @@ public enum ConfigStore {
                     "membership_type": acc.membershipType,
                     "last_error": acc.lastError,
                     "updated_at": acc.updatedAt,
+                    "sync_updated_at": acc.syncUpdatedAt,
                     "alert_notified_levels": acc.alertNotifiedLevels,
                     "auth_error_notified": acc.authErrorNotified,
                     "exhaustion_notified": acc.exhaustionNotified,
@@ -586,6 +643,27 @@ public enum ConfigStore {
             "auth_error_notified": cfg.authErrorNotified,
             "alert_notified_levels": cfg.alertNotifiedLevels,
             "exhaustion_notified": cfg.exhaustionNotified,
+            "sync_enabled": cfg.syncEnabled,
+            "sync_path": cfg.syncPath,
+            "sync_secret": try TokenProtector.diskToken(
+                plaintext: cfg.syncSecret,
+                storedRaw: cfg.storedSyncSecret,
+                decryptFailed: cfg.syncSecretDecryptFailed && cfg.syncSecret.isEmpty
+            ),
+            "sync_device_id": cfg.syncDeviceId,
+            "sync_last_at": cfg.syncLastAt,
+            "sync_last_error": cfg.syncLastError,
+            "deleted_accounts": cfg.deletedAccounts.map { ["id": $0.id, "deleted_at": $0.deletedAt] },
         ]
+    }
+
+    static func parseDeleted(_ raw: Any?) -> [DeletedAccount] {
+        guard let rows = raw as? [[String: Any]] else { return [] }
+        return AccountSync.sanitizeDeleted(rows.map {
+            DeletedAccount(
+                id: ($0["id"] as? String ?? "").trimmingCharacters(in: .whitespaces),
+                deletedAt: ($0["deleted_at"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            )
+        })
     }
 }

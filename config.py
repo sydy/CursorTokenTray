@@ -40,6 +40,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auth_error_notified": False,
     "alert_notified_levels": [],
     "exhaustion_notified": False,
+    "sync_enabled": False,
+    "sync_path": "",
+    "sync_secret": "",
+    "sync_device_id": "",
+    "sync_last_at": "",
+    "sync_last_error": "",
+    "deleted_accounts": [],
 }
 
 _VALID_DISPLAY_MODES = frozenset({"ring", "number", "dot"})
@@ -160,8 +167,10 @@ def _normalize_config(cfg: dict[str, Any], *, raw: dict[str, Any]) -> dict[str, 
         {int(x) for x in levels if _is_int_like(x) and 1 <= int(x) <= 100}
     )
 
+    from account_sync import normalize_sync_config
     from accounts import normalize_account_state
 
+    normalize_sync_config(cfg, raw=raw)
     normalize_account_state(cfg, raw=raw)
     return cfg
 

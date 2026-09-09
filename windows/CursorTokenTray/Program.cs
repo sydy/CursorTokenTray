@@ -116,6 +116,15 @@ sealed class TrayContext : ApplicationContext
     public TrayContext()
     {
         _config = ConfigStore.Load();
+        if (_config.SyncEnabled)
+        {
+            try
+            {
+                var status = AccountSync.Reconcile(_config);
+                if (status.Ok) try { ConfigStore.Save(_config); } catch { }
+            }
+            catch (Exception ex) { CrashLog.Write(ex); }
+        }
         Autostart.Apply(_config.AutostartEnabled);
         _sync = new HiddenSyncForm();
         _ = _sync.Handle;
@@ -217,7 +226,11 @@ sealed class TrayContext : ApplicationContext
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await RefreshAll(); }
+            try
+            {
+                TryReconcile(save: true);
+                await RefreshAll();
+            }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { CrashLog.Write(ex); }
             if (ct.IsCancellationRequested) break;
@@ -472,9 +485,25 @@ sealed class TrayContext : ApplicationContext
         {
             OnUi(() => _icon.ShowBalloonTip(4000, "保存失败", "无法写入配置（文件忙碌或加密失败），请稍后再试。", ToolTipIcon.Warning));
         }
+        TryReconcile(save: true);
         if (prevAuto != cfg.AutostartEnabled) Autostart.Apply(cfg.AutostartEnabled);
         if (refresh) RequestRefresh();
         UpdateUi();
+    }
+
+    void TryReconcile(bool save)
+    {
+        if (!_config.SyncEnabled) return;
+        try
+        {
+            var status = AccountSync.Reconcile(_config);
+            if (save || status.Changed)
+            {
+                try { ConfigStore.Save(_config); } catch { }
+            }
+            if (status.Changed) RequestRefresh();
+        }
+        catch (Exception ex) { CrashLog.Write(ex); }
     }
 
     void Exit()

@@ -9,6 +9,9 @@ struct SettingsRootView: View {
     @State private var tokenText = ""
     @State private var intervalText = "10"
     @State private var thresholdText = "50,20,5"
+    @State private var syncPath = ""
+    @State private var syncSecret = ""
+    @State private var syncStatus = ""
     @State private var hint = ""
     @FocusState private var tokenFocused: Bool
     var startImport: Bool = false
@@ -19,13 +22,19 @@ struct SettingsRootView: View {
             accountPage.tabItem { Label("账户", systemImage: "person.circle") }
             notifyPage.tabItem { Label("通知", systemImage: "bell") }
             menuPage.tabItem { Label("菜单栏", systemImage: "menubar.rectangle") }
+            syncPage.tabItem { Label("同步", systemImage: "arrow.triangle.2.circlepath") }
         }
         .padding(20)
-        .frame(width: 520, height: 420)
+        .frame(width: 540, height: 460)
         .onAppear {
             tokenText = ""
             intervalText = String(store.config.refreshIntervalMinutes)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
+            syncPath = store.config.syncPath
+            syncSecret = ""
+            syncStatus = store.config.syncLastError.isEmpty
+                ? (store.config.syncLastAt.isEmpty ? "" : "上次同步 " + store.config.syncLastAt)
+                : store.config.syncLastError
             if focusToken || store.focusToken {
                 tokenFocused = true
             }
@@ -119,6 +128,31 @@ struct SettingsRootView: View {
         }
     }
 
+    var syncPage: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("多端同步").font(.title3.bold())
+            Toggle("启用账号同步", isOn: syncEnabledBinding)
+            HStack {
+                TextField("同步文件夹（iCloud / 坚果云 / NAS）", text: $syncPath)
+                Button("选择…") { pickFolder() }
+            }
+            SecureField(store.config.syncSecret.isEmpty ? "同步口令，两端必须相同" : "已保存，留空则不修改", text: $syncSecret)
+            Text("把文件夹放到云盘即可多电脑共用。文件用口令 AES-GCM 加密，请勿分享口令。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("立即同步") { syncNow() }
+                Button("导出…") { exportFile() }
+                Button("导入…") { importFile() }
+            }
+            Text(syncStatus.isEmpty ? " " : syncStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            footer
+        }
+    }
+
     var footer: some View {
         HStack {
             Text(store.saveError.isEmpty ? hint : store.saveError)
@@ -163,6 +197,21 @@ struct SettingsRootView: View {
         Binding(
             get: { store.config.autostartEnabled },
             set: { v in var c = store.config; c.autostartEnabled = v; store.applyConfig(c, refresh: false) }
+        )
+    }
+
+    var syncEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.config.syncEnabled },
+            set: { v in
+                var c = store.config
+                c.syncEnabled = v
+                c.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
+                if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
+                    c.syncSecret = syncSecret.trimmingCharacters(in: .whitespaces)
+                }
+                store.applyConfig(c, refresh: false)
+            }
         )
     }
 
@@ -216,12 +265,85 @@ struct SettingsRootView: View {
             cfg.refreshIntervalMinutes = n
         }
         cfg.alertThresholds = ConfigStore.parseThresholds(thresholdText)
+        cfg.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
+        if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
+            cfg.syncSecret = syncSecret.trimmingCharacters(in: .whitespaces)
+        }
         if !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             _ = try? cfg.upsertAccount(token: tokenText, activate: true)
         }
         store.applyConfig(cfg, refresh: true)
         hint = close ? "" : "已应用"
         if close { SettingsWindowController.shared.close() }
+    }
+
+    func applySyncFields(_ cfg: inout AppConfig) {
+        cfg.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
+        if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
+            cfg.syncSecret = syncSecret.trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    func syncNow() {
+        var cfg = store.config
+        applySyncFields(&cfg)
+        let status = AccountSync.reconcile(&cfg)
+        store.applyConfig(cfg, refresh: status.changed)
+        syncStatus = status.message
+        hint = status.ok ? status.message : status.message
+    }
+
+    func pickFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "选择"
+        panel.message = "选择同步文件夹（建议放到 iCloud Drive）"
+        if panel.runModal() == .OK, let url = panel.url {
+            syncPath = url.path
+            var cfg = store.config
+            applySyncFields(&cfg)
+            store.applyConfig(cfg, refresh: false)
+        }
+    }
+
+    func exportFile() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = AccountSync.filename
+        panel.title = "导出加密账号包"
+        panel.allowedFileTypes = ["sync", "json"]
+        if panel.runModal() != .OK { return }
+        guard let url = panel.url else { return }
+        var cfg = store.config
+        applySyncFields(&cfg)
+        do {
+            let dest = try AccountSync.exportToFile(&cfg, path: url.path)
+            store.applyConfig(cfg, refresh: false)
+            syncStatus = "已导出到 " + dest
+        } catch {
+            syncStatus = (error as? CursorAPIError)?.message ?? error.localizedDescription
+        }
+    }
+
+    func importFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.title = "导入加密账号包"
+        if panel.runModal() != .OK { return }
+        guard let url = panel.url else { return }
+        var cfg = store.config
+        applySyncFields(&cfg)
+        do {
+            try AccountSync.importFromFile(&cfg, path: url.path)
+            store.applyConfig(cfg, refresh: true)
+            syncStatus = "已从文件合并账号"
+            hint = "已导入"
+        } catch {
+            syncStatus = (error as? CursorAPIError)?.message ?? error.localizedDescription
+        }
     }
 
     func importFrom(prefer: String?) async {
@@ -323,7 +445,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         AppDelegate.ensureStatusItemVisible()
         if window == nil {
             let win = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 460),
+                contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false

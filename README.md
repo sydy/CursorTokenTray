@@ -16,6 +16,7 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - Token 过期检测、一键打开设置并聚焦 Token 输入框
 - 多档额度告警（默认 50/20/5）与耗尽风险通知
 - **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警
+- **多端同步**：设置里启用后，账号列表（Token / 备注）写入口令加密的同步文件；把文件夹放到 iCloud / OneDrive / 坚果云 即可在 Windows 与 macOS 之间合并。也支持导出 / 导入同一格式的加密包
 - 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
 - 中文设置窗口（Windows 为 WinForms，macOS 为 SwiftUI；账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
 - **用量报表**：打开窗口时增量拉取 [Usage 页](https://cursor.com/dashboard/usage) 按次明细，本地缓存；总览、按日趋势、按模型排行、明细表与 CSV 导出。默认当前账号，团队管理员可切全员
@@ -150,6 +151,15 @@ Windows：`%APPDATA%\CursorTokenTray\config.json`
 macOS：`~/Library/Application Support/CursorTokenTray/config.json`  
 用量历史：同目录 `usage_history.<账号ID>.jsonl`（旧版单文件 `usage_history.jsonl` 会在首次启动时归到当时那个账号）  
 用量明细缓存：同目录 `usage_events.<账号ID>.jsonl`（团队全员为 `usage_events.<账号ID>.team.jsonl`）
+
+## 多端同步
+
+1. 在一台电脑打开 **设置 → 同步**，勾选启用，选择一个会被云盘同步的文件夹，设置同步口令并保存
+2. 在另一台电脑打开同一文件夹（或导入导出的 `.sync` 文件），填写**相同口令**
+3. 启动时、保存账号时、定时刷新时会自动合并：按账号 `id` 最后写入获胜；删除会留下墓碑，避免对端再把账号加回来
+4. 同步文件名为 `CursorTokenTray.accounts.sync`，内容为 PBKDF2 + AES-256-GCM，本机 `config.json` 里的口令仍按操作系统加密保存
+
+只同步账号身份（Token、备注、套餐类型），不覆盖本机告警去重、用量历史和报表缓存。
 
 ## 说明
 
