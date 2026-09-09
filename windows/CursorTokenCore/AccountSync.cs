@@ -407,8 +407,16 @@ public static class AccountSync
         var json = JsonSerializer.Serialize(envelope, new JsonSerializerOptions { WriteIndented = true });
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, json);
-        if (File.Exists(path)) File.Replace(tmp, path, null);
-        else File.Move(tmp, path);
+        if (File.Exists(path))
+        {
+            try { File.Replace(tmp, path, null); }
+            catch
+            {
+                File.Copy(tmp, path, true);
+                try { File.Delete(tmp); } catch { }
+            }
+        }
+        else File.Move(tmp, path, true);
     }
 
     public static string SyncReady(AppConfig cfg)
