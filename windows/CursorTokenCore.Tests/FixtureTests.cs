@@ -686,12 +686,12 @@ public class FixtureTests
             var merged = AccountSync.MergeSnapshots(ParseSnap(cse.GetProperty("local")), ParseSnap(cse.GetProperty("remote")));
             var expected = cse.GetProperty("expected");
             Assert.Equal(expected.GetProperty("active_account_id").GetString(), merged.ActiveAccountId);
-            Assert.Equal(expected.GetProperty("ids").EnumerateArray().Select(x => x.GetString()).ToList(), merged.Accounts.Select(a => a.Id).ToList());
+            Assert.Equal(expected.GetProperty("ids").EnumerateArray().Select(x => x.GetString()!).ToList(), merged.Accounts.Select(a => a.Id).ToList());
             foreach (var kv in expected.GetProperty("labels").EnumerateObject())
                 Assert.Equal(kv.Value.GetString(), merged.Accounts.First(a => a.Id == kv.Name).Label);
             foreach (var kv in expected.GetProperty("tokens").EnumerateObject())
                 Assert.Equal(kv.Value.GetString(), merged.Accounts.First(a => a.Id == kv.Name).Token);
-            Assert.Equal(expected.GetProperty("deleted_ids").EnumerateArray().Select(x => x.GetString()).ToList(), merged.Deleted.Select(d => d.Id).ToList());
+            Assert.Equal(expected.GetProperty("deleted_ids").EnumerateArray().Select(x => x.GetString()!).ToList(), merged.Deleted.Select(d => d.Id).ToList());
             _ = name;
         }
         var crypto = root.GetProperty("crypto");
