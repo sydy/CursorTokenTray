@@ -11,7 +11,6 @@ sealed class ReportForm : Form
     const int DesignHeight = 880;
     const int DesignMinWidth = 900;
     const int DesignMinHeight = 640;
-    const int DesignChartRow = 250;
     const int DesignModelRow = 180;
     const int DesignHeaderH = 28;
     const int DesignRowH = 24;
@@ -103,7 +102,7 @@ sealed class ReportForm : Form
         _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignChartRow));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.Absolute, DesignModelRow));
         _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -164,12 +163,13 @@ sealed class ReportForm : Form
 
         if (_root.RowStyles.Count > 3)
         {
-            _root.RowStyles[2].SizeType = SizeType.Absolute;
-            _root.RowStyles[2].Height = UiLayout.ScalePx(DesignChartRow, dpi);
+            _root.RowStyles[2].SizeType = SizeType.AutoSize;
+            _root.RowStyles[2].Height = 0;
             _root.RowStyles[3].SizeType = SizeType.Absolute;
             _root.RowStyles[3].Height = UiLayout.ScalePx(DesignModelRow, dpi);
         }
         _chart.ApplyDpi(dpi);
+        _root.PerformLayout();
 
         var headerH = UiLayout.ScalePx(DesignHeaderH, dpi);
         var rowH = UiLayout.ScalePx(DesignRowH, dpi);
@@ -323,6 +323,7 @@ sealed class ReportForm : Form
         var cost = report.HasCost ? $"    费用 {UsageParser.FormatUsdCents(report.TotalCents)}" : "";
         _kpi.Text = $"请求 {report.EventCount}    Token {UsageParser.FormatTokenCount(report.TotalTokens)}    {mix}{cost}";
         _chart.Bind(report.Events);
+        _root.PerformLayout();
 
         _models.Rows.Clear();
         _models.SuspendLayout();

@@ -603,6 +603,46 @@ public class FixtureTests
     }
 
     [Fact]
+    public void UsageChartToggleMatchesMacosSegmentedWidth()
+    {
+        Assert.Equal(150, UsageChartLayout.DesignToggleW);
+        Assert.Equal(24, UsageChartLayout.DesignToggleH);
+        Assert.Equal((150, 24), UsageChartLayout.ToggleSize(96));
+        Assert.Equal((225, 36), UsageChartLayout.ToggleSize(144));
+        Assert.Equal(168, UsageChartLayout.DesignPlotH);
+    }
+
+    [Fact]
+    public void UsageChartChipSizeFitsDotAndLabelWithoutOverlap()
+    {
+        var (w, h) = UsageChartLayout.ChipSize(100, 15, 96);
+        Assert.Equal(8 + 8 + 6 + 100 + 8, w);
+        Assert.Equal(Math.Max(22, 15 + 8), h);
+        var a = UsageChartLayout.ChipSize(120, 15, 96);
+        var b = UsageChartLayout.ChipSize(90, 15, 96);
+        Assert.True(a.Width > b.Width);
+        Assert.Equal(30, a.Width - b.Width);
+        var high = UsageChartLayout.ChipSize(100, 22, 144);
+        Assert.True(high.Width > w);
+        Assert.True(high.Height > h);
+    }
+
+    [Fact]
+    public void UsageChartPanelHeightGrowsWhenLegendWraps()
+    {
+        var empty = UsageChartLayout.PanelHeight(0, 96);
+        var one = UsageChartLayout.PanelHeight(1, 96);
+        var two = UsageChartLayout.PanelHeight(2, 96);
+        Assert.Equal(UsageChartLayout.DesignHeaderH + UsageChartLayout.DesignPlotH, empty);
+        Assert.True(one > empty);
+        Assert.True(two > one);
+        Assert.Equal(UsageChartLayout.LegendHeight(1, 96), one - empty);
+        Assert.Equal(UsageChartLayout.LegendHeight(2, 96) - UsageChartLayout.LegendHeight(1, 96), two - one);
+        var at150 = UsageChartLayout.PanelHeight(1, 144);
+        Assert.True(at150 > one);
+    }
+
+    [Fact]
     public void FlyoutLayoutMatchesMacosMetrics()
     {
         Assert.Equal(500, FlyoutLayout.Width);
