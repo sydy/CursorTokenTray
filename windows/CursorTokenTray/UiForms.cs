@@ -31,6 +31,26 @@ sealed class SettingsForm : Form
         Margin = new Padding(0, 4, 0, 8),
     };
     readonly ComboBox _accounts = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    readonly ComboBox _kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly DateTimePicker _startAt = new()
+    {
+        Format = DateTimePickerFormat.Custom,
+        CustomFormat = "yyyy-MM-dd HH:mm",
+        Width = 180,
+        ShowUpDown = true,
+        MinDate = new DateTime(2000, 1, 1),
+        MaxDate = new DateTime(2100, 1, 1),
+    };
+    readonly NumericUpDown _days = new() { Minimum = 0, Maximum = AccountValidity.MaxDays, Width = 64, DecimalPlaces = 0 };
+    readonly NumericUpDown _hours = new() { Minimum = 0, Maximum = AccountValidity.MaxHours, Width = 64, DecimalPlaces = 0 };
+    readonly Label _endAt = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 4, 0, 4) };
+    readonly FlowLayoutPanel _tempFields = new()
+    {
+        AutoSize = true,
+        WrapContents = true,
+        FlowDirection = FlowDirection.LeftToRight,
+        Margin = new Padding(0, 0, 0, 4),
+    };
     readonly Label _addCaption = Caption("添加账号（粘贴 Token，请勿分享；已保存的不会显示）");
     readonly Label _status = new() { AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
     readonly Label _hint = new()
@@ -69,6 +89,13 @@ sealed class SettingsForm : Form
         var del = ActionButton("删除");
         var login = ActionButton("登录到 Cursor");
         _root.Controls.Add(Flow(rename, del, login));
+        _kind.Items.AddRange(["长期账号", "临时账号"]);
+        _root.Controls.Add(FieldRow("账号类型", _kind));
+        _tempFields.Controls.Add(LabeledSpin("开始时间", _startAt));
+        _tempFields.Controls.Add(LabeledSpin("有效", _days, "天"));
+        _tempFields.Controls.Add(LabeledSpin("", _hours, "小时"));
+        _root.Controls.Add(_tempFields);
+        _root.Controls.Add(_endAt);
         _root.Controls.Add(_addCaption);
         _root.Controls.Add(_token);
         var cur = ActionButton("从 Cursor 导入");
@@ -108,7 +135,9 @@ sealed class SettingsForm : Form
         _accounts.SelectedIndexChanged += (_, _) =>
         {
             if (_loading) return;
+            ReadKindInto(_cfg.ActiveAccount);
             if (_accounts.SelectedItem is AccountItem item) { _cfg.SetActiveAccount(item.Id); NotifySaved(); }
+            WriteKindFrom(_cfg.ActiveAccount);
         };
         rename.Click += (_, _) => RenameActive();
         login.Click += async (_, _) => await LoginToCursor();
@@ -119,6 +148,18 @@ sealed class SettingsForm : Form
             _cfg.RemoveAccount(_cfg.ActiveAccount.Id);
             LoadFrom(_cfg); NotifySaved();
         };
+        _kind.SelectedIndexChanged += (_, _) =>
+        {
+            if (_loading) return;
+            if (_kind.SelectedIndex == 1 && _days.Value == 0 && _hours.Value == 0) _days.Value = 1;
+            ReadKindInto(_cfg.ActiveAccount);
+            UpdateTempVisibility();
+            UpdateEndLabel();
+            NotifySaved();
+        };
+        _startAt.ValueChanged += (_, _) => OnValidityEdited();
+        _days.ValueChanged += (_, _) => OnValidityEdited();
+        _hours.ValueChanged += (_, _) => OnValidityEdited();
         add.Click += (_, _) => AddToken();
         cur.Click += async (_, _) => await DoImport("cursor-app");
         cookie.Click += async (_, _) => await DoImport(null);
@@ -170,7 +211,7 @@ sealed class SettingsForm : Form
     void WrapText()
     {
         var inner = Math.Max(200, ClientSize.Width - _root.Padding.Horizontal - 8);
-        foreach (var label in new[] { _addCaption, _status, _hint, _syncStatus, _syncHint })
+        foreach (var label in new[] { _addCaption, _status, _hint, _syncStatus, _syncHint, _endAt })
             label.MaximumSize = new Size(inner, 0);
     }
 
@@ -217,6 +258,37 @@ sealed class SettingsForm : Form
         AutoSize = true,
         Margin = new Padding(0, 8, 0, 4),
     };
+
+    static FlowLayoutPanel LabeledSpin(string label, Control field, string? suffix = null)
+    {
+        var row = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 12, 4),
+        };
+        if (!string.IsNullOrEmpty(label))
+        {
+            row.Controls.Add(new Label
+            {
+                Text = label,
+                AutoSize = true,
+                Margin = new Padding(0, 6, 8, 0),
+            });
+        }
+        field.Margin = new Padding(0, 2, 4, 2);
+        row.Controls.Add(field);
+        if (!string.IsNullOrEmpty(suffix))
+        {
+            row.Controls.Add(new Label
+            {
+                Text = suffix,
+                AutoSize = true,
+                Margin = new Padding(0, 6, 0, 0),
+            });
+        }
+        return row;
+    }
 
     static Button ActionButton(string text) => new()
     {
@@ -309,8 +381,80 @@ sealed class SettingsForm : Form
             _syncSecret.Text = "";
             _syncSecret.PlaceholderText = string.IsNullOrEmpty(cfg.SyncSecret) ? "两端必须相同，用于加密同步文件" : "已保存，留空则不修改";
             _syncStatus.Text = SyncStatusText(cfg);
+            WriteKindFrom(cfg.ActiveAccount);
         }
         finally { _loading = false; }
+    }
+
+    void OnValidityEdited()
+    {
+        if (_loading) return;
+        ReadKindInto(_cfg.ActiveAccount);
+        UpdateEndLabel();
+    }
+
+    void ReadKindInto(Account? acc)
+    {
+        if (acc is null) return;
+        var kind = _kind.SelectedIndex == 1 ? AccountValidity.Temporary : AccountValidity.LongTerm;
+        var start = new DateTimeOffset(DateTime.SpecifyKind(_startAt.Value, DateTimeKind.Local)).ToUniversalTime();
+        _cfg.UpdateAccountValidity(acc.Id, kind, AccountSync.NowIso(start), (int)_days.Value, (int)_hours.Value);
+    }
+
+    void WriteKindFrom(Account? acc)
+    {
+        var prev = _loading;
+        _loading = true;
+        try
+        {
+            var enabled = acc is not null;
+            _kind.Enabled = enabled;
+            _startAt.Enabled = enabled;
+            _days.Enabled = enabled;
+            _hours.Enabled = enabled;
+            if (acc is null)
+            {
+                _kind.SelectedIndex = 0;
+                _days.Value = 0;
+                _hours.Value = 0;
+                _startAt.Value = DateTime.Now;
+            }
+            else
+            {
+                _kind.SelectedIndex = AccountValidity.IsTemporary(acc) ? 1 : 0;
+                var start = AccountSync.ParseIso(acc.TempStartAt)?.ToLocalTime().DateTime ?? DateTime.Now;
+                if (start < _startAt.MinDate) start = _startAt.MinDate;
+                if (start > _startAt.MaxDate) start = _startAt.MaxDate;
+                _startAt.Value = start;
+                _days.Value = acc.TempValidDays;
+                _hours.Value = acc.TempValidHours;
+            }
+            UpdateTempVisibility();
+            UpdateEndLabel();
+        }
+        finally { _loading = prev; }
+    }
+
+    void UpdateTempVisibility()
+    {
+        var show = _kind.SelectedIndex == 1;
+        _tempFields.Visible = show;
+        _endAt.Visible = show;
+        if (IsHandleCreated) BeginInvoke(FitToContent);
+    }
+
+    void UpdateEndLabel()
+    {
+        if (_kind.SelectedIndex != 1)
+        {
+            _endAt.Text = "";
+            return;
+        }
+        var start = new DateTimeOffset(DateTime.SpecifyKind(_startAt.Value, DateTimeKind.Local)).ToUniversalTime();
+        var end = AccountValidity.ComputeEndIso(AccountSync.NowIso(start), (int)_days.Value, (int)_hours.Value);
+        _endAt.Text = string.IsNullOrEmpty(end)
+            ? "请设置有效时间（天和小时可组合）"
+            : "结束时间  " + StatusText.FormatResetDate(end, includeTime: true) + "（按开始时间计算，覆盖管理端重置日）";
     }
 
     static string SyncStatusText(AppConfig cfg)
@@ -425,6 +569,7 @@ sealed class SettingsForm : Form
         _cfg.TrayDisplayMode = _mode.SelectedIndex switch { 1 => "number", 2 => "dot", _ => "ring" };
         _cfg.AutostartEnabled = _auto.Checked;
         ReadSyncFields();
+        ReadKindInto(_cfg.ActiveAccount);
         if (!string.IsNullOrWhiteSpace(_token.Text))
             try { _cfg.UpsertAccount(_token.Text, activate: true); } catch { }
         _onSaved(_cfg);

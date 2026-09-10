@@ -317,7 +317,7 @@ sealed class FlyoutForm : Form
             if (usage.TotalTokens is > 0)
                 parts.Add("Token  " + UsageParser.FormatTokenCount(usage.TotalTokens));
             if (usage.BillingCycleEnd is { } end)
-                parts.Add("重置  " + StatusText.FormatResetDate(end));
+                parts.Add(StatusText.CycleEndLabel(usage) + "  " + StatusText.FormatResetDate(end, usage.BillingCycleEndOverridden));
             var infoH = 14 * s + (parts.Count > 0 ? 18 * s : 0);
             y = DrawCard(g, box.X, y, box.Width, pal, infoH, inner =>
             {

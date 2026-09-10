@@ -6,6 +6,7 @@ import base64
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 
@@ -231,6 +232,166 @@ class HistoryPartitionTests(unittest.TestCase):
             finally:
                 config.CONFIG_DIR = old_dir
                 config.CONFIG_PATH = old_path
+
+
+class AccountValidityTests(unittest.TestCase):
+    def test_kind_and_end_fixtures(self) -> None:
+        from accounts import (
+            apply_account_end_override,
+            compute_temp_end_iso,
+            sanitize_account_kind,
+        )
+        from cursor_api import UsageSnapshot
+
+        data = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "account_validity_cases.json").read_text(encoding="utf-8"))
+        for row in data["kind"]:
+            self.assertEqual(sanitize_account_kind(row["input"]), row["output"], row["input"])
+        for row in data["compute_end"]:
+            got = compute_temp_end_iso(row["start"], row["days"], row["hours"])
+            self.assertEqual(got, row["end"], row["name"])
+        for row in data["override"]:
+            snap = UsageSnapshot(
+                used_percent=10,
+                remaining_percent=90,
+                auto_percent_used=None,
+                api_percent_used=None,
+                total_percent_used=None,
+                membership_type="Pro",
+                billing_cycle_start="2026-09-01T00:00:00.000Z",
+                billing_cycle_end=row["api_end"],
+                days_remaining=26,
+                days_elapsed=4,
+                estimated_usable_days=None,
+                raw={},
+            )
+            now = datetime.fromisoformat(row["now"].replace("Z", "+00:00"))
+            apply_account_end_override(snap, row["account"], now=now)
+            self.assertEqual(snap.billing_cycle_end, row["expected_end"], row["name"])
+            self.assertEqual(snap.days_remaining, row["expected_days_remaining"], row["name"])
+            self.assertEqual(snap.billing_cycle_end_overridden, row["overridden"], row["name"])
+
+    def test_sanitize_and_caption_keep_validity(self) -> None:
+        from accounts import format_account_caption, sanitize_account, update_account_validity, upsert_account
+
+        raw = {
+            "id": "user_01TMP",
+            "token": _token_for("user_01TMP"),
+            "account_kind": "temporary",
+            "temp_start_at": "2026-09-10T00:00:00.000Z",
+            "temp_valid_days": 2,
+            "temp_valid_hours": 5,
+        }
+        acc = sanitize_account(raw)
+        assert acc is not None
+        self.assertEqual(acc["account_kind"], "temporary")
+        self.assertEqual(acc["temp_valid_days"], 2)
+        self.assertEqual(acc["temp_valid_hours"], 5)
+        self.assertIn("临时", format_account_caption(acc))
+
+        cfg: dict = {"accounts": [], "active_account_id": "", "session_token": ""}
+        upsert_account(cfg, _token_for("user_01TMP"), activate=True)
+        self.assertTrue(
+            update_account_validity(
+                cfg,
+                "user_01TMP",
+                kind="temporary",
+                start_at="2026-09-10T00:00:00.000Z",
+                valid_days=1,
+                valid_hours=2,
+            )
+        )
+        saved = cfg["accounts"][0]
+        self.assertEqual(saved["account_kind"], "temporary")
+        self.assertEqual(saved["temp_valid_days"], 1)
+        self.assertEqual(saved["temp_valid_hours"], 2)
+
+        import config
+
+        old_dir = config.CONFIG_DIR
+        old_path = config.CONFIG_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            config.CONFIG_DIR = Path(tmp)
+            config.CONFIG_PATH = Path(tmp) / "config.json"
+            try:
+                config.save_config(cfg)
+                loaded = config.load_config()
+                got = loaded["accounts"][0]
+                self.assertEqual(got["account_kind"], "temporary")
+                self.assertEqual(got["temp_start_at"], "2026-09-10T00:00:00.000Z")
+                self.assertEqual(got["temp_valid_days"], 1)
+                self.assertEqual(got["temp_valid_hours"], 2)
+            finally:
+                config.CONFIG_DIR = old_dir
+                config.CONFIG_PATH = old_path
+
+
+class ValiditySyncTests(unittest.TestCase):
+    def test_newer_remote_validity_wins(self) -> None:
+        from account_sync import apply_snapshot_to_config, merge_snapshots
+
+        local = {
+            "updated_at": "2026-09-01T00:00:00.000Z",
+            "active_account_id": "user_01A",
+            "accounts": [
+                {
+                    "id": "user_01A",
+                    "label": "个人",
+                    "token": "tok-a",
+                    "membership_type": "pro",
+                    "account_kind": "long_term",
+                    "sync_updated_at": "2026-09-01T00:00:00.000Z",
+                }
+            ],
+            "deleted": [],
+        }
+        remote = {
+            "updated_at": "2026-09-02T00:00:00.000Z",
+            "active_account_id": "user_01A",
+            "accounts": [
+                {
+                    "id": "user_01A",
+                    "label": "个人",
+                    "token": "tok-a",
+                    "membership_type": "pro",
+                    "account_kind": "temporary",
+                    "temp_start_at": "2026-09-10T00:00:00.000Z",
+                    "temp_valid_days": 3,
+                    "temp_valid_hours": 5,
+                    "sync_updated_at": "2026-09-02T00:00:00.000Z",
+                }
+            ],
+            "deleted": [],
+        }
+        merged = merge_snapshots(local, remote)
+        acc = merged["accounts"][0]
+        self.assertEqual(acc["account_kind"], "temporary")
+        self.assertEqual(acc["temp_start_at"], "2026-09-10T00:00:00.000Z")
+        self.assertEqual(acc["temp_valid_days"], 3)
+        self.assertEqual(acc["temp_valid_hours"], 5)
+
+        cfg = {
+            "accounts": [
+                {
+                    "id": "user_01A",
+                    "label": "个人",
+                    "token": "tok-a",
+                    "membership_type": "pro",
+                    "last_remaining": 42.5,
+                    "alert_notified_levels": [50],
+                    "auth_error_notified": True,
+                    "low_quota_notified": True,
+                    "sync_updated_at": "2026-09-01T00:00:00.000Z",
+                }
+            ],
+            "active_account_id": "user_01A",
+            "deleted_accounts": [],
+        }
+        apply_snapshot_to_config(cfg, merged)
+        got = cfg["accounts"][0]
+        self.assertEqual(got["account_kind"], "temporary")
+        self.assertEqual(got["temp_valid_days"], 3)
+        self.assertEqual(got["last_remaining"], 42.5)
+        self.assertTrue(got["auth_error_notified"])
 
 
 if __name__ == "__main__":

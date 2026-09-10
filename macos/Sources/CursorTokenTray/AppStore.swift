@@ -246,12 +246,17 @@ final class AppStore: ObservableObject {
             for o in outcomes {
                 guard let idx = live.accounts.firstIndex(where: { $0.id == o.id }) else { continue }
                 if let snap = o.snap {
-                    live.applySnapshot(to: o.id, membershipType: snap.membershipType, remaining: snap.remainingPercent, error: "", updatedAt: o.stamp)
+                    var adjusted = snap
+                    AccountValidity.applyEndOverride(&adjusted, account: live.accounts[idx])
+                    live.applySnapshot(to: o.id, membershipType: adjusted.membershipType, remaining: adjusted.remainingPercent, error: "", updatedAt: o.stamp)
                     live.accounts[idx].authErrorNotified = false
                     var account = live.accounts[idx]
-                    let found = AlertLogic.evaluate(config: live, account: &account, snapshot: snap)
+                    let found = AlertLogic.evaluate(config: live, account: &account, snapshot: adjusted)
                     live.accounts[idx] = account
                     for n in found { notices.append((n.title, n.body)) }
+                    if let oi = outcomes.firstIndex(where: { $0.id == o.id }) {
+                        outcomes[oi].snap = adjusted
+                    }
                 } else if let err = o.error {
                     live.applySnapshot(to: o.id, error: err, updatedAt: o.stamp)
                     if o.authError, !live.accounts[idx].authErrorNotified {

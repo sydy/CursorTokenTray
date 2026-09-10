@@ -10,6 +10,10 @@ public sealed class Account
     public string Label { get; set; } = "";
     public string Token { get; set; } = "";
     public string MembershipType { get; set; } = "";
+    public string AccountKind { get; set; } = AccountValidity.LongTerm;
+    public string TempStartAt { get; set; } = "";
+    public int TempValidDays { get; set; }
+    public int TempValidHours { get; set; }
     public double? LastRemaining { get; set; }
     public string LastError { get; set; } = "";
     public string UpdatedAt { get; set; } = "";
@@ -40,6 +44,7 @@ public sealed class Account
         var parts = new List<string> { DisplayLabel };
         var memb = MembershipType.Trim();
         if (memb.Length > 0 && !memb.Equals(DisplayLabel, StringComparison.OrdinalIgnoreCase)) parts.Add(memb);
+        if (AccountValidity.IsTemporary(this)) parts.Add("临时");
         if (LastRemaining is { } r) parts.Add($"剩余 {r:0}%");
         if (!string.IsNullOrWhiteSpace(LastError) && LastRemaining is null) parts.Add("已失效");
         var text = string.Join(" · ", parts);
@@ -138,6 +143,23 @@ public sealed class AppConfig
             AccountSync.TouchAccount(acc);
         }
         else acc.Label = newLabel;
+        return true;
+    }
+
+    public bool UpdateAccountValidity(string id, string kind, string startAt, int days, int hours)
+    {
+        var acc = Accounts.FirstOrDefault(a => a.Id == id);
+        if (acc is null) return false;
+        var newKind = AccountValidity.SanitizeKind(kind);
+        var newStart = (startAt ?? "").Trim();
+        var newDays = AccountValidity.ClampDays(days);
+        var newHours = AccountValidity.ClampHours(hours);
+        var changed = !AccountValidity.ValidityEquals(acc, newKind, newStart, newDays, newHours);
+        acc.AccountKind = newKind;
+        acc.TempStartAt = newStart;
+        acc.TempValidDays = newDays;
+        acc.TempValidHours = newHours;
+        if (changed) AccountSync.TouchAccount(acc);
         return true;
     }
 
@@ -508,6 +530,10 @@ public static class ConfigStore
         var membership = Str(raw, "membership_type");
         if (membership.Length == 0) membership = Str(raw, "membershipType");
         acc.MembershipType = membership.Trim();
+        acc.AccountKind = AccountValidity.SanitizeKind(Str(raw, "account_kind"));
+        acc.TempStartAt = Str(raw, "temp_start_at").Trim();
+        acc.TempValidDays = AccountValidity.ClampDays(IntVal(raw, "temp_valid_days"));
+        acc.TempValidHours = AccountValidity.ClampHours(IntVal(raw, "temp_valid_hours"));
         if (!decryptFailed) acc.LastError = Str(raw, "last_error");
         acc.UpdatedAt = Str(raw, "updated_at");
         acc.SyncUpdatedAt = Str(raw, "sync_updated_at");
@@ -532,6 +558,14 @@ public static class ConfigStore
     static string Str(JsonElement raw, string key, string fallback = "") =>
         raw.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;
 
+    static int? IntVal(JsonElement raw, string key)
+    {
+        if (!raw.TryGetProperty(key, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)) return n;
+        if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out n)) return n;
+        return null;
+    }
+
     static object ToDict(AppConfig cfg) => new
     {
         session_token = TokenProtector.DiskToken(cfg.SessionToken, cfg.StoredSessionToken, cfg.DecryptError && string.IsNullOrEmpty(cfg.SessionToken)),
@@ -541,6 +575,10 @@ public static class ConfigStore
             ["label"] = a.Label,
             ["token"] = TokenProtector.DiskToken(a.Token, a.StoredToken, a.TokenDecryptFailed),
             ["membership_type"] = a.MembershipType,
+            ["account_kind"] = AccountValidity.SanitizeKind(a.AccountKind),
+            ["temp_start_at"] = a.TempStartAt ?? "",
+            ["temp_valid_days"] = a.TempValidDays,
+            ["temp_valid_hours"] = a.TempValidHours,
             ["last_remaining"] = a.LastRemaining,
             ["last_error"] = a.LastError,
             ["updated_at"] = a.UpdatedAt,

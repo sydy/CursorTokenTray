@@ -72,13 +72,49 @@ public static class StatusText
         return text;
     }
 
-    public static string FormatResetDate(string iso)
+    public static string FormatResetDate(string iso, bool includeTime = false)
     {
         var text = iso.Replace("Z", "+00:00");
         if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dt))
             return iso;
-        return $"{dt.Month}月{dt.Day}日";
+        var show = includeTime ? dt.ToLocalTime() : dt;
+        var label = $"{show.Month}月{show.Day}日";
+        if (includeTime && (show.Hour != 0 || show.Minute != 0))
+            label += $" {show.Hour:00}:{show.Minute:00}";
+        return label;
     }
+
+    public static string FormatCycleRemaining(string? endIso, int? daysRemaining, DateTimeOffset? now = null)
+    {
+        var clock = now ?? DateTimeOffset.UtcNow;
+        DateTimeOffset end;
+        var parsed = false;
+        if (!string.IsNullOrEmpty(endIso))
+        {
+            var text = endIso.Replace("Z", "+00:00");
+            parsed = DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out end);
+        }
+        else end = default;
+        if (!parsed)
+            return daysRemaining is { } d ? $"还剩 {d} 天" : "";
+        var seconds = (end - clock).TotalSeconds;
+        if (seconds <= 0) return "已到期";
+        var hours = (int)(seconds / 3600);
+        if (hours < 24)
+        {
+            if (hours < 1)
+            {
+                var minutes = Math.Max(1, (int)(seconds / 60));
+                return $"还剩 {minutes} 分钟";
+            }
+            return $"还剩 {hours} 小时";
+        }
+        var days = daysRemaining ?? (int)(seconds / 86400);
+        return $"还剩 {days} 天";
+    }
+
+    public static string CycleEndLabel(UsageSnapshot usage) =>
+        usage.BillingCycleEndOverridden ? "到期" : "重置";
 
     public static List<(string, string)> BuildStatusLines(UsageSnapshot? usage, string? error, string? updatedAt = null, string? accountLabel = null)
     {
@@ -110,8 +146,10 @@ public static class StatusText
         }
         if (usage.BillingCycleEnd is { } end)
         {
-            var endText = FormatResetDate(end);
-            rows.Add(("重置", usage.DaysRemaining is { } d ? $"{endText}（还剩 {d} 天）" : endText));
+            var endText = FormatResetDate(end, usage.BillingCycleEndOverridden);
+            var remaining = FormatCycleRemaining(end, usage.DaysRemaining);
+            var endLabel = CycleEndLabel(usage);
+            rows.Add((endLabel, string.IsNullOrEmpty(remaining) ? endText : $"{endText}（{remaining}）"));
             rows.Add(("预计可用", FormatEstimatedDays(usage)));
         }
         else if (usage.EstimatedUsableDays is not null) rows.Add(("预计可用", FormatEstimatedDays(usage)));
