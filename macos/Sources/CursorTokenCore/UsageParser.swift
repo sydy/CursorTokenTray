@@ -74,6 +74,7 @@ public struct UsageSnapshot: Equatable {
     public var pooledLimitCents: Double?
     public var limitType: String
     public var isUnlimited: Bool
+    public var billingCycleEndOverridden: Bool
 
     public init(
         usedPercent: Double,
@@ -99,7 +100,8 @@ public struct UsageSnapshot: Equatable {
         pooledUsedCents: Double? = nil,
         pooledLimitCents: Double? = nil,
         limitType: String = "",
-        isUnlimited: Bool = false
+        isUnlimited: Bool = false,
+        billingCycleEndOverridden: Bool = false
     ) {
         self.usedPercent = usedPercent
         self.remainingPercent = remainingPercent
@@ -125,6 +127,7 @@ public struct UsageSnapshot: Equatable {
         self.pooledLimitCents = pooledLimitCents
         self.limitType = limitType
         self.isUnlimited = isUnlimited
+        self.billingCycleEndOverridden = billingCycleEndOverridden
     }
 
     public var isTeamAccount: Bool {
@@ -581,7 +584,7 @@ public enum UsageParser {
         return f3.date(from: text)
     }
 
-    static func daysUntil(_ iso: String?, now: Date) -> Int? {
+    public static func daysUntil(_ iso: String?, now: Date) -> Int? {
         guard let end = parseISO(iso) else { return nil }
         let delta = end.timeIntervalSince(now)
         return max(0, Int(delta / 86_400.0))

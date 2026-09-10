@@ -90,7 +90,7 @@ public enum StatusText {
         return text
     }
 
-    public static func formatResetDate(_ isoValue: String) -> String {
+    public static func formatResetDate(_ isoValue: String, includeTime: Bool = false) -> String {
         let text = isoValue.replacingOccurrences(of: "Z", with: "+00:00")
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -101,10 +101,41 @@ public enum StatusText {
             dt = f2.date(from: text) ?? f2.date(from: isoValue)
         }
         guard let dt else { return isoValue }
-        let cal = Calendar(identifier: .gregorian)
+        let cal = Calendar.current
         let m = cal.component(.month, from: dt)
         let d = cal.component(.day, from: dt)
-        return "\(m)月\(d)日"
+        var label = "\(m)月\(d)日"
+        if includeTime {
+            let hour = cal.component(.hour, from: dt)
+            let minute = cal.component(.minute, from: dt)
+            if hour != 0 || minute != 0 {
+                label += String(format: " %02d:%02d", hour, minute)
+            }
+        }
+        return label
+    }
+
+    public static func formatCycleRemaining(_ endIso: String?, daysRemaining: Int?, now: Date = Date()) -> String {
+        guard let endIso, let end = AccountSync.parseIso(endIso) else {
+            if let daysRemaining { return "还剩 \(daysRemaining) 天" }
+            return ""
+        }
+        let seconds = end.timeIntervalSince(now)
+        if seconds <= 0 { return "已到期" }
+        let hours = Int(seconds / 3600)
+        if hours < 24 {
+            if hours < 1 {
+                let minutes = max(1, Int(seconds / 60))
+                return "还剩 \(minutes) 分钟"
+            }
+            return "还剩 \(hours) 小时"
+        }
+        let days = daysRemaining ?? Int(seconds / 86_400)
+        return "还剩 \(days) 天"
+    }
+
+    public static func cycleEndLabel(_ usage: UsageSnapshot) -> String {
+        usage.billingCycleEndOverridden ? "到期" : "重置"
     }
 
     public static func buildStatusLines(
@@ -157,11 +188,13 @@ public enum StatusText {
             rows.append(("明细", "First-party \(auto) · API \(api)"))
         }
         if let end = usage.billingCycleEnd {
-            let endText = formatResetDate(end)
-            if let days = usage.daysRemaining {
-                rows.append(("重置", "\(endText)（还剩 \(days) 天）"))
+            let endText = formatResetDate(end, includeTime: usage.billingCycleEndOverridden)
+            let remaining = formatCycleRemaining(end, daysRemaining: usage.daysRemaining)
+            let label = cycleEndLabel(usage)
+            if remaining.isEmpty {
+                rows.append((label, endText))
             } else {
-                rows.append(("重置", endText))
+                rows.append((label, "\(endText)（\(remaining)）"))
             }
             rows.append(("预计可用", formatEstimatedDays(usage)))
         } else if usage.estimatedUsableDays != nil {

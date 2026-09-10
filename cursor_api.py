@@ -96,6 +96,7 @@ class UsageSnapshot:
     pooled_limit_cents: float | None = None
     limit_type: str = ""
     is_unlimited: bool = False
+    billing_cycle_end_overridden: bool = False
 
     def is_team_account(self) -> bool:
         return is_team_membership(self.membership_type, self.limit_type)
@@ -877,12 +878,19 @@ def _parse_iso(iso_value: Any) -> datetime | None:
         return None
 
 
-def _days_until(iso_value: Any) -> int | None:
+def days_until(iso_value: Any, now: datetime | None = None) -> int | None:
     end = _parse_iso(iso_value)
     if end is None:
         return None
-    delta = end - datetime.now(timezone.utc)
+    clock = now or datetime.now(timezone.utc)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=timezone.utc)
+    delta = end - clock.astimezone(timezone.utc)
     return max(0, delta.days)
+
+
+def _days_until(iso_value: Any) -> int | None:
+    return days_until(iso_value)
 
 
 def _days_since(iso_value: Any) -> float | None:

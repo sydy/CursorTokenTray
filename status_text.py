@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from cursor_api import (
     UsageSnapshot,
@@ -109,13 +109,49 @@ def format_estimate_caption(usage: UsageSnapshot) -> str:
     return text
 
 
-def format_reset_date(iso_value: str) -> str:
+def format_reset_date(iso_value: str, include_time: bool = False) -> str:
     try:
         text = iso_value.replace("Z", "+00:00")
         dt = datetime.fromisoformat(text)
-        return f"{dt.month}月{dt.day}日"
+        if include_time and dt.tzinfo is not None:
+            dt = dt.astimezone()
+        text = f"{dt.month}月{dt.day}日"
+        if include_time and (dt.hour or dt.minute):
+            text += f" {dt.hour:02d}:{dt.minute:02d}"
+        return text
     except ValueError:
         return iso_value
+
+
+def format_cycle_remaining(end_iso: str | None, days_remaining: int | None, now: datetime | None = None) -> str:
+    if not end_iso:
+        return f"还剩 {days_remaining} 天" if days_remaining is not None else ""
+    try:
+        text = end_iso.replace("Z", "+00:00")
+        end = datetime.fromisoformat(text)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        clock = now or datetime.now(timezone.utc)
+        if clock.tzinfo is None:
+            clock = clock.replace(tzinfo=timezone.utc)
+        delta = end - clock.astimezone(end.tzinfo)
+    except ValueError:
+        return f"还剩 {days_remaining} 天" if days_remaining is not None else ""
+    seconds = delta.total_seconds()
+    if seconds <= 0:
+        return "已到期"
+    hours = int(seconds // 3600)
+    if hours < 24:
+        if hours < 1:
+            minutes = max(1, int(seconds // 60))
+            return f"还剩 {minutes} 分钟"
+        return f"还剩 {hours} 小时"
+    days = days_remaining if days_remaining is not None else int(seconds // 86400)
+    return f"还剩 {days} 天"
+
+
+def cycle_end_label(usage: UsageSnapshot) -> str:
+    return "到期" if usage.billing_cycle_end_overridden else "重置"
 
 
 def build_status_lines(
@@ -182,11 +218,15 @@ def build_status_lines(
         rows.append(("明细", f"First-party {auto} · API {api}"))
 
     if usage.billing_cycle_end:
-        end_text = format_reset_date(usage.billing_cycle_end)
-        if usage.days_remaining is not None:
-            rows.append(("重置", f"{end_text}（还剩 {usage.days_remaining} 天）"))
+        end_text = format_reset_date(
+            usage.billing_cycle_end, include_time=usage.billing_cycle_end_overridden
+        )
+        remaining = format_cycle_remaining(usage.billing_cycle_end, usage.days_remaining)
+        label = cycle_end_label(usage)
+        if remaining:
+            rows.append((label, f"{end_text}（{remaining}）"))
         else:
-            rows.append(("重置", end_text))
+            rows.append((label, end_text))
         rows.append(("预计可用", format_estimated_days(usage)))
     elif usage.estimated_usable_days is not None:
         rows.append(("预计可用", format_estimated_days(usage)))

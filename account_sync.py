@@ -1,7 +1,7 @@
 """账号多端同步：口令加密文件 + 按账号时间戳合并。
 
 同步文件可放进 iCloud / OneDrive / 坚果云 / U 盘。两端填相同口令即可。
-只同步账号身份（id / label / token / membership），不覆盖本机告警去重与用量缓存。
+只同步账号身份（id / label / token / membership / 临时有效期），不覆盖本机告警去重与用量缓存。
 """
 
 from __future__ import annotations
@@ -18,9 +18,12 @@ from pathlib import Path
 from typing import Any
 
 from accounts import (
+    clamp_temp_valid_days,
+    clamp_temp_valid_hours,
     empty_account,
     list_accounts,
     sanitize_account,
+    sanitize_account_kind,
     sync_legacy_fields,
 )
 
@@ -150,6 +153,10 @@ def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
         "label": str(account.get("label") or "").strip(),
         "token": str(account.get("token") or "").strip(),
         "membership_type": str(account.get("membership_type") or "").strip(),
+        "account_kind": sanitize_account_kind(account.get("account_kind")),
+        "temp_start_at": str(account.get("temp_start_at") or "").strip(),
+        "temp_valid_days": clamp_temp_valid_days(account.get("temp_valid_days")),
+        "temp_valid_hours": clamp_temp_valid_hours(account.get("temp_valid_hours")),
         "sync_updated_at": str(account.get("sync_updated_at") or "").strip(),
     }
 
@@ -173,7 +180,17 @@ def snapshot_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def snapshot_identity(snap: dict[str, Any]) -> tuple:
     accounts = tuple(
-        (a["id"], a["label"], a["token"], a["membership_type"], a["sync_updated_at"])
+        (
+            a["id"],
+            a["label"],
+            a["token"],
+            a["membership_type"],
+            a.get("account_kind") or "",
+            a.get("temp_start_at") or "",
+            int(a.get("temp_valid_days") or 0),
+            int(a.get("temp_valid_hours") or 0),
+            a["sync_updated_at"],
+        )
         for a in sorted(snap.get("accounts") or [], key=lambda x: x.get("id") or "")
     )
     deleted = tuple(
@@ -233,7 +250,20 @@ def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, 
 
 def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
     """把合并结果写回配置。保留本机用量缓存与告警去重。返回是否改了账号列表。"""
-    before = [(a.get("id"), a.get("token"), a.get("label"), a.get("membership_type"), a.get("sync_updated_at")) for a in list_accounts(cfg)]
+    before = [
+        (
+            a.get("id"),
+            a.get("token"),
+            a.get("label"),
+            a.get("membership_type"),
+            a.get("account_kind"),
+            a.get("temp_start_at"),
+            a.get("temp_valid_days"),
+            a.get("temp_valid_hours"),
+            a.get("sync_updated_at"),
+        )
+        for a in list_accounts(cfg)
+    ]
     existing = {str(a.get("id") or ""): a for a in list_accounts(cfg)}
     merged_accounts: list[dict[str, Any]] = []
     for row in snap.get("accounts") or []:
@@ -246,14 +276,14 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
         if old is None:
             acc = empty_account(token=ident["token"], account_id=ident["id"], label=ident["label"])
             acc["membership_type"] = ident["membership_type"]
-            acc["sync_updated_at"] = ident["sync_updated_at"]
+            _apply_identity(acc, ident)
             merged_accounts.append(acc)
             continue
         old["token"] = ident["token"]
         old["label"] = ident["label"]
         if ident["membership_type"]:
             old["membership_type"] = ident["membership_type"]
-        old["sync_updated_at"] = ident["sync_updated_at"]
+        _apply_identity(old, ident)
         merged_accounts.append(old)
 
     cfg["accounts"] = merged_accounts
@@ -267,8 +297,31 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
     else:
         cfg["active_account_id"] = ""
     sync_legacy_fields(cfg)
-    after = [(a.get("id"), a.get("token"), a.get("label"), a.get("membership_type"), a.get("sync_updated_at")) for a in list_accounts(cfg)]
+    after = [
+        (
+            a.get("id"),
+            a.get("token"),
+            a.get("label"),
+            a.get("membership_type"),
+            a.get("account_kind"),
+            a.get("temp_start_at"),
+            a.get("temp_valid_days"),
+            a.get("temp_valid_hours"),
+            a.get("sync_updated_at"),
+        )
+        for a in list_accounts(cfg)
+    ]
     return before != after
+
+
+def _apply_identity(account: dict[str, Any], ident: dict[str, Any]) -> None:
+    if ident.get("membership_type"):
+        account["membership_type"] = ident["membership_type"]
+    account["account_kind"] = sanitize_account_kind(ident.get("account_kind"))
+    account["temp_start_at"] = str(ident.get("temp_start_at") or "").strip()
+    account["temp_valid_days"] = clamp_temp_valid_days(ident.get("temp_valid_days"))
+    account["temp_valid_hours"] = clamp_temp_valid_hours(ident.get("temp_valid_hours"))
+    account["sync_updated_at"] = ident["sync_updated_at"]
 
 
 def derive_key(passphrase: str, salt: bytes, iterations: int = DEFAULT_ITERATIONS) -> bytes:

@@ -786,6 +786,48 @@ public class FixtureTests
     }
 
     [Fact]
+    public void AccountValidityCases()
+    {
+        var root = Load("account_validity_cases.json");
+        foreach (var row in root.GetProperty("kind").EnumerateArray())
+            Assert.Equal(row.GetProperty("output").GetString(), AccountValidity.SanitizeKind(row.GetProperty("input").GetString()));
+        foreach (var row in root.GetProperty("compute_end").EnumerateArray())
+        {
+            var got = AccountValidity.ComputeEndIso(
+                row.GetProperty("start").GetString(),
+                row.GetProperty("days").GetInt32(),
+                row.GetProperty("hours").GetInt32());
+            if (row.GetProperty("end").ValueKind == JsonValueKind.Null)
+                Assert.Null(got);
+            else
+                Assert.Equal(row.GetProperty("end").GetString(), got);
+        }
+        foreach (var row in root.GetProperty("override").EnumerateArray())
+        {
+            var accRaw = row.GetProperty("account");
+            var acc = new Account
+            {
+                AccountKind = accRaw.GetProperty("account_kind").GetString() ?? "",
+                TempStartAt = accRaw.GetProperty("temp_start_at").GetString() ?? "",
+                TempValidDays = accRaw.GetProperty("temp_valid_days").GetInt32(),
+                TempValidHours = accRaw.GetProperty("temp_valid_hours").GetInt32(),
+            };
+            var snap = new UsageSnapshot
+            {
+                BillingCycleEnd = row.GetProperty("api_end").GetString(),
+                DaysRemaining = 26,
+            };
+            var now = AccountSync.ParseIso(row.GetProperty("now").GetString()) ?? DateTimeOffset.UtcNow;
+            AccountValidity.ApplyEndOverride(snap, acc, now);
+            Assert.Equal(row.GetProperty("expected_end").GetString(), snap.BillingCycleEnd);
+            Assert.Equal(row.GetProperty("expected_days_remaining").GetInt32(), snap.DaysRemaining);
+            Assert.Equal(row.GetProperty("overridden").GetBoolean(), snap.BillingCycleEndOverridden);
+        }
+        var tmp = new Account { Label = "租号", AccountKind = AccountValidity.Temporary };
+        Assert.Contains("临时", tmp.Caption(false));
+    }
+
+    [Fact]
     public void CrashLogWritesExceptionAndIgnoresNull()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt-crash-" + Guid.NewGuid().ToString("N"));

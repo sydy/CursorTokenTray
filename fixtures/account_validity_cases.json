@@ -1,0 +1,119 @@
+{
+  "compute_end": [
+    {
+      "name": "days_and_hours",
+      "start": "2026-09-10T00:00:00.000Z",
+      "days": 3,
+      "hours": 5,
+      "end": "2026-09-13T05:00:00.000Z"
+    },
+    {
+      "name": "hours_only",
+      "start": "2026-09-10T12:30:00.000Z",
+      "days": 0,
+      "hours": 6,
+      "end": "2026-09-10T18:30:00.000Z"
+    },
+    {
+      "name": "days_only",
+      "start": "2026-09-10T08:00:00.000Z",
+      "days": 7,
+      "hours": 0,
+      "end": "2026-09-17T08:00:00.000Z"
+    },
+    {
+      "name": "zero_duration_is_empty",
+      "start": "2026-09-10T00:00:00.000Z",
+      "days": 0,
+      "hours": 0,
+      "end": null
+    },
+    {
+      "name": "missing_start_is_empty",
+      "start": "",
+      "days": 2,
+      "hours": 4,
+      "end": null
+    }
+  ],
+  "override": [
+    {
+      "name": "temporary_overrides_api_end",
+      "account": {
+        "account_kind": "temporary",
+        "temp_start_at": "2026-09-01T00:00:00.000Z",
+        "temp_valid_days": 10,
+        "temp_valid_hours": 0
+      },
+      "api_end": "2026-10-01T00:00:00.000Z",
+      "now": "2026-09-05T00:00:00.000Z",
+      "expected_end": "2026-09-11T00:00:00.000Z",
+      "expected_days_remaining": 6,
+      "overridden": true
+    },
+    {
+      "name": "temporary_with_hours",
+      "account": {
+        "account_kind": "temporary",
+        "temp_start_at": "2026-09-10T10:00:00.000Z",
+        "temp_valid_days": 1,
+        "temp_valid_hours": 6
+      },
+      "api_end": "2026-10-01T00:00:00.000Z",
+      "now": "2026-09-11T00:00:00.000Z",
+      "expected_end": "2026-09-11T16:00:00.000Z",
+      "expected_days_remaining": 0,
+      "overridden": true
+    },
+    {
+      "name": "long_term_keeps_api_end",
+      "account": {
+        "account_kind": "long_term",
+        "temp_start_at": "2026-09-01T00:00:00.000Z",
+        "temp_valid_days": 10,
+        "temp_valid_hours": 0
+      },
+      "api_end": "2026-10-01T00:00:00.000Z",
+      "now": "2026-09-05T00:00:00.000Z",
+      "expected_end": "2026-10-01T00:00:00.000Z",
+      "expected_days_remaining": 26,
+      "overridden": false
+    },
+    {
+      "name": "temporary_without_duration_keeps_api_end",
+      "account": {
+        "account_kind": "temporary",
+        "temp_start_at": "2026-09-01T00:00:00.000Z",
+        "temp_valid_days": 0,
+        "temp_valid_hours": 0
+      },
+      "api_end": "2026-10-01T00:00:00.000Z",
+      "now": "2026-09-05T00:00:00.000Z",
+      "expected_end": "2026-10-01T00:00:00.000Z",
+      "expected_days_remaining": 26,
+      "overridden": false
+    }
+  ],
+  "kind": [
+    {
+      "input": "temporary",
+      "output": "temporary"
+    },
+    {
+      "input": "temp",
+      "output": "temporary"
+    },
+    {
+      "input": "long_term",
+      "output": "long_term"
+    },
+    {
+      "input": "",
+      "output": "long_term"
+    },
+    {
+      "input": "permanent",
+      "output": "long_term"
+    }
+  ]
+}

@@ -63,6 +63,10 @@ public struct Account: Equatable, Sendable, Codable {
     public var label: String
     public var token: String
     public var membershipType: String
+    public var accountKind: String
+    public var tempStartAt: String
+    public var tempValidDays: Int
+    public var tempValidHours: Int
     public var lastRemaining: Double?
     public var lastError: String
     public var updatedAt: String
@@ -79,6 +83,10 @@ public struct Account: Equatable, Sendable, Codable {
         label: String = "",
         token: String = "",
         membershipType: String = "",
+        accountKind: String = AccountValidity.longTerm,
+        tempStartAt: String = "",
+        tempValidDays: Int = 0,
+        tempValidHours: Int = 0,
         lastRemaining: Double? = nil,
         lastError: String = "",
         updatedAt: String = "",
@@ -94,6 +102,10 @@ public struct Account: Equatable, Sendable, Codable {
         self.label = label
         self.token = token
         self.membershipType = membershipType
+        self.accountKind = AccountValidity.sanitizeKind(accountKind)
+        self.tempStartAt = tempStartAt
+        self.tempValidDays = AccountValidity.clampDays(tempValidDays)
+        self.tempValidHours = AccountValidity.clampHours(tempValidHours)
         self.lastRemaining = lastRemaining
         self.lastError = lastError
         self.updatedAt = updatedAt
@@ -122,6 +134,9 @@ public struct Account: Equatable, Sendable, Codable {
         let memb = membershipType.trimmingCharacters(in: .whitespaces)
         if !memb.isEmpty, memb.lowercased() != displayLabel.lowercased() {
             parts.append(memb)
+        }
+        if AccountValidity.isTemporary(self) {
+            parts.append("临时")
         }
         if let remaining = lastRemaining {
             parts.append(String(format: "剩余 %.0f%%", remaining))
@@ -265,6 +280,30 @@ public struct AppConfig: Equatable, Sendable {
         } else {
             accounts[idx].label = newLabel
         }
+        return true
+    }
+
+    public mutating func updateAccountValidity(
+        _ accountId: String,
+        kind: String,
+        startAt: String,
+        days: Int,
+        hours: Int
+    ) -> Bool {
+        guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else { return false }
+        let newKind = AccountValidity.sanitizeKind(kind)
+        let newStart = startAt.trimmingCharacters(in: .whitespaces)
+        let newDays = AccountValidity.clampDays(days)
+        let newHours = AccountValidity.clampHours(hours)
+        let changed = accounts[idx].accountKind != newKind
+            || accounts[idx].tempStartAt != newStart
+            || accounts[idx].tempValidDays != newDays
+            || accounts[idx].tempValidHours != newHours
+        accounts[idx].accountKind = newKind
+        accounts[idx].tempStartAt = newStart
+        accounts[idx].tempValidDays = newDays
+        accounts[idx].tempValidHours = newHours
+        if changed { AccountSync.touchAccount(&accounts[idx]) }
         return true
     }
 
@@ -552,6 +591,11 @@ public enum ConfigStore {
         acc.label = (raw["label"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         acc.membershipType = (raw["membershipType"] as? String ?? raw["membership_type"] as? String ?? "")
             .trimmingCharacters(in: .whitespaces)
+        acc.accountKind = AccountValidity.sanitizeKind(raw["account_kind"] as? String ?? raw["accountKind"] as? String)
+        acc.tempStartAt = (raw["temp_start_at"] as? String ?? raw["tempStartAt"] as? String ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        acc.tempValidDays = AccountValidity.clampDays(raw["temp_valid_days"] ?? raw["tempValidDays"])
+        acc.tempValidHours = AccountValidity.clampHours(raw["temp_valid_hours"] ?? raw["tempValidHours"])
         if !decryptFailed { acc.lastError = raw["last_error"] as? String ?? "" }
         acc.updatedAt = raw["updated_at"] as? String ?? ""
         acc.syncUpdatedAt = raw["sync_updated_at"] as? String ?? ""
@@ -620,6 +664,10 @@ public enum ConfigStore {
                         decryptFailed: acc.tokenDecryptFailed
                     ),
                     "membership_type": acc.membershipType,
+                    "account_kind": AccountValidity.sanitizeKind(acc.accountKind),
+                    "temp_start_at": acc.tempStartAt,
+                    "temp_valid_days": acc.tempValidDays,
+                    "temp_valid_hours": acc.tempValidHours,
                     "last_error": acc.lastError,
                     "updated_at": acc.updatedAt,
                     "sync_updated_at": acc.syncUpdatedAt,

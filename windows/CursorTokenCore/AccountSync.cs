@@ -17,6 +17,10 @@ public sealed class SyncAccount
     public string Label { get; set; } = "";
     public string Token { get; set; } = "";
     public string MembershipType { get; set; } = "";
+    public string AccountKind { get; set; } = AccountValidity.LongTerm;
+    public string TempStartAt { get; set; } = "";
+    public int TempValidDays { get; set; }
+    public int TempValidHours { get; set; }
     public string SyncUpdatedAt { get; set; } = "";
 }
 
@@ -142,6 +146,10 @@ public static class AccountSync
         Label = (account.Label ?? "").Trim(),
         Token = (account.Token ?? "").Trim(),
         MembershipType = (account.MembershipType ?? "").Trim(),
+        AccountKind = AccountValidity.SanitizeKind(account.AccountKind),
+        TempStartAt = (account.TempStartAt ?? "").Trim(),
+        TempValidDays = AccountValidity.ClampDays(account.TempValidDays),
+        TempValidHours = AccountValidity.ClampHours(account.TempValidHours),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
@@ -151,6 +159,10 @@ public static class AccountSync
         Label = (account.Label ?? "").Trim(),
         Token = (account.Token ?? "").Trim(),
         MembershipType = (account.MembershipType ?? "").Trim(),
+        AccountKind = AccountValidity.SanitizeKind(account.AccountKind),
+        TempStartAt = (account.TempStartAt ?? "").Trim(),
+        TempValidDays = AccountValidity.ClampDays(account.TempValidDays),
+        TempValidHours = AccountValidity.ClampHours(account.TempValidHours),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
@@ -177,7 +189,7 @@ public static class AccountSync
     public static string SnapshotIdentity(SyncSnapshot snap)
     {
         var accounts = snap.Accounts.OrderBy(a => a.Id, StringComparer.Ordinal)
-            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.SyncUpdatedAt}");
+            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.SyncUpdatedAt}");
         var deleted = snap.Deleted.OrderBy(d => d.Id, StringComparer.Ordinal)
             .Select(d => $"{d.Id}\n{d.DeletedAt}");
         return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}";
@@ -231,7 +243,7 @@ public static class AccountSync
     public static bool ApplySnapshotToConfig(AppConfig cfg, SyncSnapshot snap)
     {
         string Before() => string.Join("|", cfg.Accounts.Select(a =>
-            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.SyncUpdatedAt}"));
+            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.SyncUpdatedAt}"));
         var before = Before();
         var existing = cfg.Accounts.ToDictionary(a => a.Id, StringComparer.Ordinal);
         var merged = new List<Account>();
@@ -247,6 +259,10 @@ public static class AccountSync
                     Token = ident.Token,
                     Label = ident.Label,
                     MembershipType = ident.MembershipType,
+                    AccountKind = ident.AccountKind,
+                    TempStartAt = ident.TempStartAt,
+                    TempValidDays = ident.TempValidDays,
+                    TempValidHours = ident.TempValidHours,
                     SyncUpdatedAt = ident.SyncUpdatedAt,
                 });
                 continue;
@@ -254,6 +270,10 @@ public static class AccountSync
             old.Token = ident.Token;
             old.Label = ident.Label;
             if (ident.MembershipType.Length > 0) old.MembershipType = ident.MembershipType;
+            old.AccountKind = ident.AccountKind;
+            old.TempStartAt = ident.TempStartAt;
+            old.TempValidDays = ident.TempValidDays;
+            old.TempValidHours = ident.TempValidHours;
             old.SyncUpdatedAt = ident.SyncUpdatedAt;
             merged.Add(old);
         }
@@ -284,8 +304,17 @@ public static class AccountSync
             return Encoding.UTF8.GetString(bytes);
         }
         var accounts = string.Join(",", snap.Accounts.Select(a =>
-            $"{{\"id\":{Q(a.Id)},\"label\":{Q(a.Label)},\"membership_type\":{Q(a.MembershipType)},\"sync_updated_at\":{Q(a.SyncUpdatedAt)},\"token\":{Q(a.Token)}}}")
-        );
+        {
+            var extra = "";
+            if (AccountValidity.SanitizeKind(a.AccountKind) != AccountValidity.LongTerm
+                || !string.IsNullOrEmpty(a.TempStartAt)
+                || a.TempValidDays != 0
+                || a.TempValidHours != 0)
+            {
+                extra = $",\"account_kind\":{Q(AccountValidity.SanitizeKind(a.AccountKind))},\"temp_start_at\":{Q(a.TempStartAt ?? "")},\"temp_valid_days\":{a.TempValidDays},\"temp_valid_hours\":{a.TempValidHours}";
+            }
+            return $"{{\"id\":{Q(a.Id)},\"label\":{Q(a.Label)},\"membership_type\":{Q(a.MembershipType)},\"sync_updated_at\":{Q(a.SyncUpdatedAt)},\"token\":{Q(a.Token)}{extra}}}";
+        }));
         var deleted = string.Join(",", snap.Deleted.Select(d =>
             $"{{\"deleted_at\":{Q(d.DeletedAt)},\"id\":{Q(d.Id)}}}")
         );
@@ -369,6 +398,10 @@ public static class AccountSync
                     Label = Str(item, "label").Trim(),
                     Token = Str(item, "token").Trim(),
                     MembershipType = Str(item, "membership_type").Trim(),
+                    AccountKind = AccountValidity.SanitizeKind(Str(item, "account_kind")),
+                    TempStartAt = Str(item, "temp_start_at").Trim(),
+                    TempValidDays = AccountValidity.ClampDays(IntVal(item, "temp_valid_days")),
+                    TempValidHours = AccountValidity.ClampHours(IntVal(item, "temp_valid_hours")),
                     SyncUpdatedAt = Str(item, "sync_updated_at").Trim(),
                 };
                 if (acc.Id.Length > 0) snap.Accounts.Add(acc);
@@ -386,6 +419,14 @@ public static class AccountSync
 
     static string Str(JsonElement raw, string key) =>
         raw.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    static int? IntVal(JsonElement raw, string key)
+    {
+        if (!raw.TryGetProperty(key, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)) return n;
+        if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out n)) return n;
+        return null;
+    }
 
     public static JsonElement? ReadEnvelope(string path)
     {
