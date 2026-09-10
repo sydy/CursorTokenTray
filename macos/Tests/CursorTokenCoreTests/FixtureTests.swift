@@ -838,27 +838,33 @@ final class CursorAuthTests: XCTestCase {
             .trimmingCharacters(in: CharacterSet(charactersIn: "="))
     }
 
+    private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    private func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
+        value.withCString { sqlite3_bind_text(stmt, index, $0, -1, sqliteTransient) }
+    }
+
     private func seedDb(_ path: URL, items: [String: String], kv: (String, String)? = nil) throws {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
         defer { sqlite3_close(db) }
         XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB); CREATE TABLE cursorDiskKV (key TEXT, value BLOB);", nil, nil, nil), SQLITE_OK)
         var stmt: OpaquePointer?
-        sqlite3_prepare_v2(db, "INSERT INTO ItemTable(key, value) VALUES (?, ?)", -1, &stmt, nil)
+        XCTAssertEqual(sqlite3_prepare_v2(db, "INSERT INTO ItemTable(key, value) VALUES (?, ?)", -1, &stmt, nil), SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
-        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         for (k, v) in items {
             sqlite3_reset(stmt)
-            k.withCString { sqlite3_bind_text(stmt, 1, $0, -1, transient) }
-            v.withCString { sqlite3_bind_text(stmt, 2, $0, -1, transient) }
+            sqlite3_clear_bindings(stmt)
+            bindText(stmt, 1, k)
+            bindText(stmt, 2, v)
             XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
         }
         if let kv {
             var kvStmt: OpaquePointer?
-            sqlite3_prepare_v2(db, "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?)", -1, &kvStmt, nil)
+            XCTAssertEqual(sqlite3_prepare_v2(db, "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?)", -1, &kvStmt, nil), SQLITE_OK)
             defer { sqlite3_finalize(kvStmt) }
-            kv.0.withCString { sqlite3_bind_text(kvStmt, 1, $0, -1, transient) }
-            kv.1.withCString { sqlite3_bind_text(kvStmt, 2, $0, -1, transient) }
+            bindText(kvStmt, 1, kv.0)
+            bindText(kvStmt, 2, kv.1)
             XCTAssertEqual(sqlite3_step(kvStmt), SQLITE_DONE)
         }
     }
@@ -884,9 +890,9 @@ final class CursorAuthTests: XCTestCase {
         guard sqlite3_open_v2(path.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return "" }
         defer { sqlite3_close(db) }
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT value FROM cursorDiskKV WHERE key = ?", -1, &stmt, nil) == SQLITE_OK else { return "" }
+        guard sqlite3_prepare_v2(db, "SELECT value FROM cursorDiskKV WHERE key = ?", -1, &stmt, nil) == SQLITE_OK, let stmt else { return "" }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (key as NSString).utf8String, -1, nil)
+        bindText(stmt, 1, key)
         if sqlite3_step(stmt) == SQLITE_ROW {
             return sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
         }
