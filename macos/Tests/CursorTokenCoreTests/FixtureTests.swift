@@ -758,6 +758,7 @@ final class CursorAuthTests: XCTestCase {
             "mcpOAuth.secret.demo": "keep-secret",
             "theme": "dark",
         ], kv: ("chat-1", "transcript"))
+        XCTAssertEqual(readKv(db), "transcript", "seed must keep cursorDiskKV")
 
         let session = try jwt(["sub": "auth0|user_01SESS", "type": "session"])
         let built = CursorAuth.buildValues(token: session, email: "new@example.com", membershipType: "free", displayName: "新号")
@@ -775,7 +776,7 @@ final class CursorAuthTests: XCTestCase {
         XCTAssertEqual(got["cursorAuth/onboardingDate"], "2024-01-01T00:00:00.000Z")
         XCTAssertEqual(got["mcpOAuth.secret.demo"], "keep-secret")
         XCTAssertEqual(got["theme"], "dark")
-        XCTAssertEqual(readKv(db, "chat-1"), "transcript")
+        XCTAssertEqual(readKv(db), "transcript")
     }
 
     func testApplyRefusesWhenStillRunningAndWritesWhenClosed() throws {
@@ -848,7 +849,8 @@ final class CursorAuthTests: XCTestCase {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
         defer { sqlite3_close(db) }
-        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB); CREATE TABLE cursorDiskKV (key TEXT, value BLOB);", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE cursorDiskKV (key TEXT, value BLOB);", nil, nil, nil), SQLITE_OK)
         var stmt: OpaquePointer?
         XCTAssertEqual(sqlite3_prepare_v2(db, "INSERT INTO ItemTable(key, value) VALUES (?, ?)", -1, &stmt, nil), SQLITE_OK)
         defer { sqlite3_finalize(stmt) }
@@ -860,12 +862,8 @@ final class CursorAuthTests: XCTestCase {
             XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
         }
         if let kv {
-            var kvStmt: OpaquePointer?
-            XCTAssertEqual(sqlite3_prepare_v2(db, "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?)", -1, &kvStmt, nil), SQLITE_OK)
-            defer { sqlite3_finalize(kvStmt) }
-            bindText(kvStmt, 1, kv.0)
-            bindText(kvStmt, 2, kv.1)
-            XCTAssertEqual(sqlite3_step(kvStmt), SQLITE_DONE)
+            let sql = "INSERT INTO cursorDiskKV(key, value) VALUES ('\(kv.0)', '\(kv.1)');"
+            XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK, "seed cursorDiskKV")
         }
     }
 
@@ -885,14 +883,13 @@ final class CursorAuthTests: XCTestCase {
         return found
     }
 
-    private func readKv(_ path: URL, _ key: String) -> String {
+    private func readKv(_ path: URL) -> String {
         var db: OpaquePointer?
         guard sqlite3_open_v2(path.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return "" }
         defer { sqlite3_close(db) }
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT value FROM cursorDiskKV WHERE key = ?", -1, &stmt, nil) == SQLITE_OK, let stmt else { return "" }
+        guard sqlite3_prepare_v2(db, "SELECT value FROM cursorDiskKV WHERE key = 'chat-1'", -1, &stmt, nil) == SQLITE_OK else { return "" }
         defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, key)
         if sqlite3_step(stmt) == SQLITE_ROW {
             return sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
         }
