@@ -19,6 +19,17 @@ sealed class SettingsForm : Form
     readonly CheckBox _exhaust = new() { Text = "启用耗尽风险通知", AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
     readonly ComboBox _mode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     readonly CheckBox _auto = new() { Text = "开机自启", AutoSize = true, Margin = new Padding(0, 6, 0, 8) };
+    readonly CheckBox _syncEnable = new() { Text = "启用账号多端同步", AutoSize = true, Margin = new Padding(0, 8, 0, 4) };
+    readonly TextBox _syncPath = new() { Dock = DockStyle.Fill };
+    readonly TextBox _syncSecret = new() { Width = 220, UseSystemPasswordChar = true };
+    readonly Label _syncStatus = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 4, 0, 4) };
+    readonly Label _syncHint = new()
+    {
+        Text = "把同步文件夹放到 iCloud / OneDrive / 坚果云 等，两端填写相同口令。文件用口令加密，请勿分享口令。",
+        AutoSize = true,
+        ForeColor = Color.DimGray,
+        Margin = new Padding(0, 4, 0, 8),
+    };
     readonly ComboBox _accounts = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     readonly Label _addCaption = Caption("添加账号（粘贴 Token，请勿分享；已保存的不会显示）");
     readonly Label _status = new() { AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
@@ -46,7 +57,7 @@ sealed class SettingsForm : Form
         Text = "Cursor Token 设置";
         var icon = AppWindow.CreateIcon();
         if (icon is not null) Icon = icon;
-        ClientSize = new Size(540, 640);
+        ClientSize = new Size(540, 760);
         MinimumSize = new Size(480, 360);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -73,6 +84,17 @@ sealed class SettingsForm : Form
         _mode.Items.AddRange(["圆环百分比", "纯数字", "仅色点"]);
         _root.Controls.Add(FieldRow("托盘图标", _mode));
         _root.Controls.Add(_auto);
+        _root.Controls.Add(Caption("多端同步"));
+        _root.Controls.Add(_syncEnable);
+        var browse = ActionButton("浏览…");
+        _root.Controls.Add(FieldRow("同步文件夹", PathRow(_syncPath, browse)));
+        _root.Controls.Add(FieldRow("同步口令", _syncSecret));
+        var syncNow = ActionButton("立即同步");
+        var syncExport = ActionButton("导出…");
+        var syncImport = ActionButton("导入…");
+        _root.Controls.Add(Flow(syncNow, syncExport, syncImport));
+        _root.Controls.Add(_syncStatus);
+        _root.Controls.Add(_syncHint);
         var cancel = ActionButton("取消");
         var apply = ActionButton("应用");
         var save = ActionButton("保存");
@@ -106,6 +128,10 @@ sealed class SettingsForm : Form
         cancel.Click += (_, _) => Close();
         apply.Click += (_, _) => Persist(false);
         save.Click += (_, _) => { Persist(true); Close(); };
+        browse.Click += (_, _) => PickFolder();
+        syncNow.Click += (_, _) => DoSync();
+        syncExport.Click += (_, _) => DoExport();
+        syncImport.Click += (_, _) => DoImportFile();
         ResumeLayout(false);
         if (startImport) BeginInvoke(async () => await DoImport("cursor-app"));
     }
@@ -142,7 +168,7 @@ sealed class SettingsForm : Form
     void WrapText()
     {
         var inner = Math.Max(200, ClientSize.Width - _root.Padding.Horizontal - 8);
-        foreach (var label in new[] { _addCaption, _status, _hint })
+        foreach (var label in new[] { _addCaption, _status, _hint, _syncStatus, _syncHint })
             label.MaximumSize = new Size(inner, 0);
     }
 
@@ -229,9 +255,27 @@ sealed class SettingsForm : Form
             Anchor = AnchorStyles.Left,
             Margin = new Padding(0, 6, 12, 0),
         }, 0, 0);
-        field.Anchor = AnchorStyles.Left;
+        field.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         field.Margin = new Padding(0, 2, 0, 2);
         row.Controls.Add(field, 1, 0);
+        return row;
+    }
+
+    static TableLayoutPanel PathRow(TextBox path, Button browse)
+    {
+        var row = new TableLayoutPanel
+        {
+            AutoSize = true,
+            ColumnCount = 2,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0),
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        path.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        row.Controls.Add(path, 0, 0);
+        browse.Margin = new Padding(8, 0, 0, 0);
+        row.Controls.Add(browse, 1, 0);
         return row;
     }
 
@@ -258,8 +302,20 @@ sealed class SettingsForm : Form
             _exhaust.Checked = cfg.NotifyExhaustionRisk;
             _mode.SelectedIndex = cfg.TrayDisplayMode switch { "number" => 1, "dot" => 2, _ => 0 };
             _auto.Checked = cfg.AutostartEnabled;
+            _syncEnable.Checked = cfg.SyncEnabled;
+            _syncPath.Text = cfg.SyncPath;
+            _syncSecret.Text = "";
+            _syncSecret.PlaceholderText = string.IsNullOrEmpty(cfg.SyncSecret) ? "两端必须相同，用于加密同步文件" : "已保存，留空则不修改";
+            _syncStatus.Text = SyncStatusText(cfg);
         }
         finally { _loading = false; }
+    }
+
+    static string SyncStatusText(AppConfig cfg)
+    {
+        if (!string.IsNullOrWhiteSpace(cfg.SyncLastError)) return cfg.SyncLastError;
+        if (!string.IsNullOrWhiteSpace(cfg.SyncLastAt)) return "上次同步 " + cfg.SyncLastAt;
+        return cfg.SyncEnabled ? "尚未同步" : "";
     }
 
     void AddToken()
@@ -353,10 +409,79 @@ sealed class SettingsForm : Form
         _cfg.NotifyExhaustionRisk = _exhaust.Checked;
         _cfg.TrayDisplayMode = _mode.SelectedIndex switch { 1 => "number", 2 => "dot", _ => "ring" };
         _cfg.AutostartEnabled = _auto.Checked;
+        ReadSyncFields();
         if (!string.IsNullOrWhiteSpace(_token.Text))
             try { _cfg.UpsertAccount(_token.Text, activate: true); } catch { }
         _onSaved(_cfg);
         LoadFrom(_cfg);
+    }
+
+    void ReadSyncFields()
+    {
+        _cfg.SyncEnabled = _syncEnable.Checked;
+        _cfg.SyncPath = _syncPath.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(_syncSecret.Text))
+            _cfg.SyncSecret = _syncSecret.Text.Trim();
+    }
+
+    void PickFolder()
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = "选择同步文件夹（建议放到 iCloud / OneDrive / 坚果云）",
+            UseDescriptionForTitle = true,
+        };
+        if (!string.IsNullOrWhiteSpace(_syncPath.Text) && Directory.Exists(_syncPath.Text))
+            dlg.SelectedPath = _syncPath.Text;
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        _syncPath.Text = dlg.SelectedPath;
+    }
+
+    void DoSync()
+    {
+        ReadSyncFields();
+        var status = AccountSync.Reconcile(_cfg);
+        _syncStatus.Text = status.Message;
+        _status.Text = status.Ok ? status.Message : status.Message;
+        NotifySaved();
+        LoadFrom(_cfg);
+    }
+
+    void DoExport()
+    {
+        ReadSyncFields();
+        using var dlg = new SaveFileDialog
+        {
+            Filter = "同步文件|*.sync|JSON|*.json",
+            FileName = AccountSync.Filename,
+            Title = "导出加密账号包",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var dest = AccountSync.ExportToFile(_cfg, dlg.FileName);
+            _syncStatus.Text = "已导出到 " + dest;
+        }
+        catch (Exception ex) { _syncStatus.Text = ex.Message; }
+    }
+
+    void DoImportFile()
+    {
+        ReadSyncFields();
+        using var dlg = new OpenFileDialog
+        {
+            Filter = "同步文件|*.sync;*.json|所有文件|*.*",
+            Title = "导入加密账号包",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            AccountSync.ImportFromFile(_cfg, dlg.FileName);
+            _syncStatus.Text = "已从文件合并账号";
+            NotifySaved();
+            LoadFrom(_cfg);
+        }
+        catch (Exception ex) { _syncStatus.Text = ex.Message; }
     }
 
     sealed record AccountItem(string Id, string Caption)

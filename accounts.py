@@ -15,6 +15,7 @@ ACCOUNT_KEYS = (
     "last_remaining",
     "last_error",
     "updated_at",
+    "sync_updated_at",
     "alert_notified_levels",
     "auth_error_notified",
     "exhaustion_notified",
@@ -31,6 +32,7 @@ def empty_account(*, token: str = "", account_id: str = "", label: str = "") -> 
         "last_remaining": None,
         "last_error": "",
         "updated_at": "",
+        "sync_updated_at": "",
         "alert_notified_levels": [],
         "auth_error_notified": False,
         "exhaustion_notified": False,
@@ -52,6 +54,7 @@ def sanitize_account(raw: Any) -> dict[str, Any] | None:
     acc["membership_type"] = str(raw.get("membership_type") or "").strip()
     acc["last_error"] = str(raw.get("last_error") or "")
     acc["updated_at"] = str(raw.get("updated_at") or "")
+    acc["sync_updated_at"] = str(raw.get("sync_updated_at") or "")
     remaining = raw.get("last_remaining")
     if remaining is None or remaining == "":
         acc["last_remaining"] = None
@@ -164,9 +167,13 @@ def upsert_account(
         if not accounts:
             _copy_legacy_flags(cfg, existing)
         accounts.append(existing)
+    identity_changed = created or existing.get("token") != token
     existing["token"] = token
     if label is not None:
-        existing["label"] = str(label).strip()
+        new_label = str(label).strip()
+        if existing.get("label") != new_label:
+            identity_changed = True
+        existing["label"] = new_label
     if membership_type is not None:
         existing["membership_type"] = str(membership_type).strip()
     if remaining is not None:
@@ -174,6 +181,11 @@ def upsert_account(
         existing["last_error"] = ""
     if error is not None:
         existing["last_error"] = str(error)
+    if identity_changed or not str(existing.get("sync_updated_at") or "").strip():
+        from account_sync import forget_deleted, touch_account
+
+        touch_account(existing)
+        forget_deleted(cfg, account_id)
     cfg["accounts"] = accounts
     if activate:
         cfg["active_account_id"] = account_id
@@ -194,7 +206,14 @@ def rename_account(cfg: dict[str, Any], account_id: str, label: str) -> bool:
     acc = find_account(cfg, account_id)
     if acc is None:
         return False
-    acc["label"] = str(label or "").strip()
+    new_label = str(label or "").strip()
+    if acc.get("label") != new_label:
+        from account_sync import touch_account
+
+        acc["label"] = new_label
+        touch_account(acc)
+    else:
+        acc["label"] = new_label
     return True
 
 
@@ -207,6 +226,9 @@ def remove_account(cfg: dict[str, Any], account_id: str) -> bool:
     cfg["accounts"] = kept
     if str(cfg.get("active_account_id") or "") == target:
         cfg["active_account_id"] = str(kept[0]["id"]) if kept else ""
+    from account_sync import remember_deleted
+
+    remember_deleted(cfg, target)
     sync_legacy_fields(cfg)
     return True
 

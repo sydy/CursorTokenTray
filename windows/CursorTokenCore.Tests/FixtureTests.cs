@@ -652,6 +652,100 @@ public class FixtureTests
     }
 
     [Fact]
+    public void AccountSyncCases()
+    {
+        var root = Load("account_sync_cases.json");
+        Assert.Equal("cursortokentray.accounts.v1", root.GetProperty("format").GetString());
+        Assert.Equal(AccountSync.Filename, root.GetProperty("filename").GetString());
+        foreach (var row in root.GetProperty("resolve_path").EnumerateArray())
+        {
+            var got = AccountSync.ResolveSyncPath(row.GetProperty("input").GetString() ?? "");
+            var suffix = row.GetProperty("output_suffix").GetString() ?? "";
+            if (suffix.Length == 0) Assert.Equal("", got);
+            else Assert.EndsWith(suffix, got.Replace('\\', '/'));
+        }
+        foreach (var cse in root.GetProperty("merge").EnumerateArray())
+        {
+            var name = cse.GetProperty("name").GetString();
+            if (cse.TryGetProperty("apply", out var apply) && apply.GetBoolean())
+            {
+                var cfg = ConfigFromAccounts(cse.GetProperty("config"));
+                var snap = AccountSync.ParseSnapshot(cse.GetProperty("snapshot"));
+                AccountSync.ApplySnapshotToConfig(cfg, snap);
+                var acc = cfg.Accounts[0];
+                var exp = cse.GetProperty("expected");
+                Assert.Equal(exp.GetProperty("label").GetString(), acc.Label);
+                Assert.Equal(exp.GetProperty("token").GetString(), acc.Token);
+                Assert.Equal(exp.GetProperty("membership_type").GetString(), acc.MembershipType);
+                Assert.Equal(exp.GetProperty("last_remaining").GetDouble(), acc.LastRemaining);
+                Assert.Equal(exp.GetProperty("alert_notified_levels").EnumerateArray().Select(x => x.GetInt32()).ToList(), acc.AlertNotifiedLevels);
+                Assert.True(acc.AuthErrorNotified);
+                Assert.True(acc.LowQuotaNotified);
+                continue;
+            }
+            var merged = AccountSync.MergeSnapshots(ParseSnap(cse.GetProperty("local")), ParseSnap(cse.GetProperty("remote")));
+            var expected = cse.GetProperty("expected");
+            Assert.Equal(expected.GetProperty("active_account_id").GetString(), merged.ActiveAccountId);
+            Assert.Equal(expected.GetProperty("ids").EnumerateArray().Select(x => x.GetString()!).ToList(), merged.Accounts.Select(a => a.Id).ToList());
+            foreach (var kv in expected.GetProperty("labels").EnumerateObject())
+                Assert.Equal(kv.Value.GetString(), merged.Accounts.First(a => a.Id == kv.Name).Label);
+            foreach (var kv in expected.GetProperty("tokens").EnumerateObject())
+                Assert.Equal(kv.Value.GetString(), merged.Accounts.First(a => a.Id == kv.Name).Token);
+            Assert.Equal(expected.GetProperty("deleted_ids").EnumerateArray().Select(x => x.GetString()!).ToList(), merged.Deleted.Select(d => d.Id).ToList());
+            _ = name;
+        }
+        var crypto = root.GetProperty("crypto");
+        var payload = AccountSync.ParseSnapshot(crypto.GetProperty("plaintext"));
+        var env = AccountSync.EncryptEnvelope(
+            payload,
+            crypto.GetProperty("passphrase").GetString()!,
+            Convert.FromBase64String(crypto.GetProperty("salt").GetString()!),
+            Convert.FromBase64String(crypto.GetProperty("nonce").GetString()!),
+            root.GetProperty("iterations").GetInt32());
+        Assert.Equal(crypto.GetProperty("ciphertext").GetString(), env["ciphertext"]?.ToString());
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["format"] = root.GetProperty("format").GetString()!,
+            ["kdf"] = root.GetProperty("kdf").GetString()!,
+            ["iterations"] = root.GetProperty("iterations").GetInt32(),
+            ["salt"] = crypto.GetProperty("salt").GetString()!,
+            ["nonce"] = crypto.GetProperty("nonce").GetString()!,
+            ["ciphertext"] = crypto.GetProperty("ciphertext").GetString()!,
+        }));
+        var opened = AccountSync.DecryptEnvelope(doc.RootElement, crypto.GetProperty("passphrase").GetString()!);
+        Assert.Equal("user_01A", opened.Accounts[0].Id);
+        Assert.Throws<CursorApiException>(() => AccountSync.DecryptEnvelope(doc.RootElement, "wrong-pass"));
+    }
+
+    static SyncSnapshot ParseSnap(JsonElement raw) => AccountSync.ParseSnapshot(raw);
+
+    static AppConfig ConfigFromAccounts(JsonElement raw)
+    {
+        var cfg = new AppConfig();
+        if (raw.TryGetProperty("accounts", out var arr))
+        {
+            foreach (var item in arr.EnumerateArray())
+            {
+                cfg.Accounts.Add(new Account
+                {
+                    Id = item.GetProperty("id").GetString() ?? "",
+                    Label = item.GetProperty("label").GetString() ?? "",
+                    Token = item.GetProperty("token").GetString() ?? "",
+                    MembershipType = item.GetProperty("membership_type").GetString() ?? "",
+                    SyncUpdatedAt = item.GetProperty("sync_updated_at").GetString() ?? "",
+                    LastRemaining = item.TryGetProperty("last_remaining", out var lr) && lr.ValueKind == JsonValueKind.Number ? lr.GetDouble() : null,
+                    AlertNotifiedLevels = item.TryGetProperty("alert_notified_levels", out var an)
+                        ? an.EnumerateArray().Select(x => x.GetInt32()).ToList() : [],
+                    AuthErrorNotified = item.TryGetProperty("auth_error_notified", out var ae) && ae.GetBoolean(),
+                    LowQuotaNotified = item.TryGetProperty("low_quota_notified", out var lq) && lq.GetBoolean(),
+                });
+            }
+        }
+        cfg.ActiveAccountId = raw.TryGetProperty("active_account_id", out var aid) ? aid.GetString() ?? "" : "";
+        return cfg;
+    }
+
+    [Fact]
     public void CrashLogWritesExceptionAndIgnoresNull()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ctt-crash-" + Guid.NewGuid().ToString("N"));

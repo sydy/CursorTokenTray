@@ -13,6 +13,7 @@ public sealed class Account
     public double? LastRemaining { get; set; }
     public string LastError { get; set; } = "";
     public string UpdatedAt { get; set; } = "";
+    public string SyncUpdatedAt { get; set; } = "";
     public List<int> AlertNotifiedLevels { get; set; } = [];
     public bool AuthErrorNotified { get; set; }
     public bool ExhaustionNotified { get; set; }
@@ -63,6 +64,15 @@ public sealed class AppConfig
     public bool AuthErrorNotified { get; set; }
     public List<int> AlertNotifiedLevels { get; set; } = [];
     public bool ExhaustionNotified { get; set; }
+    public bool SyncEnabled { get; set; }
+    public string SyncPath { get; set; } = "";
+    public string SyncSecret { get; set; } = "";
+    public string SyncDeviceId { get; set; } = "";
+    public string SyncLastAt { get; set; } = "";
+    public string SyncLastError { get; set; } = "";
+    public bool SyncSecretDecryptFailed { get; set; }
+    public string StoredSyncSecret { get; set; } = "";
+    public List<DeletedAccount> DeletedAccounts { get; set; } = [];
     /// <summary>True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.</summary>
     public bool LoadError { get; set; }
     /// <summary>True when a stored <c>enc:v1:</c> session token could not be decrypted.</summary>
@@ -88,11 +98,22 @@ public sealed class AppConfig
             if (Accounts.Count == 0) CopyLegacyFlags(existing);
             Accounts.Add(existing);
         }
+        var identityChanged = created || existing.Token != token;
         existing.Token = token;
-        if (label is not null) existing.Label = label.Trim();
+        if (label is not null)
+        {
+            var newLabel = label.Trim();
+            if (existing.Label != newLabel) identityChanged = true;
+            existing.Label = newLabel;
+        }
         if (membershipType is not null) existing.MembershipType = membershipType.Trim();
         if (remaining is not null) { existing.LastRemaining = Numbers.Round2(remaining.Value); existing.LastError = ""; }
         if (error is not null) existing.LastError = error;
+        if (identityChanged || string.IsNullOrWhiteSpace(existing.SyncUpdatedAt))
+        {
+            AccountSync.TouchAccount(existing);
+            AccountSync.ForgetDeleted(this, accountId);
+        }
         if (activate) ActiveAccountId = accountId;
         SyncLegacyFields();
         return (existing, created);
@@ -110,7 +131,13 @@ public sealed class AppConfig
     {
         var acc = Accounts.FirstOrDefault(a => a.Id == id);
         if (acc is null) return false;
-        acc.Label = label.Trim();
+        var newLabel = label.Trim();
+        if (acc.Label != newLabel)
+        {
+            acc.Label = newLabel;
+            AccountSync.TouchAccount(acc);
+        }
+        else acc.Label = newLabel;
         return true;
     }
 
@@ -119,6 +146,7 @@ public sealed class AppConfig
         var n = Accounts.RemoveAll(a => a.Id == id);
         if (n == 0) return false;
         if (ActiveAccountId == id) ActiveAccountId = Accounts.FirstOrDefault()?.Id ?? "";
+        AccountSync.RememberDeleted(this, id);
         SyncLegacyFields();
         return true;
     }
@@ -382,6 +410,24 @@ public static class ConfigStore
         cfg.AlertNotifiedLevels = ParseIntList(raw.TryGetProperty("alert_notified_levels", out var an) ? an : default);
         cfg.Accounts = ParseAccounts(raw);
         if (cfg.Accounts.Any(a => a.TokenDecryptFailed)) cfg.DecryptError = true;
+        cfg.SyncEnabled = Bool(raw, "sync_enabled", false);
+        cfg.SyncPath = Str(raw, "sync_path").Trim();
+        if (raw.TryGetProperty("sync_secret", out var ss))
+        {
+            var stored = ss.GetString() ?? "";
+            if (TokenProtector.TryUnprotect(stored, out var plain))
+                cfg.SyncSecret = plain;
+            else
+            {
+                cfg.SyncSecret = "";
+                cfg.SyncSecretDecryptFailed = true;
+                cfg.StoredSyncSecret = stored;
+            }
+        }
+        cfg.SyncDeviceId = Str(raw, "sync_device_id").Trim();
+        cfg.SyncLastAt = Str(raw, "sync_last_at").Trim();
+        cfg.SyncLastError = Str(raw, "sync_last_error");
+        cfg.DeletedAccounts = ParseDeleted(raw);
         return NormalizeAccounts(cfg, raw);
     }
 
@@ -464,6 +510,7 @@ public static class ConfigStore
         acc.MembershipType = membership.Trim();
         if (!decryptFailed) acc.LastError = Str(raw, "last_error");
         acc.UpdatedAt = Str(raw, "updated_at");
+        acc.SyncUpdatedAt = Str(raw, "sync_updated_at");
         if (raw.TryGetProperty("last_remaining", out var lr) && lr.ValueKind is JsonValueKind.Number)
             acc.LastRemaining = Numbers.Round2(lr.GetDouble());
         acc.AlertNotifiedLevels = ParseIntList(raw.TryGetProperty("alert_notified_levels", out var an) ? an : default);
@@ -497,6 +544,7 @@ public static class ConfigStore
             ["last_remaining"] = a.LastRemaining,
             ["last_error"] = a.LastError,
             ["updated_at"] = a.UpdatedAt,
+            ["sync_updated_at"] = a.SyncUpdatedAt,
             ["alert_notified_levels"] = a.AlertNotifiedLevels,
             ["auth_error_notified"] = a.AuthErrorNotified,
             ["exhaustion_notified"] = a.ExhaustionNotified,
@@ -514,5 +562,25 @@ public static class ConfigStore
         auth_error_notified = cfg.AuthErrorNotified,
         alert_notified_levels = cfg.AlertNotifiedLevels,
         exhaustion_notified = cfg.ExhaustionNotified,
+        sync_enabled = cfg.SyncEnabled,
+        sync_path = cfg.SyncPath,
+        sync_secret = TokenProtector.DiskToken(cfg.SyncSecret, cfg.StoredSyncSecret, cfg.SyncSecretDecryptFailed && string.IsNullOrEmpty(cfg.SyncSecret)),
+        sync_device_id = cfg.SyncDeviceId,
+        sync_last_at = cfg.SyncLastAt,
+        sync_last_error = cfg.SyncLastError,
+        deleted_accounts = cfg.DeletedAccounts.Select(d => new Dictionary<string, object?>
+        {
+            ["id"] = d.Id,
+            ["deleted_at"] = d.DeletedAt,
+        }).ToList(),
     };
+
+    static List<DeletedAccount> ParseDeleted(JsonElement raw)
+    {
+        if (!raw.TryGetProperty("deleted_accounts", out var arr) || arr.ValueKind != JsonValueKind.Array) return [];
+        var rows = new List<DeletedAccount>();
+        foreach (var item in arr.EnumerateArray())
+            rows.Add(new DeletedAccount { Id = Str(item, "id").Trim(), DeletedAt = Str(item, "deleted_at").Trim() });
+        return AccountSync.SanitizeDeleted(rows);
+    }
 }

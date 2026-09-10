@@ -570,6 +570,116 @@ final class UsageParserFixtureTests: XCTestCase {
     }
 }
 
+final class AccountSyncFixtureTests: XCTestCase {
+    func testAccountSyncCases() throws {
+        let root = try XCTUnwrap(try json("account_sync_cases.json") as? [String: Any])
+        XCTAssertEqual(str(root["format"]), AccountSync.format)
+        XCTAssertEqual(str(root["filename"]), AccountSync.filename)
+        for row in root["resolve_path"] as! [[String: Any]] {
+            let got = AccountSync.resolveSyncPath(str(row["input"]))
+            let suffix = str(row["output_suffix"])
+            if suffix.isEmpty { XCTAssertEqual(got, "") }
+            else { XCTAssertTrue(got.hasSuffix(suffix), "\(got) vs \(suffix)") }
+        }
+        for cse in root["merge"] as! [[String: Any]] {
+            if bool(cse["apply"]) {
+                var cfg = AppConfig.default
+                let raw = cse["config"] as! [String: Any]
+                if let rows = raw["accounts"] as? [[String: Any]] {
+                    cfg.accounts = rows.map { row in
+                        var acc = Account(
+                            id: str(row["id"]),
+                            label: str(row["label"]),
+                            token: str(row["token"]),
+                            membershipType: str(row["membership_type"])
+                        )
+                        acc.syncUpdatedAt = str(row["sync_updated_at"])
+                        acc.lastRemaining = num(row["last_remaining"])
+                        acc.alertNotifiedLevels = (row["alert_notified_levels"] as? [Int]) ?? []
+                        acc.authErrorNotified = bool(row["auth_error_notified"])
+                        acc.lowQuotaNotified = bool(row["low_quota_notified"])
+                        return acc
+                    }
+                }
+                cfg.activeAccountId = str(raw["active_account_id"])
+                let snap = AccountSync.parseSnapshot(cse["snapshot"] as! [String: Any])
+                _ = AccountSync.applySnapshotToConfig(&cfg, snap)
+                let acc = cfg.accounts[0]
+                let exp = cse["expected"] as! [String: Any]
+                XCTAssertEqual(acc.label, str(exp["label"]))
+                XCTAssertEqual(acc.token, str(exp["token"]))
+                XCTAssertEqual(acc.membershipType, str(exp["membership_type"]))
+                XCTAssertEqual(acc.lastRemaining ?? -1, num(exp["last_remaining"]) ?? -2, accuracy: 0.001)
+                XCTAssertEqual(acc.alertNotifiedLevels, exp["alert_notified_levels"] as? [Int] ?? [])
+                XCTAssertTrue(acc.authErrorNotified)
+                XCTAssertTrue(acc.lowQuotaNotified)
+                continue
+            }
+            let merged = AccountSync.mergeSnapshots(
+                AccountSync.parseSnapshot(cse["local"] as! [String: Any]),
+                AccountSync.parseSnapshot(cse["remote"] as! [String: Any])
+            )
+            let exp = cse["expected"] as! [String: Any]
+            XCTAssertEqual(merged.activeAccountId, str(exp["active_account_id"]), str(cse["name"]))
+            XCTAssertEqual(merged.accounts.map(\.id), stringArray(exp["ids"]), str(cse["name"]))
+            let labels = exp["labels"] as! [String: Any]
+            let tokens = exp["tokens"] as! [String: Any]
+            for acc in merged.accounts {
+                XCTAssertEqual(acc.label, str(labels[acc.id]))
+                XCTAssertEqual(acc.token, str(tokens[acc.id]))
+            }
+            XCTAssertEqual(merged.deleted.map(\.id), stringArray(exp["deleted_ids"]))
+        }
+        let crypto = root["crypto"] as! [String: Any]
+        let payload = AccountSync.parseSnapshot(crypto["plaintext"] as! [String: Any])
+        let env = try AccountSync.encryptEnvelope(
+            payload,
+            passphrase: str(crypto["passphrase"]),
+            salt: Data(base64Encoded: str(crypto["salt"])),
+            nonce: Data(base64Encoded: str(crypto["nonce"])),
+            iterations: int(root["iterations"]) ?? 0
+        )
+        XCTAssertEqual(str(env["ciphertext"]), str(crypto["ciphertext"]))
+        let opened = try AccountSync.decryptEnvelope([
+            "format": str(root["format"]),
+            "kdf": str(root["kdf"]),
+            "iterations": int(root["iterations"]) ?? 0,
+            "salt": str(crypto["salt"]),
+            "nonce": str(crypto["nonce"]),
+            "ciphertext": str(crypto["ciphertext"]),
+        ], passphrase: str(crypto["passphrase"]))
+        XCTAssertEqual(opened.accounts[0].id, "user_01A")
+        XCTAssertThrowsError(try AccountSync.decryptEnvelope([
+            "format": str(root["format"]),
+            "kdf": str(root["kdf"]),
+            "iterations": int(root["iterations"]) ?? 0,
+            "salt": str(crypto["salt"]),
+            "nonce": str(crypto["nonce"]),
+            "ciphertext": str(crypto["ciphertext"]),
+        ], passphrase: "wrong-pass"))
+    }
+
+    private func json(_ name: String) throws -> Any { try Fixtures.json(name) }
+    private func num(_ value: Any?) -> Double? {
+        if value == nil || value is NSNull { return nil }
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let d = value as? Double { return d }
+        return nil
+    }
+    private func int(_ value: Any?) -> Int? { num(value).map { Int($0.rounded()) } }
+    private func bool(_ value: Any?) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        return false
+    }
+    private func str(_ value: Any?) -> String { value as? String ?? "" }
+    private func stringArray(_ value: Any?) -> [String] {
+        if let arr = value as? [String] { return arr }
+        if let arr = value as? [Any] { return arr.compactMap { $0 as? String } }
+        return []
+    }
+}
+
 final class InstanceLockTests: XCTestCase {
     func testLooksLikeOurExecutable() {
         XCTAssertTrue(InstanceLock.looksLikeOurExecutable("/Applications/CursorTokenTray.app/Contents/MacOS/CursorTokenTray"))
