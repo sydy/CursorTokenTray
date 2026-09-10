@@ -27,69 +27,69 @@ static class UsageChartPalette
     }
 }
 
-sealed class UsageChartPanel : TableLayoutPanel
+sealed class UsageChartPanel : Panel
 {
-    public const int DesignPlotH = 168;
-    const int DesignHeaderH = 28;
-    const int DesignLegendH = 28;
+    public const int DesignPlotH = UsageChartLayout.DesignPlotH;
 
-    readonly Label _caption = new() { AutoSize = true, ForeColor = Color.DimGray, Text = "按日 Token（北京时间）", Anchor = AnchorStyles.Left };
-    readonly Button _dayBtn = MakeToggle("按日");
-    readonly Button _hourBtn = MakeToggle("按小时");
+    readonly Label _caption = new()
+    {
+        AutoSize = true,
+        ForeColor = Color.DimGray,
+        Text = "按日 Token（北京时间）",
+        Margin = new Padding(0, 4, 8, 4),
+        Anchor = AnchorStyles.Left | AnchorStyles.Top,
+    };
+    readonly SegmentedToggle _toggle = new();
+    readonly TableLayoutPanel _header = new()
+    {
+        ColumnCount = 2,
+        RowCount = 1,
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Margin = new Padding(0),
+        Padding = new Padding(0, 2, 0, 2),
+    };
     readonly FlowLayoutPanel _legend = new()
     {
         AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
         WrapContents = true,
-        Dock = DockStyle.Fill,
-        Margin = new Padding(0, 2, 0, 4),
+        Dock = DockStyle.Top,
+        Margin = new Padding(0, 2, 0, 6),
+        Padding = new Padding(0),
     };
-    readonly UsageChartBox _plot = new() { Dock = DockStyle.Fill };
+    readonly UsageChartBox _plot = new() { Dock = DockStyle.Top, Margin = new Padding(0) };
+    readonly ToolTip _tip = new();
     readonly HashSet<string> _hidden = new(StringComparer.Ordinal);
     List<UsageEvent> _events = [];
     bool _hourly;
+    int _legendWidth = -1;
 
     public UsageChartPanel()
     {
-        ColumnCount = 1;
-        RowCount = 3;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Dock = DockStyle.Fill;
         Margin = new Padding(0);
-        RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        Padding = new Padding(0);
 
-        var header = new TableLayoutPanel
-        {
-            ColumnCount = 2,
-            RowCount = 1,
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            Margin = new Padding(0),
-        };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var toggles = new FlowLayoutPanel
-        {
-            AutoSize = true,
-            WrapContents = false,
-            Margin = new Padding(0),
-            Anchor = AnchorStyles.Right,
-        };
-        toggles.Controls.Add(_dayBtn);
-        toggles.Controls.Add(_hourBtn);
-        header.Controls.Add(_caption, 0, 0);
-        header.Controls.Add(toggles, 1, 0);
+        _header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _toggle.Anchor = AnchorStyles.Right | AnchorStyles.Top;
+        _toggle.Margin = new Padding(0);
+        _header.Controls.Add(_caption, 0, 0);
+        _header.Controls.Add(_toggle, 1, 0);
 
-        Controls.Add(header, 0, 0);
-        Controls.Add(_legend, 0, 1);
-        Controls.Add(_plot, 0, 2);
+        // Dock.Top: last added sits at the top.
+        Controls.Add(_plot);
+        Controls.Add(_legend);
+        Controls.Add(_header);
 
-        _dayBtn.Click += (_, _) => SetHourly(false);
-        _hourBtn.Click += (_, _) => SetHourly(true);
-        StyleToggles();
+        _toggle.HourlyChanged += (_, _) => SetHourly(_toggle.Hourly);
+        _plot.Height = UsageChartLayout.PlotHeight(DeviceDpi);
     }
-
-    public static int DesignHeight => DesignHeaderH + DesignLegendH + DesignPlotH + 8;
 
     public void Bind(IReadOnlyList<UsageEvent> events)
     {
@@ -101,41 +101,47 @@ sealed class UsageChartPanel : TableLayoutPanel
 
     public void ApplyDpi(int dpi)
     {
-        _dayBtn.Padding = new Padding(UiLayout.ScalePx(10, dpi), UiLayout.ScalePx(2, dpi), UiLayout.ScalePx(10, dpi), UiLayout.ScalePx(2, dpi));
-        _hourBtn.Padding = new Padding(UiLayout.ScalePx(10, dpi), UiLayout.ScalePx(2, dpi), UiLayout.ScalePx(10, dpi), UiLayout.ScalePx(2, dpi));
+        _toggle.ApplyDpi(dpi);
+        _plot.Height = UsageChartLayout.PlotHeight(dpi);
         foreach (Control chip in _legend.Controls)
             chip.Font = Font;
+        SyncLegendWidth(force: true);
+        PerformLayout();
+    }
+
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        var w = proposedSize.Width > 1 ? proposedSize.Width : Math.Max(ClientSize.Width, 200);
+        var headerH = Math.Max(_header.GetPreferredSize(new Size(w, 0)).Height, UsageChartLayout.HeaderHeight(DeviceDpi));
+        var legendH = 0;
+        if (_legend.Visible && _legend.Controls.Count > 0)
+            legendH = _legend.GetPreferredSize(new Size(w, 0)).Height + _legend.Margin.Vertical;
+        var plotH = Math.Max(_plot.Height, UsageChartLayout.PlotHeight(DeviceDpi)) + _plot.Margin.Vertical;
+        return new Size(w, headerH + legendH + plotH);
+    }
+
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        SyncLegendWidth(force: false);
+    }
+
+    void SyncLegendWidth(bool force)
+    {
+        var w = Math.Max(1, ClientSize.Width);
+        if (!force && _legendWidth == w) return;
+        _legendWidth = w;
+        _legend.MaximumSize = new Size(w, 0);
+        _legend.PerformLayout();
     }
 
     void SetHourly(bool hourly)
     {
         if (_hourly == hourly) return;
         _hourly = hourly;
-        StyleToggles();
+        _toggle.Hourly = hourly;
         Rebuild();
     }
-
-    void StyleToggles()
-    {
-        StyleToggle(_dayBtn, !_hourly);
-        StyleToggle(_hourBtn, _hourly);
-    }
-
-    static void StyleToggle(Button btn, bool on)
-    {
-        btn.BackColor = on ? Color.FromArgb(0, 120, 212) : Color.White;
-        btn.ForeColor = on ? Color.White : Color.FromArgb(32, 32, 32);
-        btn.FlatAppearance.BorderColor = on ? Color.FromArgb(0, 120, 212) : Color.FromArgb(180, 180, 180);
-    }
-
-    static Button MakeToggle(string text) => new()
-    {
-        Text = text,
-        AutoSize = true,
-        FlatStyle = FlatStyle.Flat,
-        Margin = new Padding(0, 0, 4, 0),
-        Cursor = Cursors.Hand,
-    };
 
     void Rebuild()
     {
@@ -152,41 +158,154 @@ sealed class UsageChartPanel : TableLayoutPanel
         _legend.Controls.Clear();
         if (series.Models.Count == 0)
         {
+            _legend.Visible = false;
             _legend.ResumeLayout();
+            NotifyParentLayout();
             return;
         }
+        _legend.Visible = true;
         foreach (var name in series.Models)
         {
-            var chip = new LegendChip(name, UsageChartPalette.ForModel(series.Models, name), !_hidden.Contains(name));
+            var chip = new LegendChip(name, UsageChartPalette.ForModel(series.Models, name), !_hidden.Contains(name))
+            {
+                Font = Font,
+            };
             chip.Toggled += (_, _) =>
             {
                 if (_hidden.Contains(name)) _hidden.Remove(name);
                 else _hidden.Add(name);
                 Rebuild();
             };
+            _tip.SetToolTip(chip, "显示 / 隐藏此模型");
             _legend.Controls.Add(chip);
         }
-        _legend.ResumeLayout();
+        _legend.ResumeLayout(true);
+        SyncLegendWidth(force: true);
+        NotifyParentLayout();
+    }
+
+    void NotifyParentLayout()
+    {
+        PerformLayout();
+        Parent?.PerformLayout();
+    }
+}
+
+sealed class SegmentedToggle : Control
+{
+    public event EventHandler? HourlyChanged;
+    bool _hourly;
+
+    public bool Hourly
+    {
+        get => _hourly;
+        set
+        {
+            if (_hourly == value) return;
+            _hourly = value;
+            Invalidate();
+        }
+    }
+
+    public SegmentedToggle()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        Cursor = Cursors.Hand;
+        AutoSize = true;
+        TabStop = false;
+        Size = new Size(UsageChartLayout.DesignToggleW, UsageChartLayout.DesignToggleH);
+    }
+
+    public void ApplyDpi(int dpi) => Size = new Size(UsageChartLayout.ToggleWidth(dpi), UsageChartLayout.ToggleHeight(dpi));
+
+    public override Size GetPreferredSize(Size proposedSize) =>
+        new(UsageChartLayout.ToggleWidth(DeviceDpi), UsageChartLayout.ToggleHeight(DeviceDpi));
+
+    protected override void OnFontChanged(EventArgs e)
+    {
+        base.OnFontChanged(e);
+        ApplyDpi(DeviceDpi);
+    }
+
+    protected override void OnDpiChangedAfterParent(EventArgs e)
+    {
+        base.OnDpiChangedAfterParent(e);
+        ApplyDpi(DeviceDpi);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.Button != MouseButtons.Left) return;
+        var hourly = e.X >= Width / 2;
+        if (_hourly == hourly) return;
+        _hourly = hourly;
+        Invalidate();
+        HourlyChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var bounds = new RectangleF(0.5f, 0.5f, Math.Max(1, Width - 1f), Math.Max(1, Height - 1f));
+        var radius = Math.Max(3f, UsageChartLayout.ToggleRadius(DeviceDpi));
+        var mid = bounds.X + bounds.Width / 2f;
+        using var outline = Rounded(bounds, radius);
+        using var bg = new SolidBrush(Color.White);
+        using var border = new Pen(Color.FromArgb(180, 180, 180));
+        g.FillPath(bg, outline);
+        var onRect = _hourly
+            ? new RectangleF(mid, bounds.Y, bounds.Right - mid, bounds.Height)
+            : new RectangleF(bounds.X, bounds.Y, mid - bounds.X, bounds.Height);
+        g.SetClip(outline);
+        using var onBr = new SolidBrush(Color.FromArgb(0, 120, 212));
+        g.FillRectangle(onBr, onRect);
+        g.ResetClip();
+        g.DrawPath(border, outline);
+        using var div = new Pen(Color.FromArgb(180, 180, 180));
+        g.DrawLine(div, mid, bounds.Y + 1, mid, bounds.Bottom - 1);
+        DrawLabel(g, "按日", new Rectangle(0, 0, (int)mid, Height), !_hourly);
+        DrawLabel(g, "按小时", new Rectangle((int)mid, 0, Width - (int)mid, Height), _hourly);
+    }
+
+    void DrawLabel(Graphics g, string text, Rectangle rect, bool on)
+    {
+        var color = on ? Color.White : Color.FromArgb(32, 32, 32);
+        TextRenderer.DrawText(
+            g, text, Font, rect, color,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+    }
+
+    static GraphicsPath Rounded(RectangleF r, float radius)
+    {
+        var path = new GraphicsPath();
+        var d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 }
 
 sealed class LegendChip : Control
 {
     public event EventHandler? Toggled;
-    readonly string _model;
     readonly Color _swatch;
     bool _on;
 
     public LegendChip(string model, Color swatch, bool on)
     {
-        _model = model;
         _swatch = swatch;
         _on = on;
         Text = UsageEvents.ChartModelLabel(model);
         Cursor = Cursors.Hand;
+        AutoSize = true;
         Margin = new Padding(0, 0, 8, 4);
-        Size = GetPreferredSize(Size.Empty);
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        Size = GetPreferredSize(Size.Empty);
     }
 
     protected override void OnFontChanged(EventArgs e)
@@ -195,11 +314,19 @@ sealed class LegendChip : Control
         Size = GetPreferredSize(Size.Empty);
     }
 
+    protected override void OnDpiChangedAfterParent(EventArgs e)
+    {
+        base.OnDpiChangedAfterParent(e);
+        Size = GetPreferredSize(Size.Empty);
+    }
+
     public override Size GetPreferredSize(Size proposedSize)
     {
-        var text = TextRenderer.MeasureText(Text, Font);
-        var pad = Math.Max(22, (int)Math.Round(Font.Height * 1.6));
-        return new Size(text.Width + pad, Math.Max(22, Font.Height + 8));
+        var text = TextRenderer.MeasureText(
+            Text, Font, Size.Empty,
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+        var (w, h) = UsageChartLayout.ChipSize(text.Width, Font.Height, DeviceDpi);
+        return new Size(w, h);
     }
 
     protected override void OnClick(EventArgs e)
@@ -214,6 +341,7 @@ sealed class LegendChip : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        var (padX, dot, gap, _, _) = UsageChartLayout.ChipMetrics(DeviceDpi);
         var fill = _on ? Blend(_swatch, Color.White, 0.82f) : Color.White;
         var border = _on ? _swatch : Color.FromArgb(180, 180, 180);
         var r = Height / 2f;
@@ -222,12 +350,13 @@ sealed class LegendChip : Control
         using var pen = new Pen(border);
         g.FillPath(br, path);
         g.DrawPath(pen, path);
-        var d = Math.Max(8, Height / 3);
-        var cy = (Height - d) / 2;
+        var cy = (Height - dot) / 2;
         using var sw = new SolidBrush(_on ? _swatch : Color.FromArgb(180, 180, 180));
-        g.FillEllipse(sw, 6, cy, d, d);
+        g.FillEllipse(sw, padX, cy, dot, dot);
         var fc = _on ? Color.FromArgb(32, 32, 32) : Color.DimGray;
-        TextRenderer.DrawText(g, Text, Font, new Point(6 + d + 4, (Height - Font.Height) / 2), fc, TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(
+            g, Text, Font, new Point(padX + dot + gap, (Height - Font.Height) / 2), fc,
+            TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
     }
 
     static Color Blend(Color a, Color b, float t) =>
@@ -241,6 +370,7 @@ sealed class LegendChip : Control
         var path = new GraphicsPath();
         var d = radius * 2;
         var r = new RectangleF(rect.X + 0.5f, rect.Y + 0.5f, Math.Max(1, rect.Width - 1f), Math.Max(1, rect.Height - 1f));
+        d = Math.Min(d, Math.Min(r.Width, r.Height));
         path.AddArc(r.X, r.Y, d, d, 180, 90);
         path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
         path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);

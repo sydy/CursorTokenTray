@@ -100,6 +100,62 @@ public static class UiLayout
 }
 
 /// <summary>
+/// Usage-report chart metrics shared with the macOS <c>UsageChartView</c> (design pixels at 96 DPI).
+/// </summary>
+public static class UsageChartLayout
+{
+    public const int DesignPlotH = 168;
+    public const int DesignHeaderH = 28;
+    public const int DesignLegendLineH = 26;
+    public const int DesignLegendGap = 8;
+    public const int DesignToggleW = 150;
+    public const int DesignToggleH = 24;
+    public const int DesignToggleRadius = 6;
+    public const int ChipPadX = 8;
+    public const int ChipDot = 8;
+    public const int ChipGap = 6;
+    public const int ChipPadRight = 8;
+    public const int ChipPadY = 4;
+    public const int ChipMinH = 22;
+
+    public static int PlotHeight(int dpi) => UiLayout.ScalePx(DesignPlotH, dpi);
+    public static int HeaderHeight(int dpi) => UiLayout.ScalePx(DesignHeaderH, dpi);
+    public static int ToggleWidth(int dpi) => UiLayout.ScalePx(DesignToggleW, dpi);
+    public static int ToggleHeight(int dpi) => UiLayout.ScalePx(DesignToggleH, dpi);
+    public static int ToggleRadius(int dpi) => UiLayout.ScalePx(DesignToggleRadius, dpi);
+    public static (int Width, int Height) ToggleSize(int dpi) => (ToggleWidth(dpi), ToggleHeight(dpi));
+
+    public static (int PadX, int Dot, int Gap, int PadRight, int PadY) ChipMetrics(int dpi) => (
+        UiLayout.ScalePx(ChipPadX, dpi),
+        UiLayout.ScalePx(ChipDot, dpi),
+        UiLayout.ScalePx(ChipGap, dpi),
+        UiLayout.ScalePx(ChipPadRight, dpi),
+        UiLayout.ScalePx(ChipPadY, dpi));
+
+    /// <summary>
+    /// Preferred legend-chip size. <paramref name="textWidth"/> is the already-measured
+    /// label width (GDI <c>NoPadding</c>), so the chip cannot paint wider than its layout slot.
+    /// </summary>
+    public static (int Width, int Height) ChipSize(int textWidth, int fontHeight, int dpi)
+    {
+        var (padX, dot, gap, padRight, padY) = ChipMetrics(dpi);
+        var h = Math.Max(UiLayout.ScalePx(ChipMinH, dpi), Math.Max(0, fontHeight) + padY * 2);
+        var w = padX + dot + gap + Math.Max(0, textWidth) + padRight;
+        return (w, h);
+    }
+
+    public static int LegendHeight(int legendLines, int dpi)
+    {
+        if (legendLines <= 0) return 0;
+        return UiLayout.ScalePx(DesignLegendGap, dpi)
+            + legendLines * UiLayout.ScalePx(DesignLegendLineH, dpi);
+    }
+
+    public static int PanelHeight(int legendLines, int dpi) =>
+        HeaderHeight(dpi) + LegendHeight(legendLines, dpi) + PlotHeight(dpi);
+}
+
+/// <summary>
 /// Flyout metrics shared with the macOS <c>FlyoutLayout</c> (design pixels at 96 DPI).
 /// </summary>
 public static class FlyoutLayout
