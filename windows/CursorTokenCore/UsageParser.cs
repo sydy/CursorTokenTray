@@ -35,6 +35,7 @@ public sealed class UsageSnapshot
     public double? PooledLimitCents { get; set; }
     public string LimitType { get; set; } = "";
     public bool IsUnlimited { get; set; }
+    public bool BillingCycleEndOverridden { get; set; }
     public bool IsTeamAccount => UsageParser.IsTeamMembership(MembershipType, LimitType);
     public bool ShowsAmount => UsedCents is not null && LimitCents is > 0 && (BillingMode == "amount" || IsTeamAccount);
 }
@@ -404,7 +405,7 @@ public static class UsageParser
         return null;
     }
 
-    static int? DaysUntil(string? iso, DateTimeOffset now)
+    public static int? DaysUntil(string? iso, DateTimeOffset now)
     {
         var end = ParseIso(iso);
         if (end is null) return null;

@@ -118,7 +118,7 @@ struct FlyoutView: View {
                             Text("Token  \(UsageParser.formatTokenCount(Double(tokens)))")
                         }
                         if let end = usage.billingCycleEnd {
-                            Text("重置  \(StatusText.formatResetDate(end))")
+                            Text("\(StatusText.cycleEndLabel(usage))  \(StatusText.formatResetDate(end, includeTime: usage.billingCycleEndOverridden))")
                         }
                     }
                     .font(.caption)

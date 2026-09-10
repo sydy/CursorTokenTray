@@ -20,12 +20,30 @@ public struct SyncAccount: Equatable, Sendable {
     public var label: String
     public var token: String
     public var membershipType: String
+    public var accountKind: String
+    public var tempStartAt: String
+    public var tempValidDays: Int
+    public var tempValidHours: Int
     public var syncUpdatedAt: String
-    public init(id: String = "", label: String = "", token: String = "", membershipType: String = "", syncUpdatedAt: String = "") {
+    public init(
+        id: String = "",
+        label: String = "",
+        token: String = "",
+        membershipType: String = "",
+        accountKind: String = AccountValidity.longTerm,
+        tempStartAt: String = "",
+        tempValidDays: Int = 0,
+        tempValidHours: Int = 0,
+        syncUpdatedAt: String = ""
+    ) {
         self.id = id
         self.label = label
         self.token = token
         self.membershipType = membershipType
+        self.accountKind = AccountValidity.sanitizeKind(accountKind)
+        self.tempStartAt = tempStartAt
+        self.tempValidDays = AccountValidity.clampDays(tempValidDays)
+        self.tempValidHours = AccountValidity.clampHours(tempValidHours)
         self.syncUpdatedAt = syncUpdatedAt
     }
 }
@@ -178,6 +196,10 @@ public enum AccountSync {
             label: account.label.trimmingCharacters(in: .whitespaces),
             token: account.token.trimmingCharacters(in: .whitespaces),
             membershipType: account.membershipType.trimmingCharacters(in: .whitespaces),
+            accountKind: account.accountKind,
+            tempStartAt: account.tempStartAt.trimmingCharacters(in: .whitespaces),
+            tempValidDays: account.tempValidDays,
+            tempValidHours: account.tempValidHours,
             syncUpdatedAt: account.syncUpdatedAt.trimmingCharacters(in: .whitespaces)
         )
     }
@@ -188,6 +210,10 @@ public enum AccountSync {
             label: account.label.trimmingCharacters(in: .whitespaces),
             token: account.token.trimmingCharacters(in: .whitespaces),
             membershipType: account.membershipType.trimmingCharacters(in: .whitespaces),
+            accountKind: account.accountKind,
+            tempStartAt: account.tempStartAt.trimmingCharacters(in: .whitespaces),
+            tempValidDays: account.tempValidDays,
+            tempValidHours: account.tempValidHours,
             syncUpdatedAt: account.syncUpdatedAt.trimmingCharacters(in: .whitespaces)
         )
     }
@@ -210,7 +236,7 @@ public enum AccountSync {
 
     public static func snapshotIdentity(_ snap: SyncSnapshot) -> String {
         let accounts = snap.accounts.sorted { $0.id < $1.id }.map {
-            "\($0.id)\n\($0.label)\n\($0.token)\n\($0.membershipType)\n\($0.syncUpdatedAt)"
+            "\($0.id)\n\($0.label)\n\($0.token)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.syncUpdatedAt)"
         }.joined(separator: "|")
         let deleted = snap.deleted.sorted { $0.id < $1.id }.map { "\($0.id)\n\($0.deletedAt)" }.joined(separator: "|")
         return "\(snap.activeAccountId)\n\(accounts)\n\(deleted)"
@@ -251,7 +277,7 @@ public enum AccountSync {
 
     @discardableResult
     public static func applySnapshotToConfig(_ cfg: inout AppConfig, _ snap: SyncSnapshot) -> Bool {
-        let before = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
+        let before = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
         var existing: [String: Account] = [:]
         for acc in cfg.accounts { existing[acc.id] = acc }
         var merged: [Account] = []
@@ -262,10 +288,23 @@ public enum AccountSync {
                 old.token = ident.token
                 old.label = ident.label
                 if !ident.membershipType.isEmpty { old.membershipType = ident.membershipType }
+                old.accountKind = ident.accountKind
+                old.tempStartAt = ident.tempStartAt
+                old.tempValidDays = ident.tempValidDays
+                old.tempValidHours = ident.tempValidHours
                 old.syncUpdatedAt = ident.syncUpdatedAt
                 merged.append(old)
             } else {
-                var acc = Account(id: ident.id, label: ident.label, token: ident.token, membershipType: ident.membershipType)
+                var acc = Account(
+                    id: ident.id,
+                    label: ident.label,
+                    token: ident.token,
+                    membershipType: ident.membershipType,
+                    accountKind: ident.accountKind,
+                    tempStartAt: ident.tempStartAt,
+                    tempValidDays: ident.tempValidDays,
+                    tempValidHours: ident.tempValidHours
+                )
                 acc.syncUpdatedAt = ident.syncUpdatedAt
                 merged.append(acc)
             }
@@ -276,7 +315,7 @@ public enum AccountSync {
         if ids.contains(snap.activeAccountId) { cfg.activeAccountId = snap.activeAccountId }
         else { cfg.activeAccountId = merged.first?.id ?? "" }
         cfg.syncLegacyFields()
-        let after = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
+        let after = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
         return before != after
     }
 
@@ -315,7 +354,15 @@ public enum AccountSync {
             return String(data: data ?? Data("\"\"".utf8), encoding: .utf8) ?? "\"\""
         }
         let accounts = snap.accounts.map { acc in
-            "{\"id\":\(q(acc.id)),\"label\":\(q(acc.label)),\"membership_type\":\(q(acc.membershipType)),\"sync_updated_at\":\(q(acc.syncUpdatedAt)),\"token\":\(q(acc.token))}"
+            var extra = ""
+            if AccountValidity.sanitizeKind(acc.accountKind) != AccountValidity.longTerm
+                || !acc.tempStartAt.isEmpty
+                || acc.tempValidDays != 0
+                || acc.tempValidHours != 0
+            {
+                extra = ",\"account_kind\":\(q(AccountValidity.sanitizeKind(acc.accountKind))),\"temp_start_at\":\(q(acc.tempStartAt)),\"temp_valid_days\":\(acc.tempValidDays),\"temp_valid_hours\":\(acc.tempValidHours)"
+            }
+            return "{\"id\":\(q(acc.id)),\"label\":\(q(acc.label)),\"membership_type\":\(q(acc.membershipType)),\"sync_updated_at\":\(q(acc.syncUpdatedAt)),\"token\":\(q(acc.token))\(extra)}"
         }.joined(separator: ",")
         let deleted = snap.deleted.map { d in
             "{\"deleted_at\":\(q(d.deletedAt)),\"id\":\(q(d.id))}"
@@ -395,6 +442,10 @@ public enum AccountSync {
                     label: str($0["label"]).trimmingCharacters(in: .whitespaces),
                     token: str($0["token"]).trimmingCharacters(in: .whitespaces),
                     membershipType: str($0["membership_type"]).trimmingCharacters(in: .whitespaces),
+                    accountKind: str($0["account_kind"]),
+                    tempStartAt: str($0["temp_start_at"]).trimmingCharacters(in: .whitespaces),
+                    tempValidDays: AccountValidity.clampDays($0["temp_valid_days"]),
+                    tempValidHours: AccountValidity.clampHours($0["temp_valid_hours"]),
                     syncUpdatedAt: str($0["sync_updated_at"]).trimmingCharacters(in: .whitespaces)
                 )
             }.filter { !$0.id.isEmpty }

@@ -282,6 +282,7 @@ sealed class TrayContext : ApplicationContext
                     if (acc is null) continue;
                     if (o.Snap is { } snap)
                     {
+                        AccountValidity.ApplyEndOverride(snap, acc);
                         live.ApplySnapshot(o.Id, snap.MembershipType, snap.RemainingPercent, "", o.Stamp);
                         acc.AuthErrorNotified = false;
                         foreach (var n in AlertLogic.Evaluate(live, acc, snap))

@@ -537,6 +537,48 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertEqual(reloaded.activeAccount?.lastRemaining, 42)
     }
 
+    func testAccountValidityCases() throws {
+        let root = try XCTUnwrap(try json("account_validity_cases.json") as? [String: Any])
+        for row in root["kind"] as! [[String: Any]] {
+            XCTAssertEqual(AccountValidity.sanitizeKind(row["input"] as? String), str(row["output"]))
+        }
+        for row in root["compute_end"] as! [[String: Any]] {
+            let got = AccountValidity.computeEndIso(
+                startAt: str(row["start"]),
+                days: int(row["days"]) ?? 0,
+                hours: int(row["hours"]) ?? 0
+            )
+            if let end = row["end"] as? String {
+                XCTAssertEqual(got, end, str(row["name"]))
+            } else {
+                XCTAssertNil(got, str(row["name"]))
+            }
+        }
+        for row in root["override"] as! [[String: Any]] {
+            let accRaw = row["account"] as! [String: Any]
+            let acc = Account(
+                accountKind: str(accRaw["account_kind"]),
+                tempStartAt: str(accRaw["temp_start_at"]),
+                tempValidDays: int(accRaw["temp_valid_days"]) ?? 0,
+                tempValidHours: int(accRaw["temp_valid_hours"]) ?? 0
+            )
+            var snap = UsageSnapshot(
+                usedPercent: 10,
+                remainingPercent: 90,
+                membershipType: "Pro",
+                billingCycleEnd: str(row["api_end"]),
+                daysRemaining: 26
+            )
+            let now = AccountSync.parseIso(str(row["now"])) ?? Date()
+            AccountValidity.applyEndOverride(&snap, account: acc, now: now)
+            XCTAssertEqual(snap.billingCycleEnd, str(row["expected_end"]), str(row["name"]))
+            XCTAssertEqual(snap.daysRemaining, int(row["expected_days_remaining"]), str(row["name"]))
+            XCTAssertEqual(snap.billingCycleEndOverridden, bool(row["overridden"]), str(row["name"]))
+        }
+        let tmp = Account(label: "租号", accountKind: AccountValidity.temporary)
+        XCTAssertTrue(tmp.caption(isActive: false).contains("临时"))
+    }
+
     private func num(_ value: Any?) -> Double? {
         if value == nil || value is NSNull { return nil }
         if let n = value as? NSNumber { return n.doubleValue }

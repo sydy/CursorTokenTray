@@ -3,15 +3,31 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import timedelta
 from typing import Any
 
-from cursor_api import account_id_from_token, normalize_workos_token, session_token_variants
+from cursor_api import (
+    UsageSnapshot,
+    account_id_from_token,
+    days_until,
+    normalize_workos_token,
+    session_token_variants,
+)
+
+ACCOUNT_KIND_LONG_TERM = "long_term"
+ACCOUNT_KIND_TEMPORARY = "temporary"
+MAX_TEMP_VALID_DAYS = 999
+MAX_TEMP_VALID_HOURS = 23
 
 ACCOUNT_KEYS = (
     "id",
     "label",
     "token",
     "membership_type",
+    "account_kind",
+    "temp_start_at",
+    "temp_valid_days",
+    "temp_valid_hours",
     "last_remaining",
     "last_error",
     "updated_at",
@@ -23,12 +39,80 @@ ACCOUNT_KEYS = (
 )
 
 
+def sanitize_account_kind(raw: Any) -> str:
+    key = str(raw or "").strip().lower().replace("-", "_")
+    if key in {"temporary", "temp", "short"}:
+        return ACCOUNT_KIND_TEMPORARY
+    return ACCOUNT_KIND_LONG_TERM
+
+
+def clamp_temp_valid_days(raw: Any) -> int:
+    return _clamp_int(raw, 0, MAX_TEMP_VALID_DAYS)
+
+
+def clamp_temp_valid_hours(raw: Any) -> int:
+    return _clamp_int(raw, 0, MAX_TEMP_VALID_HOURS)
+
+
+def is_temporary_account(account: dict[str, Any] | None) -> bool:
+    if not account:
+        return False
+    return sanitize_account_kind(account.get("account_kind")) == ACCOUNT_KIND_TEMPORARY
+
+
+def compute_temp_end_iso(
+    start_at: str | None,
+    days: int = 0,
+    hours: int = 0,
+) -> str | None:
+    from account_sync import now_iso, parse_iso
+
+    start = parse_iso(start_at)
+    if start is None:
+        return None
+    days_n = clamp_temp_valid_days(days)
+    hours_n = clamp_temp_valid_hours(hours)
+    if days_n == 0 and hours_n == 0:
+        return None
+    return now_iso(start + timedelta(days=days_n, hours=hours_n))
+
+
+def account_end_iso(account: dict[str, Any] | None) -> str | None:
+    if not is_temporary_account(account) or account is None:
+        return None
+    return compute_temp_end_iso(
+        str(account.get("temp_start_at") or ""),
+        clamp_temp_valid_days(account.get("temp_valid_days")),
+        clamp_temp_valid_hours(account.get("temp_valid_hours")),
+    )
+
+
+def apply_account_end_override(
+    snapshot: UsageSnapshot,
+    account: dict[str, Any] | None,
+    *,
+    now=None,
+) -> UsageSnapshot:
+    """临时账号用本地计算的结束时间覆盖管理端 billingCycleEnd。"""
+    end = account_end_iso(account)
+    if not end:
+        return snapshot
+    snapshot.billing_cycle_end = end
+    snapshot.days_remaining = days_until(end, now=now)
+    snapshot.billing_cycle_end_overridden = True
+    return snapshot
+
+
 def empty_account(*, token: str = "", account_id: str = "", label: str = "") -> dict[str, Any]:
     return {
         "id": account_id,
         "label": label,
         "token": token,
         "membership_type": "",
+        "account_kind": ACCOUNT_KIND_LONG_TERM,
+        "temp_start_at": "",
+        "temp_valid_days": 0,
+        "temp_valid_hours": 0,
         "last_remaining": None,
         "last_error": "",
         "updated_at": "",
@@ -52,6 +136,10 @@ def sanitize_account(raw: Any) -> dict[str, Any] | None:
     acc = empty_account(token=token, account_id=account_id)
     acc["label"] = str(raw.get("label") or "").strip()
     acc["membership_type"] = str(raw.get("membership_type") or "").strip()
+    acc["account_kind"] = sanitize_account_kind(raw.get("account_kind"))
+    acc["temp_start_at"] = str(raw.get("temp_start_at") or "").strip()
+    acc["temp_valid_days"] = clamp_temp_valid_days(raw.get("temp_valid_days"))
+    acc["temp_valid_hours"] = clamp_temp_valid_hours(raw.get("temp_valid_hours"))
     acc["last_error"] = str(raw.get("last_error") or "")
     acc["updated_at"] = str(raw.get("updated_at") or "")
     acc["sync_updated_at"] = str(raw.get("sync_updated_at") or "")
@@ -100,6 +188,8 @@ def format_account_caption(account: dict[str, Any] | None, *, is_active: bool = 
     parts = [name]
     if memb and memb.lower() != name.lower():
         parts.append(memb)
+    if is_temporary_account(account):
+        parts.append("临时")
     remaining = account.get("last_remaining")
     if remaining is not None:
         try:
@@ -214,6 +304,43 @@ def rename_account(cfg: dict[str, Any], account_id: str, label: str) -> bool:
         touch_account(acc)
     else:
         acc["label"] = new_label
+    return True
+
+
+def update_account_validity(
+    cfg: dict[str, Any],
+    account_id: str,
+    *,
+    kind: str | None = None,
+    start_at: str | None = None,
+    valid_days: int | None = None,
+    valid_hours: int | None = None,
+) -> bool:
+    acc = find_account(cfg, account_id)
+    if acc is None:
+        return False
+    new_kind = sanitize_account_kind(kind if kind is not None else acc.get("account_kind"))
+    new_start = str(start_at if start_at is not None else acc.get("temp_start_at") or "").strip()
+    new_days = clamp_temp_valid_days(
+        valid_days if valid_days is not None else acc.get("temp_valid_days")
+    )
+    new_hours = clamp_temp_valid_hours(
+        valid_hours if valid_hours is not None else acc.get("temp_valid_hours")
+    )
+    changed = (
+        acc.get("account_kind") != new_kind
+        or str(acc.get("temp_start_at") or "") != new_start
+        or clamp_temp_valid_days(acc.get("temp_valid_days")) != new_days
+        or clamp_temp_valid_hours(acc.get("temp_valid_hours")) != new_hours
+    )
+    acc["account_kind"] = new_kind
+    acc["temp_start_at"] = new_start
+    acc["temp_valid_days"] = new_days
+    acc["temp_valid_hours"] = new_hours
+    if changed:
+        from account_sync import touch_account
+
+        touch_account(acc)
     return True
 
 
@@ -344,6 +471,14 @@ def _copy_legacy_flags(cfg: dict[str, Any], account: dict[str, Any]) -> None:
     account["auth_error_notified"] = bool(cfg.get("auth_error_notified", False))
     account["exhaustion_notified"] = bool(cfg.get("exhaustion_notified", False))
     account["low_quota_notified"] = bool(cfg.get("low_quota_notified", False))
+
+
+def _clamp_int(value: Any, lo: int, hi: int) -> int:
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return max(lo, min(hi, n))
 
 
 def _is_int_like(value: Any) -> bool:

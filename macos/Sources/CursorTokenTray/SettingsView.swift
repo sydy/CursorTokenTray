@@ -25,7 +25,7 @@ struct SettingsRootView: View {
             syncPage.tabItem { Label("同步", systemImage: "arrow.triangle.2.circlepath") }
         }
         .padding(20)
-        .frame(width: 540, height: 460)
+        .frame(width: 540, height: 560)
         .onAppear {
             tokenText = ""
             intervalText = String(store.config.refreshIntervalMinutes)
@@ -56,6 +56,27 @@ struct SettingsRootView: View {
             HStack {
                 Button("重命名") { rename() }
                 Button("删除") { deleteAccount() }
+            }
+            Picker("账号类型", selection: kindBinding) {
+                Text("长期账号").tag(AccountValidity.longTerm)
+                Text("临时账号").tag(AccountValidity.temporary)
+            }
+            .disabled(store.config.activeAccount == nil)
+            if AccountValidity.isTemporary(store.config.activeAccount) {
+                DatePicker("开始时间", selection: startBinding, displayedComponents: [.date, .hourAndMinute])
+                HStack {
+                    Text("有效时间")
+                    Stepper(value: daysBinding, in: 0...AccountValidity.maxDays) {
+                        Text("\(store.config.activeAccount?.tempValidDays ?? 0) 天")
+                    }
+                    Stepper(value: hoursBinding, in: 0...AccountValidity.maxHours) {
+                        Text("\(store.config.activeAccount?.tempValidHours ?? 0) 小时")
+                    }
+                }
+                Text(endCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text("添加账号（粘贴 Token，请勿分享；已保存的不会显示）").font(.headline).padding(.top, 8)
             TextEditor(text: $tokenText)
@@ -170,6 +191,59 @@ struct SettingsRootView: View {
             get: { store.config.activeAccountId },
             set: { store.switchAccount($0) }
         )
+    }
+
+    var kindBinding: Binding<String> {
+        Binding(
+            get: { store.config.activeAccount?.accountKind ?? AccountValidity.longTerm },
+            set: { setValidity(kind: $0, refresh: true) }
+        )
+    }
+
+    var startBinding: Binding<Date> {
+        Binding(
+            get: { AccountSync.parseIso(store.config.activeAccount?.tempStartAt) ?? Date() },
+            set: { setValidity(start: $0) }
+        )
+    }
+
+    var daysBinding: Binding<Int> {
+        Binding(
+            get: { store.config.activeAccount?.tempValidDays ?? 0 },
+            set: { setValidity(days: $0) }
+        )
+    }
+
+    var hoursBinding: Binding<Int> {
+        Binding(
+            get: { store.config.activeAccount?.tempValidHours ?? 0 },
+            set: { setValidity(hours: $0) }
+        )
+    }
+
+    var endCaption: String {
+        guard let acc = store.config.activeAccount,
+              let end = AccountValidity.accountEndIso(acc)
+        else { return "请设置有效时间（天和小时可组合）" }
+        return "结束时间 \(StatusText.formatResetDate(end, includeTime: true))（按开始时间计算，覆盖管理端重置日）"
+    }
+
+    func setValidity(kind: String? = nil, start: Date? = nil, days: Int? = nil, hours: Int? = nil, refresh: Bool = false) {
+        guard let acc = store.config.activeAccount else { return }
+        var c = store.config
+        var newKind = kind ?? acc.accountKind
+        var newStart = acc.tempStartAt
+        if let start { newStart = AccountSync.nowIso(start) }
+        var newDays = days ?? acc.tempValidDays
+        var newHours = hours ?? acc.tempValidHours
+        if AccountValidity.sanitizeKind(newKind) == AccountValidity.temporary {
+            if newStart.trimmingCharacters(in: .whitespaces).isEmpty {
+                newStart = AccountSync.nowIso()
+            }
+            if newDays == 0 && newHours == 0 { newDays = 1 }
+        }
+        _ = c.updateAccountValidity(acc.id, kind: newKind, startAt: newStart, days: newDays, hours: newHours)
+        store.applyConfig(c, refresh: refresh)
     }
 
     var notifyBinding: Binding<Bool> {
@@ -445,7 +519,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         AppDelegate.ensureStatusItemVisible()
         if window == nil {
             let win = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
+                contentRect: NSRect(x: 0, y: 0, width: 540, height: 600),
                 styleMask: [.titled, .closable, .miniaturizable],
                 backing: .buffered,
                 defer: false
