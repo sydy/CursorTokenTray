@@ -891,7 +891,7 @@ final class CursorAuthTests: XCTestCase {
         guard sqlite3_prepare_v2(db, "SELECT value FROM cursorDiskKV WHERE key = 'chat-1'", -1, &stmt, nil) == SQLITE_OK else { return "" }
         defer { sqlite3_finalize(stmt) }
         if sqlite3_step(stmt) == SQLITE_ROW {
-            return sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+            return sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
         }
         return ""
     }
