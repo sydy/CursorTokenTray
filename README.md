@@ -15,7 +15,7 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 近 7 日剩余趋势折线与日均消耗
 - Token 过期检测、一键打开设置并聚焦 Token 输入框
 - 多档额度告警（默认 50/20/5）与耗尽风险通知
-- **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警
+- **多账号**：保存多个 Cursor 会话，托盘显示当前账号；其余账号后台刷新并独立告警。从 Cursor 应用导入的会话可 **登录到 Cursor**（写入客户端并切号）；浏览器 Cookie 只能查用量，写回去会把 Cursor 登出，因此会被拒绝
 - **多端同步**：设置里启用后，账号列表（Token / 备注）写入口令加密的同步文件；把文件夹放到 iCloud / OneDrive / 坚果云 即可在 Windows 与 macOS 之间合并。也支持导出 / 导入同一格式的加密包
 - 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
 - 中文设置窗口（Windows 为 WinForms，macOS 为 SwiftUI；账号列表、Token、刷新间隔、告警、通知、显示模式、开机自启）
@@ -132,6 +132,10 @@ PR 不上传制品。打 `v*` 标签（例如 `v1.0.0`）会创建正式 GitHub 
 3. 若未登录 Cursor 应用，再点 **Safari 登录** / **Firefox 登录**，在对应浏览器登录 [cursor.com](https://cursor.com/dashboard)
 4. 工具会校验用量并写入 Token（已有同一账号则更新，新账号会加入列表并切换为当前）
 
+导入成功后，可在设置或托盘菜单点 **登录到 Cursor / 在 Cursor 登录当前账号**：工具会礼貌关闭 Cursor（不强制结束），把当前账号的**桌面会话**写入 `state.vscdb`，再重新打开。只会改 `cursorAuth/*` 与 `glass.lastSignedInAuthId`，并在同目录留下 `state.vscdb.tray-backup`；不改机器码，也不写 Electron Cookie。
+
+浏览器里的 `WorkosCursorSessionToken`（JWT `type=web`）**不能**写回 Cursor，否则客户端会登出。要切号请先在 Cursor 里登录一次并「从 Cursor 导入」，之后即可在已导入的桌面会话之间切换。
+
 若浏览器里已经登录，可直接点 **仅导入 Cookie**。同一浏览器通常只能登录一个 Cursor 账号；要加第二个号，请先在浏览器换号登录再导入，或手动粘贴另一个 Token。
 
 **Windows**：可从 **Cursor 应用**或 **Firefox** 导入。Chrome / Edge 使用 App-Bound Cookie 加密，本工具无法读取，请改用 Firefox 或手动粘贴。
@@ -164,6 +168,7 @@ macOS：`~/Library/Application Support/CursorTokenTray/config.json`
 ## 说明
 
 - 圆环颜色：剩余 &gt;50% 绿，20–50% 黄，&lt;20% 红
+- 「登录到 Cursor」会礼貌关闭客户端（不强制结束），只改登录相关键；聊天记录、机器码、Electron Cookie 不动。若 10 秒内没退出，会放弃写入以免冲掉未保存文件
 - Windows：托盘、右键菜单、状态飞出层、设置都在**同一个 .NET 8 进程**里用 WinForms 完成（`NotifyIcon` + 系统菜单）。若图标在溢出区，可拖到任务栏常显
 - 这是 **macOS 菜单栏**应用，不是 iOS；没有 Dock 图标，圆环在屏幕**最上方**菜单栏右侧（Wi‑Fi / 控制中心旁边），并带剩余百分比文字
 - macOS：若看不到图标，点菜单栏「•••」或「控制中心」展开隐藏项；也可在「活动监视器」结束 CursorTokenTray 后重新打开

@@ -123,6 +123,43 @@ final class AppStore: ObservableObject {
         FlyoutWindowController.shared.close()
     }
 
+    func loginToCursor(confirmClose: (Bool) -> Bool) async -> CursorAuthApplyResult {
+        guard let acc = config.activeAccount else {
+            return CursorAuthApplyResult(ok: false, message: "请先选择账号")
+        }
+        if acc.tokenDecryptFailed || acc.token.trimmingCharacters(in: .whitespaces).isEmpty {
+            return CursorAuthApplyResult(ok: false, message: "当前账号没有可用 Token")
+        }
+        let preview = CursorAuth.buildValues(
+            token: acc.token,
+            email: CursorAuth.looksLikeEmail(acc.label) ? acc.label : nil,
+            membershipType: acc.membershipType,
+            displayName: acc.displayLabel
+        )
+        if preview.values == nil {
+            return CursorAuthApplyResult(ok: false, message: preview.error)
+        }
+        let target = CursorAuth.resolveTarget()
+        let running = target.map { CursorAuth.isRunning($0) } ?? false
+        if !confirmClose(running) {
+            return CursorAuthApplyResult(ok: false, message: "已取消")
+        }
+        let token = acc.token
+        let email = CursorAuth.looksLikeEmail(acc.label) ? acc.label : nil
+        let membership = acc.membershipType
+        let display = acc.displayLabel
+        return await Task.detached(priority: .userInitiated) {
+            CursorAuth.apply(
+                token: token,
+                email: email,
+                membershipType: membership,
+                displayName: display,
+                closeIfRunning: true,
+                relaunch: true
+            )
+        }.value
+    }
+
     func loopRefresh() {
         refreshTask = Task { [weak self] in
             while let self, !Task.isCancelled {

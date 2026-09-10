@@ -13,7 +13,10 @@ var targets: [Target] = [
     .testTarget(
         name: "CursorTokenCoreTests",
         dependencies: ["CursorTokenCore"],
-        path: "Tests/CursorTokenCoreTests"
+        path: "Tests/CursorTokenCoreTests",
+        linkerSettings: [
+            .linkedLibrary("sqlite3"),
+        ]
     ),
 ]
 

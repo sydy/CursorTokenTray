@@ -56,6 +56,8 @@ struct SettingsRootView: View {
             HStack {
                 Button("重命名") { rename() }
                 Button("删除") { deleteAccount() }
+                Button("登录到 Cursor") { Task { await loginToCursor() } }
+                    .disabled(importing)
             }
             Text("添加账号（粘贴 Token，请勿分享；已保存的不会显示）").font(.headline).padding(.top, 8)
             TextEditor(text: $tokenText)
@@ -87,7 +89,7 @@ struct SettingsRootView: View {
                         .font(.caption)
                 }
             }
-            Text(store.importStatus.isEmpty ? "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选。" : store.importStatus)
+            Text(store.importStatus.isEmpty ? "已登录 Cursor 时可直接导入。浏览器 Cookie 仅作备选，不能写回客户端切号。" : store.importStatus)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,6 +259,23 @@ struct SettingsRootView: View {
             _ = cfg.removeAccount(acc.id)
             store.applyConfig(cfg, refresh: true)
         }
+    }
+
+    func loginToCursor() async {
+        importing = true
+        store.importStatus = "正在写入 Cursor…"
+        let result = await store.loginToCursor(confirmClose: { running in
+            if !running { return true }
+            let alert = NSAlert()
+            alert.messageText = "登录到 Cursor"
+            alert.informativeText = CursorAuth.confirmCloseMessage
+            alert.addButton(withTitle: "关闭并写入")
+            alert.addButton(withTitle: "取消")
+            return alert.runModal() == .alertFirstButtonReturn
+        })
+        importing = false
+        store.importStatus = result.message
+        hint = result.ok ? "已写入 Cursor" : result.message
     }
 
     func save(close: Bool) {

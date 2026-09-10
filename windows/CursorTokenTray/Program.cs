@@ -178,6 +178,7 @@ sealed class TrayContext : ApplicationContext
         _menu.Items.Add(_dashboardItem);
         _menu.Items.Add("用量报表…", null, (_, _) => OpenReport());
         _menu.Items.Add(_switcher);
+        _menu.Items.Add("在 Cursor 登录当前账号…", null, (_, _) => LoginToCursor());
         _menu.Items.Add("导入 Token…", null, (_, _) => OpenSettings(true, true));
         _menu.Items.Add("设置…", null, (_, _) => OpenSettings(false, false));
         _menu.Items.Add(new ToolStripSeparator());
@@ -421,6 +422,21 @@ sealed class TrayContext : ApplicationContext
     {
         var url = UsageParser.DashboardUrl(_usage);
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+    }
+
+    async void LoginToCursor()
+    {
+        try
+        {
+            var result = await CursorLoginUi.Run(_config.ActiveAccount, _settings is { IsDisposed: false } s ? s : null);
+            if (result.Message == "已取消") return;
+            OnUi(() => _icon.ShowBalloonTip(
+                5000,
+                result.Ok ? "已写入 Cursor" : "未能登录 Cursor",
+                result.Message,
+                result.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning));
+        }
+        catch (Exception ex) { CrashLog.Write(ex); }
     }
 
     void OpenReport()

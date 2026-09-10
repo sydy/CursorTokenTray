@@ -174,6 +174,7 @@ public static class SessionImporter
         var appdata = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         yield return Path.Combine(appdata, "Cursor", "User", "globalStorage", "state.vscdb");
         yield return Path.Combine(appdata, "Cursor Nightly", "User", "globalStorage", "state.vscdb");
+        yield return Path.Combine(appdata, "Cursor - Insiders", "User", "globalStorage", "state.vscdb");
     }
 
     public static async Task<ImportResult> ImportAndValidate(CursorClient client, string[]? prefer = null, string[]? only = null, HashSet<string>? skipTokens = null, CancellationToken ct = default)
