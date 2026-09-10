@@ -148,8 +148,8 @@ public static class StatusText
         {
             var endText = FormatResetDate(end, usage.BillingCycleEndOverridden);
             var remaining = FormatCycleRemaining(end, usage.DaysRemaining);
-            var label = CycleEndLabel(usage);
-            rows.Add((label, string.IsNullOrEmpty(remaining) ? endText : $"{endText}（{remaining}）"));
+            var endLabel = CycleEndLabel(usage);
+            rows.Add((endLabel, string.IsNullOrEmpty(remaining) ? endText : $"{endText}（{remaining}）"));
             rows.Add(("预计可用", FormatEstimatedDays(usage)));
         }
         else if (usage.EstimatedUsableDays is not null) rows.Add(("预计可用", FormatEstimatedDays(usage)));
