@@ -167,8 +167,47 @@ public enum Token {
     }
 
     public static func extractUserId(fromJWT jwt: String) -> String {
-        guard let payload = jwtPayload(jwt) else { return "" }
-        let sub = payload["sub"] as? String ?? ""
+        let sub = jwtSubject(jwt)
         return sub.split(separator: "|").last.map(String.init) ?? ""
+    }
+
+    public static func extractJWT(_ token: String) -> String {
+        var value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { return "" }
+        do { value = try normalize(value) } catch { /* keep trimmed raw */ }
+        var jwt = value
+        for sep in ["%3A%3A", "%3a%3a", "::"] {
+            if let r = value.range(of: sep) {
+                jwt = String(value[r.upperBound...])
+                break
+            }
+        }
+        if looksLikeJWT(jwt) { return jwt }
+        return looksLikeJWT(value) ? value : ""
+    }
+
+    public static func jwtSubject(_ token: String) -> String {
+        let jwt = looksLikeJWT(token) ? token : extractJWT(token)
+        guard let payload = jwtPayload(jwt) else { return "" }
+        return payload["sub"] as? String ?? ""
+    }
+
+    public static func jwtClaim(_ token: String, _ name: String) -> String {
+        let jwt = looksLikeJWT(token) ? token : extractJWT(token)
+        guard let payload = jwtPayload(jwt) else { return "" }
+        if let text = payload[name] as? String { return text }
+        if let num = payload[name] as? NSNumber { return num.stringValue }
+        return ""
+    }
+
+    /// JWT `type` claim: `session` signs Cursor in; `web` is a browser cookie.
+    public static func jwtType(_ token: String) -> String {
+        jwtClaim(token, "type").trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    public static func canWriteToCursor(_ token: String) -> Bool {
+        let jwt = extractJWT(token)
+        guard looksLikeJWT(jwt) else { return false }
+        return jwtType(jwt) != "web"
     }
 }

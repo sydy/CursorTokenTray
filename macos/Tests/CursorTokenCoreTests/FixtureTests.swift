@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import SQLite3
 @testable import CursorTokenCore
 
 enum Fixtures {
@@ -740,5 +741,200 @@ final class InstanceLockTests: XCTestCase {
             try? FileManager.default.removeItem(at: dir)
         }
         XCTAssertTrue(InstanceLock.acquireReplacingStale(directory: dir))
+    }
+}
+
+final class CursorAuthTests: XCTestCase {
+    func testJwtTypeDistinguishesSessionAndWeb() throws {
+        let session = try jwt(["sub": "auth0|user_01SESS", "type": "session"])
+        let web = try jwt(["sub": "auth0|user_01WEB", "type": "web", "workosSessionId": "wos_x"])
+        XCTAssertEqual(Token.jwtType(session), "session")
+        XCTAssertEqual(Token.jwtType(web), "web")
+        XCTAssertTrue(Token.canWriteToCursor(session))
+        XCTAssertFalse(Token.canWriteToCursor(web))
+        XCTAssertTrue(Token.canWriteToCursor("user_01SESS%3A%3A" + session))
+        XCTAssertFalse(Token.canWriteToCursor("not-a-jwt-token-value"))
+    }
+
+    func testBuildValuesRefusesWebAndWritesSessionKeys() throws {
+        let web = try jwt(["sub": "auth0|user_01WEB", "type": "web"])
+        let refused = CursorAuth.buildValues(token: web)
+        XCTAssertNil(refused.values)
+        XCTAssertTrue(refused.error.contains("浏览器 Cookie"))
+
+        let session = try jwt(["sub": "auth0|user_01SESS", "type": "session"])
+        let built = CursorAuth.buildValues(
+            token: "user_01SESS::" + session,
+            email: "work@example.com",
+            membershipType: "Pro",
+            displayName: "工作号"
+        )
+        let values = try XCTUnwrap(built.values)
+        XCTAssertEqual(values["cursorAuth/accessToken"], session)
+        XCTAssertEqual(values["cursorAuth/refreshToken"], session)
+        XCTAssertEqual(values["glass.lastSignedInAuthId"], "auth0|user_01SESS")
+        XCTAssertEqual(values["cursorAuth/cachedEmail"], "work@example.com")
+        XCTAssertEqual(values["cursorAuth/cachedSignUpType"], "Auth_0")
+        XCTAssertEqual(values["cursorAuth/stripeMembershipType"], "pro")
+        XCTAssertEqual(values["cursorAuth/stripeSubscriptionStatus"], "active")
+        XCTAssertTrue(values["cursorAuth/cachedScopedProfile"]?.contains("工作号") == true)
+    }
+
+    func testStripePlanMapsLabels() {
+        XCTAssertEqual(CursorAuth.stripePlan("Free").membership, "free")
+        XCTAssertEqual(CursorAuth.stripePlan("Free").status, "unpaid")
+        XCTAssertEqual(CursorAuth.stripePlan("Pro+").membership, "pro_plus")
+        XCTAssertEqual(CursorAuth.stripePlan("Ultra").status, "active")
+    }
+
+    func testWriteIsSurgicalAndBacksUp() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("state.vscdb")
+        try seedDb(db, items: [
+            "cursorAuth/accessToken": "old-token",
+            "cursorAuth/cachedEmail": "old@example.com",
+            "cursorAuth/onboardingDate": "2024-01-01T00:00:00.000Z",
+            "cursorAuth/cachedAccessToken": "old-cached",
+            "mcpOAuth.secret.demo": "keep-secret",
+            "theme": "dark",
+        ], kv: ("chat-1", "transcript"))
+        XCTAssertEqual(readKv(db), "transcript", "seed must keep cursorDiskKV")
+
+        let session = try jwt(["sub": "auth0|user_01SESS", "type": "session"])
+        let built = CursorAuth.buildValues(token: session, email: "new@example.com", membershipType: "free", displayName: "新号")
+        let values = try XCTUnwrap(built.values)
+        let result = CursorAuth.writeValues(dbPath: db, values: values, backup: true)
+        XCTAssertTrue(result.ok, result.message)
+        let backup = URL(fileURLWithPath: try XCTUnwrap(result.backupPath))
+        XCTAssertEqual(CursorAuth.readValues(dbPath: backup)["cursorAuth/accessToken"], "old-token")
+
+        let got = readAll(db)
+        XCTAssertEqual(got["cursorAuth/accessToken"], session)
+        XCTAssertEqual(got["cursorAuth/refreshToken"], session)
+        XCTAssertEqual(got["cursorAuth/cachedAccessToken"], session)
+        XCTAssertEqual(got["cursorAuth/cachedEmail"], "new@example.com")
+        XCTAssertEqual(got["cursorAuth/onboardingDate"], "2024-01-01T00:00:00.000Z")
+        XCTAssertEqual(got["mcpOAuth.secret.demo"], "keep-secret")
+        XCTAssertEqual(got["theme"], "dark")
+        XCTAssertEqual(readKv(db), "transcript")
+    }
+
+    func testApplyRefusesWhenStillRunningAndWritesWhenClosed() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("state.vscdb")
+        try seedDb(db, items: ["cursorAuth/accessToken": "old"])
+        let install = CursorInstall(name: "Cursor", stateDb: db)
+        let session = try jwt(["sub": "auth0|user_01SESS", "type": "session"])
+
+        let stillRunning = CursorAuth.apply(
+            token: session,
+            closeIfRunning: true,
+            relaunch: true,
+            installs: [install],
+            isRunning: { _ in true },
+            requestClose: { _ in true },
+            waitGone: { _ in false },
+            launch: { _ in XCTFail("must not launch"); return false },
+            write: { _, _, _ in
+                XCTFail("must not write")
+                return CursorAuthApplyResult(ok: false, message: "must not write")
+            }
+        )
+        XCTAssertFalse(stillRunning.ok)
+        XCTAssertTrue(stillRunning.message.contains("没有退出"))
+        XCTAssertEqual(CursorAuth.readValues(dbPath: db)["cursorAuth/accessToken"], "old")
+
+        let ok = CursorAuth.apply(
+            token: session,
+            email: "a@b.c",
+            membershipType: "Pro",
+            displayName: "A",
+            closeIfRunning: true,
+            relaunch: true,
+            installs: [install],
+            isRunning: { _ in false },
+            requestClose: { _ in XCTFail("must not close"); return false },
+            waitGone: { _ in true },
+            launch: { _ in true }
+        )
+        XCTAssertTrue(ok.ok, ok.message)
+        XCTAssertTrue(ok.relaunched)
+        XCTAssertEqual(CursorAuth.readValues(dbPath: db)["cursorAuth/accessToken"], session)
+        XCTAssertTrue(ok.message.contains("已重新打开"))
+    }
+
+    private func jwt(_ payload: [String: String]) throws -> String {
+        let header = try b64url(["alg": "none"])
+        let body = try b64url(payload)
+        return "\(header).\(body).sig"
+    }
+
+    private func b64url(_ obj: [String: String]) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: obj)
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+    }
+
+    private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    private func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
+        value.withCString { sqlite3_bind_text(stmt, index, $0, -1, sqliteTransient) }
+    }
+
+    private func seedDb(_ path: URL, items: [String: String], kv: (String, String)? = nil) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE cursorDiskKV (key TEXT, value BLOB);", nil, nil, nil), SQLITE_OK)
+        var stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(db, "INSERT INTO ItemTable(key, value) VALUES (?, ?)", -1, &stmt, nil), SQLITE_OK)
+        defer { sqlite3_finalize(stmt) }
+        for (k, v) in items {
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
+            bindText(stmt, 1, k)
+            bindText(stmt, 2, v)
+            XCTAssertEqual(sqlite3_step(stmt), SQLITE_DONE)
+        }
+        if let kv {
+            let sql = "INSERT INTO cursorDiskKV(key, value) VALUES ('\(kv.0)', '\(kv.1)');"
+            XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK, "seed cursorDiskKV")
+        }
+    }
+
+    private func readAll(_ path: URL) -> [String: String] {
+        var found: [String: String] = [:]
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return found }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT key, value FROM ItemTable", -1, &stmt, nil) == SQLITE_OK else { return found }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let key = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+            let value = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+            found[key] = value
+        }
+        return found
+    }
+
+    private func readKv(_ path: URL) -> String {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return "" }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT value FROM cursorDiskKV WHERE key = 'chat-1'", -1, &stmt, nil) == SQLITE_OK else { return "" }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+        }
+        return ""
     }
 }

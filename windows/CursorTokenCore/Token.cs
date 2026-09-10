@@ -158,12 +158,60 @@ public static class Token
 
     public static string ExtractUserId(string jwt)
     {
+        var sub = JwtSubject(jwt);
+        return sub.Contains('|') ? sub.Split('|')[^1] : sub;
+    }
+
+    public static string ExtractJwt(string token)
+    {
+        var value = (token ?? "").Trim();
+        if (value.Length == 0) return "";
+        try { value = Normalize(value); } catch { /* keep trimmed raw */ }
+        var jwt = value;
+        foreach (var sep in new[] { "%3A%3A", "%3a%3a", "::" })
+        {
+            var i = value.IndexOf(sep, StringComparison.Ordinal);
+            if (i >= 0)
+            {
+                jwt = value[(i + sep.Length)..];
+                break;
+            }
+        }
+        if (LooksLikeJwt(jwt)) return jwt;
+        return LooksLikeJwt(value) ? value : "";
+    }
+
+    public static string JwtSubject(string token)
+    {
+        var jwt = LooksLikeJwt(token) ? token : ExtractJwt(token);
         var payload = JwtPayload(jwt);
         if (payload is null || !payload.TryGetValue("sub", out var subObj) || subObj is null) return "";
-        var sub = subObj is JsonElement je
+        return subObj is JsonElement je
             ? (je.ValueKind == JsonValueKind.String ? je.GetString() ?? "" : je.ToString())
             : subObj.ToString() ?? "";
-        return sub.Contains('|') ? sub.Split('|')[^1] : sub;
+    }
+
+    public static string JwtClaim(string token, string name)
+    {
+        var jwt = LooksLikeJwt(token) ? token : ExtractJwt(token);
+        var payload = JwtPayload(jwt);
+        if (payload is null || !payload.TryGetValue(name, out var obj) || obj is null) return "";
+        return obj is JsonElement je
+            ? (je.ValueKind == JsonValueKind.String ? je.GetString() ?? "" : je.ToString())
+            : obj.ToString() ?? "";
+    }
+
+    /// <summary>JWT <c>type</c> claim: <c>session</c> signs Cursor in; <c>web</c> is a browser cookie.</summary>
+    public static string JwtType(string token)
+    {
+        return JwtClaim(token, "type").Trim().ToLowerInvariant();
+    }
+
+    public static bool CanWriteToCursor(string token)
+    {
+        var jwt = ExtractJwt(token);
+        if (!LooksLikeJwt(jwt)) return false;
+        return JwtType(jwt) != "web";
     }
 
     static string ReplaceFirst(string text, string old, string neu)

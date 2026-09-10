@@ -167,6 +167,7 @@ final class StatusItemController: NSObject {
         }
         switcher.submenu = sub
         menu.addItem(switcher)
+        menu.addItem(withTitle: "在 Cursor 登录当前账号…", action: #selector(loginCursor), keyEquivalent: "").target = self
         menu.addItem(withTitle: "导入 Token…", action: #selector(importToken), keyEquivalent: "").target = self
         menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -183,6 +184,24 @@ final class StatusItemController: NSObject {
     @objc private func openWeb() { store.openDashboard() }
     @objc private func openReport() { store.openReport() }
     @objc private func importToken() { store.openSettings(focusToken: true, startImport: true) }
+    @objc private func loginCursor() {
+        Task { @MainActor in
+            let result = await store.loginToCursor { running in
+                if !running { return true }
+                let alert = NSAlert()
+                alert.messageText = "登录到 Cursor"
+                alert.informativeText = CursorAuth.confirmCloseMessage
+                alert.addButton(withTitle: "关闭并写入")
+                alert.addButton(withTitle: "取消")
+                return alert.runModal() == .alertFirstButtonReturn
+            }
+            if result.ok {
+                store.notify("已写入 Cursor", result.message)
+            } else if result.message != "已取消" {
+                store.notify("未能登录 Cursor", result.message)
+            }
+        }
+    }
     @objc private func openSettings() { store.openSettings() }
     @objc private func switchAccount(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String { store.switchAccount(id) }

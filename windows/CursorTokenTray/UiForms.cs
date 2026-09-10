@@ -55,7 +55,7 @@ sealed class SettingsForm : Form
     readonly Label _status = new() { AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
     readonly Label _hint = new()
     {
-        Text = "Windows 可从 Cursor 应用或 Firefox 导入；Chrome / Edge 因系统加密无法读取。",
+        Text = "Windows 可从 Cursor 应用或 Firefox 导入。从 Cursor 导入的会话可「登录到 Cursor」切号；浏览器 Cookie 只能查用量。",
         AutoSize = true,
         ForeColor = Color.DimGray,
         Margin = new Padding(0, 4, 0, 8),
@@ -87,7 +87,8 @@ sealed class SettingsForm : Form
         _root.Controls.Add(_accounts);
         var rename = ActionButton("重命名");
         var del = ActionButton("删除");
-        _root.Controls.Add(Flow(rename, del));
+        var login = ActionButton("登录到 Cursor");
+        _root.Controls.Add(Flow(rename, del, login));
         _kind.Items.AddRange(["长期账号", "临时账号"]);
         _root.Controls.Add(FieldRow("账号类型", _kind));
         _tempFields.Controls.Add(LabeledSpin("开始时间", _startAt));
@@ -139,6 +140,7 @@ sealed class SettingsForm : Form
             WriteKindFrom(_cfg.ActiveAccount);
         };
         rename.Click += (_, _) => RenameActive();
+        login.Click += async (_, _) => await LoginToCursor();
         del.Click += (_, _) =>
         {
             if (_cfg.ActiveAccount is null) return;
@@ -473,6 +475,19 @@ sealed class SettingsForm : Form
         catch (Exception ex) { _status.Text = ex.Message; }
     }
 
+    async Task LoginToCursor()
+    {
+        if (_importing) return;
+        _importing = true;
+        _status.Text = "正在写入 Cursor…";
+        try
+        {
+            var result = await CursorLoginUi.Run(_cfg.ActiveAccount, this);
+            if (!IsDisposed) _status.Text = result.Message;
+        }
+        finally { _importing = false; }
+    }
+
     async Task DoImport(string? prefer, bool waitForLogin = false)
     {
         if (_importing) return;
@@ -632,5 +647,44 @@ sealed class SettingsForm : Form
     sealed record AccountItem(string Id, string Caption)
     {
         public override string ToString() => Caption;
+    }
+}
+
+static class CursorLoginUi
+{
+    public static async Task<CursorAuthApplyResult> Run(Account? acc, IWin32Window? owner)
+    {
+        if (acc is null)
+            return new CursorAuthApplyResult(false, "请先选择账号");
+        if (acc.TokenDecryptFailed || string.IsNullOrWhiteSpace(acc.Token))
+            return new CursorAuthApplyResult(false, "当前账号没有可用 Token");
+        var values = CursorAuth.BuildValues(
+            acc.Token,
+            email: CursorAuth.LooksLikeEmail(acc.Label) ? acc.Label : null,
+            membershipType: acc.MembershipType,
+            displayName: acc.DisplayLabel);
+        if (values.Values is null)
+            return new CursorAuthApplyResult(false, values.Error);
+        var target = CursorAuth.ResolveTarget();
+        var running = target is not null && CursorAuth.IsRunning(target);
+        if (running)
+        {
+            var answer = owner is null
+                ? MessageBox.Show(CursorAuth.ConfirmCloseMessage, "登录到 Cursor", MessageBoxButtons.OKCancel, MessageBoxIcon.Question)
+                : MessageBox.Show(owner, CursorAuth.ConfirmCloseMessage, "登录到 Cursor", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (answer != DialogResult.OK)
+                return new CursorAuthApplyResult(false, "已取消");
+        }
+        var token = acc.Token;
+        var email = CursorAuth.LooksLikeEmail(acc.Label) ? acc.Label : null;
+        var membership = acc.MembershipType;
+        var display = acc.DisplayLabel;
+        return await Task.Run(() => CursorAuth.Apply(
+            token,
+            email: email,
+            membershipType: membership,
+            displayName: display,
+            closeIfRunning: true,
+            relaunch: true));
     }
 }
