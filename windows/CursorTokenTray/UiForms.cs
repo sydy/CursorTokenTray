@@ -665,6 +665,12 @@ sealed class SettingsForm : Form
         catch (Exception ex) { _syncStatus.Text = ex.Message; }
     }
 
+    static bool TryParseDecimal(string text, out double value)
+    {
+        var cleaned = (text ?? "").Trim().Replace("，", ".");
+        return double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
     sealed record AccountItem(string Id, string Caption)
     {
         public override string ToString() => Caption;
@@ -707,11 +713,5 @@ static class CursorLoginUi
             displayName: display,
             closeIfRunning: true,
             relaunch: true));
-    }
-
-    static bool TryParseDecimal(string text, out double value)
-    {
-        var cleaned = (text ?? "").Trim().Replace("，", ".");
-        return double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
     }
 }
