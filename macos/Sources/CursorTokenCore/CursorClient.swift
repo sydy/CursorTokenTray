@@ -33,7 +33,23 @@ public struct CursorClient: Sendable {
         } catch {
             // 明细失败不影响套餐剩余
         }
+        do {
+            try await attachGrokBotUsage(&snapshot, token: token, timeout: limit)
+        } catch {
+            // Grok Bot 周额度失败不影响 Cursor 月度剩余
+        }
         return snapshot
+    }
+
+    func attachGrokBotUsage(_ snapshot: inout UsageSnapshot, token: String, timeout: TimeInterval) async throws {
+        let payload = try await requestJSON(
+            method: "POST",
+            endpoint: sandUsageEndpoint,
+            token: token,
+            body: [:],
+            timeout: min(timeout, sandUsageTimeout)
+        )
+        UsageParser.applySandUsage(&snapshot, payload)
     }
 
     func attachAggregatedTokens(_ snapshot: inout UsageSnapshot, token: String, timeout: TimeInterval) async throws {

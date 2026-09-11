@@ -140,21 +140,46 @@ final class UsageParserFixtureTests: XCTestCase {
 
     func testAggregatedUsage() throws {
         let root = try XCTUnwrap(try json("aggregated_usage_cases.json") as? [[String: Any]])
-        let cse = root[0]
-        let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: cse["payload"] as Any))
-        let parsed = UsageParser.parseAggregatedUsage(
-            payload,
-            autoPercent: num(cse["auto_percent"]),
-            apiPercent: num(cse["api_percent"])
-        )
-        XCTAssertEqual(parsed.total, int(cse["total"]) ?? -1)
-        let models = cse["models"] as! [[String: Any]]
-        XCTAssertEqual(parsed.models.count, models.count)
-        for (got, exp) in zip(parsed.models, models) {
-            XCTAssertEqual(got.name, str(exp["name"]))
-            XCTAssertEqual(got.tokens, int(exp["tokens"]) ?? -1)
-            XCTAssertEqual(got.tier, int(exp["tier"]) ?? -1)
-            XCTAssertEqual(opt(got.usagePercent), opt(num(exp["usage_percent"])))
+        for cse in root {
+            let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: cse["payload"] as Any))
+            let parsed = UsageParser.parseAggregatedUsage(
+                payload,
+                autoPercent: num(cse["auto_percent"]),
+                apiPercent: num(cse["api_percent"])
+            )
+            XCTAssertEqual(parsed.total, int(cse["total"]) ?? -1)
+            let models = cse["models"] as! [[String: Any]]
+            XCTAssertEqual(parsed.models.count, models.count)
+            for (got, exp) in zip(parsed.models, models) {
+                XCTAssertEqual(got.name, str(exp["name"]))
+                XCTAssertEqual(got.tokens, int(exp["tokens"]) ?? -1)
+                XCTAssertEqual(got.tier, int(exp["tier"]) ?? -1)
+                XCTAssertEqual(opt(got.usagePercent), opt(num(exp["usage_percent"])))
+            }
+        }
+    }
+
+    func testSandUsageCases() throws {
+        let root = try XCTUnwrap(try json("sand_usage_cases.json") as? [[String: Any]])
+        for cse in root {
+            let name = str(cse["name"])
+            var now = Date()
+            if let nowText = cse["now"] as? String {
+                now = AccountSync.parseIso(nowText) ?? now
+            }
+            let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: cse["payload"] as Any))
+            let got = UsageParser.parseSandUsageStatus(payload, now: now)
+            let exp = cse["expected"] as! [String: Any]
+            if bool(exp["shows_grok_bot"]) == false {
+                XCTAssertNil(got, name)
+                continue
+            }
+            let parsed = try XCTUnwrap(got, name)
+            XCTAssertEqual(parsed.percentUsed, try XCTUnwrap(num(exp["percent_used"])), accuracy: 0.0001, name)
+            XCTAssertEqual(parsed.remainingPercent, try XCTUnwrap(num(exp["remaining_percent"])), accuracy: 0.0001, name)
+            XCTAssertEqual(parsed.periodStart, exp["period_start"] as? String, name)
+            XCTAssertEqual(parsed.resetAt, exp["reset_at"] as? String, name)
+            XCTAssertEqual(parsed.daysRemaining, int(exp["days_remaining"]), name)
         }
     }
 

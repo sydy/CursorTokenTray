@@ -5,7 +5,7 @@ import SwiftUI
 
 enum FlyoutLayout {
     static let width: CGFloat = 500
-    static let height: CGFloat = 300
+    static let height: CGFloat = 328
     static let size = CGSize(width: width, height: height)
     static let cornerRadius: CGFloat = 16
     static let padding: CGFloat = 16
@@ -102,13 +102,16 @@ struct FlyoutView: View {
                         }
                     }
                 }
-                if usage.autoPercentUsed != nil || usage.apiPercentUsed != nil {
+                if usage.autoPercentUsed != nil || usage.apiPercentUsed != nil || usage.showsGrokBot {
                     card {
                         if let auto = usage.autoPercentUsed {
                             meterRow("First-party", auto, color: Color(red: 50 / 255, green: 180 / 255, blue: 170 / 255))
                         }
                         if let api = usage.apiPercentUsed {
                             meterRow("API", api, color: Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255))
+                        }
+                        if let grok = usage.grokBotPercentUsed {
+                            meterRow("Grok Bot", grok, color: Color(red: 99 / 255, green: 102 / 255, blue: 241 / 255))
                         }
                     }
                 }

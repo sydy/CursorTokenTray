@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CursorTokenCore;
 using Xunit;
@@ -114,19 +115,47 @@ public class FixtureTests
     [Fact]
     public void AggregatedUsage()
     {
-        var cse = Load("aggregated_usage_cases.json")[0];
-        var parsed = UsageParser.ParseAggregatedUsage(
-            JsonBag.Parse(cse.GetProperty("payload").GetRawText()),
-            cse.GetProperty("auto_percent").GetDouble(),
-            cse.GetProperty("api_percent").GetDouble());
-        Assert.Equal(cse.GetProperty("total").GetInt32(), parsed.total);
-        var models = cse.GetProperty("models").EnumerateArray().ToList();
-        Assert.Equal(models.Count, parsed.models.Count);
-        for (var i = 0; i < models.Count; i++)
+        foreach (var cse in Load("aggregated_usage_cases.json").EnumerateArray())
         {
-            Assert.Equal(models[i].GetProperty("name").GetString(), parsed.models[i].Name);
-            Assert.Equal(models[i].GetProperty("tokens").GetInt32(), parsed.models[i].Tokens);
-            Assert.Equal(Opt(models[i], "usage_percent"), parsed.models[i].UsagePercent);
+            var parsed = UsageParser.ParseAggregatedUsage(
+                JsonBag.Parse(cse.GetProperty("payload").GetRawText()),
+                cse.GetProperty("auto_percent").GetDouble(),
+                cse.GetProperty("api_percent").GetDouble());
+            Assert.Equal(cse.GetProperty("total").GetInt32(), parsed.total);
+            var models = cse.GetProperty("models").EnumerateArray().ToList();
+            Assert.Equal(models.Count, parsed.models.Count);
+            for (var i = 0; i < models.Count; i++)
+            {
+                Assert.Equal(models[i].GetProperty("name").GetString(), parsed.models[i].Name);
+                Assert.Equal(models[i].GetProperty("tokens").GetInt32(), parsed.models[i].Tokens);
+                Assert.Equal(Opt(models[i], "usage_percent"), parsed.models[i].UsagePercent);
+            }
+        }
+    }
+
+    [Fact]
+    public void SandUsageCases()
+    {
+        foreach (var cse in Load("sand_usage_cases.json").EnumerateArray())
+        {
+            var name = cse.GetProperty("name").GetString();
+            DateTimeOffset? now = null;
+            if (cse.TryGetProperty("now", out var nowEl) && nowEl.ValueKind == JsonValueKind.String)
+                now = DateTimeOffset.Parse(nowEl.GetString()!.Replace("Z", "+00:00"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal).ToUniversalTime();
+            var got = UsageParser.ParseSandUsageStatus(JsonBag.Parse(cse.GetProperty("payload").GetRawText()), now);
+            var exp = cse.GetProperty("expected");
+            if (!exp.GetProperty("shows_grok_bot").GetBoolean())
+            {
+                Assert.Null(got);
+                continue;
+            }
+            Assert.NotNull(got);
+            Assert.Equal(exp.GetProperty("percent_used").GetDouble(), got!.PercentUsed, 3);
+            Assert.Equal(exp.GetProperty("remaining_percent").GetDouble(), got.RemainingPercent, 3);
+            Assert.Equal(NullStr(exp, "period_start"), got.PeriodStart);
+            Assert.Equal(NullStr(exp, "reset_at"), got.ResetAt);
+            Assert.Equal(exp.TryGetProperty("days_remaining", out var days) && days.ValueKind == JsonValueKind.Number ? days.GetInt32() : (int?)null, got.DaysRemaining);
+            _ = name;
         }
     }
 
@@ -547,7 +576,8 @@ public class FixtureTests
         var handler = new SeqHandler([500, 500, 200]);
         var client = new CursorClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan });
         var snap = await client.FetchUsageSummary("user_01HTTP%3A%3Aaaa.bbb.ccc", 5);
-        Assert.Equal(3, handler.Calls);
+        // usage-summary: 500, 500, 200; then optional Grok Bot sand-usage POST
+        Assert.Equal(4, handler.Calls);
         Assert.Equal(0, snap.UsedPercent);
     }
 
@@ -686,7 +716,7 @@ public class FixtureTests
     public void FlyoutLayoutMatchesMacosMetrics()
     {
         Assert.Equal(500, FlyoutLayout.Width);
-        Assert.Equal(300, FlyoutLayout.Height);
+        Assert.Equal(328, FlyoutLayout.Height);
         Assert.Equal(16, FlyoutLayout.CornerRadius);
         Assert.Equal(16, FlyoutLayout.Padding);
         Assert.Equal(16, FlyoutLayout.ColumnGap);

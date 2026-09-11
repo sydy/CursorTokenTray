@@ -161,7 +161,7 @@ public static class UsageChartLayout
 public static class FlyoutLayout
 {
     public const int Width = 500;
-    public const int Height = 300;
+    public const int Height = 328;
     public const int CornerRadius = 16;
     public const int Padding = 16;
     public const int ColumnGap = 16;

@@ -24,7 +24,11 @@ public enum StatusText {
         }
         var plan = formatPlanCaption(usage.membershipType, accountLabel: accountLabel)
         if usage.isUnlimited { plan += " · 不限量" }
-        return "剩余 \(String(format: "%.1f", usage.remainingPercent))% | \(plan) | \(spend)\(tokens)First-party \(auto) | API \(api) | 预计可用 \(est) | 更新 \(updatedAt ?? "—")"
+        var grok = ""
+        if usage.showsGrokBot, let left = usage.grokBotRemainingPercent {
+            grok = String(format: " | Grok Bot 剩余 %.1f%%", left)
+        }
+        return "剩余 \(String(format: "%.1f", usage.remainingPercent))% | \(plan) | \(spend)\(tokens)First-party \(auto) | API \(api)\(grok) | 预计可用 \(est) | 更新 \(updatedAt ?? "—")"
     }
 
     public static func formatEstimatedDays(_ usage: UsageSnapshot) -> String {
@@ -186,6 +190,15 @@ public enum StatusText {
             let auto = usage.autoPercentUsed.map { String(format: "%.1f%%", $0) } ?? "—"
             let api = usage.apiPercentUsed.map { String(format: "%.1f%%", $0) } ?? "—"
             rows.append(("明细", "First-party \(auto) · API \(api)"))
+        }
+        if usage.showsGrokBot, let grokUsed = usage.grokBotPercentUsed {
+            var grok = String(format: "剩余 %.1f%%（本周已用 %.1f%%）", usage.grokBotRemainingPercent ?? 0, grokUsed)
+            if let reset = usage.grokBotResetAt {
+                let resetText = formatResetDate(reset)
+                let remaining = formatCycleRemaining(reset, daysRemaining: usage.grokBotDaysRemaining)
+                grok += remaining.isEmpty ? " · \(resetText) 重置" : " · \(resetText)（\(remaining)）"
+            }
+            rows.append(("Grok Bot", grok))
         }
         if let end = usage.billingCycleEnd {
             let endText = formatResetDate(end, includeTime: usage.billingCycleEndOverridden)

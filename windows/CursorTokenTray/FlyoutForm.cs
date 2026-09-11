@@ -298,9 +298,9 @@ sealed class FlyoutForm : Form
                         DrawBar(g, new RectangleF(inner.X, inner.Y + 20 * s, inner.Width, barH), used / limit, Color.FromArgb(48, 209, 88), pal);
                 });
             }
-            if (usage.AutoPercentUsed is not null || usage.ApiPercentUsed is not null)
+            if (usage.AutoPercentUsed is not null || usage.ApiPercentUsed is not null || usage.ShowsGrokBot)
             {
-                var rows = (usage.AutoPercentUsed is null ? 0 : 1) + (usage.ApiPercentUsed is null ? 0 : 1);
+                var rows = (usage.AutoPercentUsed is null ? 0 : 1) + (usage.ApiPercentUsed is null ? 0 : 1) + (usage.ShowsGrokBot ? 1 : 0);
                 var meterH = rows * (18 * s + barH) + Math.Max(0, rows - 1) * 8 * s;
                 y = DrawCard(g, box.X, y, box.Width, pal, meterH, inner =>
                 {
@@ -310,7 +310,12 @@ sealed class FlyoutForm : Form
                         inner.Y += 8 * s;
                     }
                     if (usage.ApiPercentUsed is { } api)
-                        DrawMeter(g, inner, "API", api, Color.FromArgb(142, 142, 147), capFont, valueFont, pal, s);
+                    {
+                        inner.Y = DrawMeter(g, inner, "API", api, Color.FromArgb(142, 142, 147), capFont, valueFont, pal, s);
+                        if (usage.ShowsGrokBot) inner.Y += 8 * s;
+                    }
+                    if (usage.ShowsGrokBot && usage.GrokBotPercentUsed is { } grok)
+                        DrawMeter(g, inner, "Grok Bot", grok, Color.FromArgb(99, 102, 241), capFont, valueFont, pal, s);
                 });
             }
             var parts = new List<string>();

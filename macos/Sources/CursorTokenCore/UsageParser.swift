@@ -4,6 +4,8 @@ public let cursorBaseURL = "https://cursor.com"
 public let usageEndpoints = ["/api/usage-summary", "/api/dashboard/usage-summary"]
 public let aggregatedUsageEndpoint = "/api/dashboard/get-aggregated-usage-events"
 public let filteredUsageEndpoint = "/api/dashboard/get-filtered-usage-events"
+public let sandUsageEndpoint = "/api/dashboard/get-sand-usage-status"
+public let sandUsageTimeout: TimeInterval = 8
 public let usageEventsPageSize = 100
 public let usageEventsMaxPages = 50
 public let usageURL = "https://cursor.com/dashboard/usage"
@@ -47,6 +49,7 @@ public struct ModelTokenUsage: Equatable, Sendable {
     }
 
     public var isCursorModel: Bool { tier == cursorModelTier }
+    public var isGrokBot: Bool { UsageParser.isGrokBotModel(name) }
 }
 
 public struct UsageSnapshot: Equatable {
@@ -75,6 +78,11 @@ public struct UsageSnapshot: Equatable {
     public var limitType: String
     public var isUnlimited: Bool
     public var billingCycleEndOverridden: Bool
+    public var grokBotPercentUsed: Double?
+    public var grokBotRemainingPercent: Double?
+    public var grokBotPeriodStart: String?
+    public var grokBotResetAt: String?
+    public var grokBotDaysRemaining: Int?
 
     public init(
         usedPercent: Double,
@@ -101,7 +109,12 @@ public struct UsageSnapshot: Equatable {
         pooledLimitCents: Double? = nil,
         limitType: String = "",
         isUnlimited: Bool = false,
-        billingCycleEndOverridden: Bool = false
+        billingCycleEndOverridden: Bool = false,
+        grokBotPercentUsed: Double? = nil,
+        grokBotRemainingPercent: Double? = nil,
+        grokBotPeriodStart: String? = nil,
+        grokBotResetAt: String? = nil,
+        grokBotDaysRemaining: Int? = nil
     ) {
         self.usedPercent = usedPercent
         self.remainingPercent = remainingPercent
@@ -128,6 +141,11 @@ public struct UsageSnapshot: Equatable {
         self.limitType = limitType
         self.isUnlimited = isUnlimited
         self.billingCycleEndOverridden = billingCycleEndOverridden
+        self.grokBotPercentUsed = grokBotPercentUsed
+        self.grokBotRemainingPercent = grokBotRemainingPercent
+        self.grokBotPeriodStart = grokBotPeriodStart
+        self.grokBotResetAt = grokBotResetAt
+        self.grokBotDaysRemaining = grokBotDaysRemaining
     }
 
     public var isTeamAccount: Bool {
@@ -139,8 +157,32 @@ public struct UsageSnapshot: Equatable {
         return billingMode == "amount" || isTeamAccount
     }
 
+    public var showsGrokBot: Bool { grokBotPercentUsed != nil }
+
     public var dashboardURL: String {
         UsageParser.dashboardURL(for: self)
+    }
+}
+
+public struct GrokBotUsage: Equatable, Sendable {
+    public var percentUsed: Double
+    public var remainingPercent: Double
+    public var periodStart: String?
+    public var resetAt: String?
+    public var daysRemaining: Int?
+
+    public init(
+        percentUsed: Double,
+        remainingPercent: Double,
+        periodStart: String? = nil,
+        resetAt: String? = nil,
+        daysRemaining: Int? = nil
+    ) {
+        self.percentUsed = percentUsed
+        self.remainingPercent = remainingPercent
+        self.periodStart = periodStart
+        self.resetAt = resetAt
+        self.daysRemaining = daysRemaining
     }
 }
 
@@ -219,6 +261,38 @@ public enum UsageParser {
 
     public static func formatSpendRange(used: Double?, limit: Double?) -> String {
         "\(formatUSDCents(used)) / \(formatUSDCents(limit))"
+    }
+
+    public static func isGrokBotModel(_ name: String?) -> Bool {
+        let key = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return key.hasPrefix("grok-bot-") || key.hasPrefix("sand-")
+    }
+
+    public static func applySandUsage(_ snapshot: inout UsageSnapshot, _ payload: JSONValue, now: Date = Date()) {
+        guard let parsed = parseSandUsageStatus(payload, now: now) else { return }
+        snapshot.grokBotPercentUsed = parsed.percentUsed
+        snapshot.grokBotRemainingPercent = parsed.remainingPercent
+        snapshot.grokBotPeriodStart = parsed.periodStart
+        snapshot.grokBotResetAt = parsed.resetAt
+        snapshot.grokBotDaysRemaining = parsed.daysRemaining
+    }
+
+    public static func parseSandUsageStatus(_ payload: JSONValue, now: Date = Date()) -> GrokBotUsage? {
+        guard payload.isObject, !payload.isEmpty else { return nil }
+        if optBool(payload, "usesPooledEnterpriseAllowance", "uses_pooled_enterprise_allowance") == true { return nil }
+        if optBool(payload, "includedLimitZero", "included_limit_zero") == true { return nil }
+        if optBool(payload, "hasNonZeroIncludedLimit", "has_non_zero_included_limit") != true { return nil }
+        guard let percent = firstPresent(payload, "usagePercent", "usage_percent").asDouble() else { return nil }
+        let used = clampPercent(percent)
+        let start = timestampToIso(firstPresent(payload, "currentPeriodStart", "current_period_start"))
+        let reset = timestampToIso(firstPresent(payload, "nextResetTimestampUtc", "next_reset_timestamp_utc"))
+        return GrokBotUsage(
+            percentUsed: round1(used),
+            remainingPercent: round1(100.0 - used),
+            periodStart: start,
+            resetAt: reset,
+            daysRemaining: reset.flatMap { daysUntil($0, now: now) }
+        )
     }
 
     public static func formatTokenCount(_ count: Double?) -> String {
@@ -414,11 +488,13 @@ public enum UsageParser {
             let total = sumTokenFields(payload)
             return ([], total > 0 ? total : 0)
         }
-        var cursorRows = allocateUsagePercents(rows.filter(\.isCursorModel), categoryPercent: autoPercent)
-        var otherRows = allocateUsagePercents(rows.filter { !$0.isCursorModel }, categoryPercent: apiPercent)
+        var grokRows = allocateUsagePercents(rows.filter(\.isGrokBot), categoryPercent: nil)
+        var cursorRows = allocateUsagePercents(rows.filter { $0.isCursorModel && !$0.isGrokBot }, categoryPercent: autoPercent)
+        var otherRows = allocateUsagePercents(rows.filter { !$0.isCursorModel && !$0.isGrokBot }, categoryPercent: apiPercent)
         cursorRows.sort { ($0.usagePercent ?? 0, $0.tokens) > ($1.usagePercent ?? 0, $1.tokens) }
         otherRows.sort { ($0.usagePercent ?? 0, $0.tokens) > ($1.usagePercent ?? 0, $1.tokens) }
-        let allocated = cursorRows + otherRows
+        grokRows.sort { $0.tokens > $1.tokens }
+        let allocated = cursorRows + otherRows + grokRows
         var total = allocated.reduce(0) { $0 + $1.tokens }
         let headerTotal = sumTokenFields(payload)
         if headerTotal > total { total = headerTotal }
@@ -426,6 +502,41 @@ public enum UsageParser {
     }
 
     typealias Meter = (Double, Double, Double?)
+
+    static func firstPresent(_ obj: JSONValue, _ keys: String...) -> JSONValue {
+        for key in keys where obj.object[key] != nil {
+            return obj[key]
+        }
+        return .null
+    }
+
+    static func optBool(_ obj: JSONValue, _ keys: String...) -> Bool? {
+        for key in keys where obj.object[key] != nil {
+            return obj[key].asBool()
+        }
+        return nil
+    }
+
+    public static func timestampToIso(_ value: JSONValue) -> String? {
+        if let raw = value.asString()?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            if raw.contains("T") || raw.hasSuffix("Z") {
+                return parseISO(raw) == nil ? nil : raw
+            }
+        }
+        guard let num = value.asDouble() else { return nil }
+        let seconds = abs(num) > 10_000_000_000 ? num / 1000.0 : num
+        let dt = Date(timeIntervalSince1970: seconds)
+        let ms = Int((seconds.truncatingRemainder(dividingBy: 1)) * 1000.0)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        if abs(seconds - seconds.rounded()) < 0.0005 || ms == 0 {
+            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        } else {
+            f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        }
+        return f.string(from: dt)
+    }
 
     static func object(_ value: JSONValue) -> JSONValue {
         value.isObject ? value : JSONValue([:])

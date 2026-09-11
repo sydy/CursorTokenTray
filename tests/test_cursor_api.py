@@ -3,6 +3,7 @@ import unittest
 from cursor_api import (
     USAGE_URL,
     BILLING_URL,
+    apply_sand_usage_status,
     dashboard_button_label,
     dashboard_link_label,
     dashboard_menu_label,
@@ -318,6 +319,8 @@ class SourceGuardTests(unittest.TestCase):
             self.assertNotIn("cursorAuth/onboardingDate", src)
             self.assertNotIn("telemetry.machineId", src)
         self.assertIn("get-filtered-usage-events", win_parser)
+        self.assertIn("get-sand-usage-status", win_parser)
+        self.assertIn("ParseSandUsageStatus", win_parser)
         win_layout = (root / "windows" / "CursorTokenCore" / "UiLayout.cs").read_text(encoding="utf-8")
         self.assertIn("UsageChartPanel", win_report)
         self.assertIn("按小时", win_chart)
@@ -330,6 +333,8 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("用量报表", mac_menu)
         self.assertIn("openReport", mac_menu)
         self.assertIn("get-filtered-usage-events", mac_parser)
+        self.assertIn("get-sand-usage-status", mac_parser)
+        self.assertIn("parseSandUsageStatus", mac_parser)
         self.assertIn("UsageChartView", mac_report)
         self.assertIn("chartHourly", mac_report)
         self.assertIn("按小时", mac_chart)
@@ -345,7 +350,7 @@ class SourceGuardTests(unittest.TestCase):
         mac_flyout = (root / "macos" / "Sources" / "CursorTokenTray" / "FlyoutView.swift").read_text(encoding="utf-8")
         for snippet in (
             "static let width: CGFloat = 500",
-            "static let height: CGFloat = 300",
+            "static let height: CGFloat = 328",
             "static let cornerRadius: CGFloat = 16",
             "static let leftWidth: CGFloat = 176",
             "static let ringSize: CGFloat = 148",
@@ -353,7 +358,7 @@ class SourceGuardTests(unittest.TestCase):
             self.assertIn(snippet, mac_flyout)
         for snippet in (
             "public const int Width = 500",
-            "public const int Height = 300",
+            "public const int Height = 328",
             "public const int CornerRadius = 16",
             "public const int LeftWidth = 176",
             "public const int RingSize = 148",
@@ -363,4 +368,31 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("DrawCard", win_flyout)
         self.assertIn("DashboardLinkLabel", win_flyout)
         self.assertIn("toolButton", mac_flyout)
+        self.assertIn("Grok Bot", win_flyout)
+        self.assertIn("Grok Bot", mac_flyout)
         self.assertNotIn("_body.Text", win_flyout)
+
+    def test_grok_bot_status_lines(self) -> None:
+        from datetime import datetime, timezone
+
+        from status_text import build_status_lines, format_summary_text
+
+        snap = parse_usage_summary(PERSONAL_ULTRA)
+        apply_sand_usage_status(
+            snap,
+            {
+                "currentPeriodStart": "2026-08-17T07:57:50.647Z",
+                "nextResetTimestampUtc": "2026-08-24T07:57:50.647Z",
+                "usagePercent": 58.3,
+                "hasNonZeroIncludedLimit": True,
+            },
+            now=datetime(2026, 8, 20, 7, 57, 50, 647000, tzinfo=timezone.utc),
+        )
+        self.assertTrue(snap.shows_grok_bot())
+        self.assertEqual(snap.grok_bot_percent_used, 58.3)
+        summary = format_summary_text(snap, None, "12:00")
+        self.assertIn("Grok Bot 剩余 41.7%", summary)
+        lines = dict(build_status_lines(snap, None, "12:00"))
+        self.assertIn("Grok Bot", lines)
+        self.assertIn("本周已用 58.3%", lines["Grok Bot"])
+        self.assertIn("8月24日", lines["Grok Bot"])

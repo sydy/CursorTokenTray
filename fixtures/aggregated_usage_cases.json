@@ -37,5 +37,58 @@
         "usage_percent": 20.0
       }
     ]
+  },
+  {
+    "payload": {
+      "aggregations": [
+        {
+          "modelIntent": "auto",
+          "inputTokens": 100,
+          "outputTokens": 50,
+          "totalCents": 10,
+          "tier": 2
+        },
+        {
+          "modelIntent": "grok-bot-default",
+          "inputTokens": 800,
+          "outputTokens": 200,
+          "totalCents": 80,
+          "tier": 2
+        },
+        {
+          "modelIntent": "sand-automation",
+          "inputTokens": 50,
+          "outputTokens": 10,
+          "totalCents": 5,
+          "tier": 1
+        }
+      ]
+    },
+    "auto_percent": 40.0,
+    "api_percent": 10.0,
+    "total": 1210,
+    "models": [
+      {
+        "name": "auto",
+        "tokens": 150,
+        "cents": 10.0,
+        "tier": 2,
+        "usage_percent": 40.0
+      },
+      {
+        "name": "grok-bot-default",
+        "tokens": 1000,
+        "cents": 80.0,
+        "tier": 2,
+        "usage_percent": null
+      },
+      {
+        "name": "sand-automation",
+        "tokens": 60,
+        "cents": 5.0,
+        "tier": 1,
+        "usage_percent": null
+      }
+    ]
   }
 ]
