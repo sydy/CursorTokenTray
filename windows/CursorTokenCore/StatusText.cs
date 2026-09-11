@@ -15,7 +15,10 @@ public static class StatusText
         var spend = usage.ShowsAmount ? $"金额 {UsageParser.FormatSpendRange(usage.UsedCents, usage.LimitCents)} | " : "";
         var plan = FormatPlanCaption(usage.MembershipType, accountLabel);
         if (usage.IsUnlimited) plan += " · 不限量";
-        return $"剩余 {usage.RemainingPercent.ToString("0.0", CultureInfo.InvariantCulture)}% | {plan} | {spend}{tokens}First-party {auto} | API {api} | 预计可用 {est} | 更新 {updatedAt ?? "—"}";
+        var grok = usage.ShowsGrokBot && usage.GrokBotRemainingPercent is { } grokLeft
+            ? $" | Grok Bot 剩余 {grokLeft.ToString("0.0", CultureInfo.InvariantCulture)}%"
+            : "";
+        return $"剩余 {usage.RemainingPercent.ToString("0.0", CultureInfo.InvariantCulture)}% | {plan} | {spend}{tokens}First-party {auto} | API {api}{grok} | 预计可用 {est} | 更新 {updatedAt ?? "—"}";
     }
 
     public static string FormatEstimatedDays(UsageSnapshot usage)
@@ -143,6 +146,17 @@ public static class StatusText
             var auto = usage.AutoPercentUsed is null ? "—" : usage.AutoPercentUsed.Value.ToString("0.0", CultureInfo.InvariantCulture) + "%";
             var api = usage.ApiPercentUsed is null ? "—" : usage.ApiPercentUsed.Value.ToString("0.0", CultureInfo.InvariantCulture) + "%";
             rows.Add(("明细", $"First-party {auto} · API {api}"));
+        }
+        if (usage.ShowsGrokBot && usage.GrokBotPercentUsed is { } grokUsed)
+        {
+            var grok = $"剩余 {usage.GrokBotRemainingPercent?.ToString("0.0", CultureInfo.InvariantCulture)}%（本周已用 {grokUsed.ToString("0.0", CultureInfo.InvariantCulture)}%）";
+            if (usage.GrokBotResetAt is { } grokReset)
+            {
+                var resetText = FormatResetDate(grokReset);
+                var remaining = FormatCycleRemaining(grokReset, usage.GrokBotDaysRemaining);
+                grok += string.IsNullOrEmpty(remaining) ? $" · {resetText} 重置" : $" · {resetText}（{remaining}）";
+            }
+            rows.Add(("Grok Bot", grok));
         }
         if (usage.BillingCycleEnd is { } end)
         {

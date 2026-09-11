@@ -3,6 +3,7 @@
 Golden JSON fixtures shared by Python, Swift (`macos/`), and C# (`windows/`).
 
 - `usage_summary_cases.json` — Dashboard usage-summary payloads and expected snapshots
+- `sand_usage_cases.json` — Grok Bot weekly allowance (`get-sand-usage-status`) and eligibility rules
 - `token_cases.json` — WorkosCursorSessionToken normalize / variants / account id
 - `format_cases.json` — membership, USD, token count, status pill / plan caption
 - `aggregated_usage_cases.json` — model token aggregation

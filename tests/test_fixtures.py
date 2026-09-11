@@ -71,19 +71,43 @@ class GoldenFixtureTests(unittest.TestCase):
         from cursor_api import parse_aggregated_usage
 
         cases = json.loads((ROOT / "fixtures" / "aggregated_usage_cases.json").read_text(encoding="utf-8"))
-        cse = cases[0]
-        models, total = parse_aggregated_usage(
-            cse["payload"],
-            auto_percent=cse["auto_percent"],
-            api_percent=cse["api_percent"],
-        )
-        self.assertEqual(total, cse["total"])
-        self.assertEqual(len(models), len(cse["models"]))
-        for got, exp in zip(models, cse["models"]):
-            self.assertEqual(got.name, exp["name"])
-            self.assertEqual(got.tokens, exp["tokens"])
-            self.assertEqual(got.tier, exp["tier"])
-            self.assertEqual(got.usage_percent, exp["usage_percent"])
+        for cse in cases:
+            with self.subTest(cse.get("name", "case")):
+                models, total = parse_aggregated_usage(
+                    cse["payload"],
+                    auto_percent=cse["auto_percent"],
+                    api_percent=cse["api_percent"],
+                )
+                self.assertEqual(total, cse["total"])
+                self.assertEqual(len(models), len(cse["models"]))
+                for got, exp in zip(models, cse["models"]):
+                    self.assertEqual(got.name, exp["name"])
+                    self.assertEqual(got.tokens, exp["tokens"])
+                    self.assertEqual(got.tier, exp["tier"])
+                    self.assertEqual(got.usage_percent, exp["usage_percent"])
+
+    def test_sand_usage_fixtures_match_python(self) -> None:
+        from datetime import datetime, timezone
+
+        from cursor_api import parse_sand_usage_status
+
+        cases = json.loads((ROOT / "fixtures" / "sand_usage_cases.json").read_text(encoding="utf-8"))
+        for cse in cases:
+            with self.subTest(cse["name"]):
+                now = None
+                if cse.get("now"):
+                    now = datetime.fromisoformat(cse["now"].replace("Z", "+00:00")).astimezone(timezone.utc)
+                got = parse_sand_usage_status(cse["payload"], now=now)
+                exp = cse["expected"]
+                if not exp["shows_grok_bot"]:
+                    self.assertIsNone(got)
+                    continue
+                assert got is not None
+                self.assertEqual(got["percent_used"], exp["percent_used"])
+                self.assertEqual(got["remaining_percent"], exp["remaining_percent"])
+                self.assertEqual(got["period_start"], exp["period_start"])
+                self.assertEqual(got["reset_at"], exp["reset_at"])
+                self.assertEqual(got["days_remaining"], exp["days_remaining"])
 
     def test_usage_events_fixtures_match_python(self) -> None:
         from usage_report import (

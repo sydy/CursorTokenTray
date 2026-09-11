@@ -1,0 +1,125 @@
+[
+  {
+    "name": "included_weekly",
+    "now": "2026-08-20T07:57:50.647Z",
+    "payload": {
+      "currentPeriodStart": "2026-08-17T07:57:50.647Z",
+      "nextResetTimestampUtc": "2026-08-24T07:57:50.647Z",
+      "usagePercent": 58.25,
+      "hasAvailableUsage": true,
+      "hasNonZeroIncludedLimit": true
+    },
+    "expected": {
+      "shows_grok_bot": true,
+      "percent_used": 58.2,
+      "remaining_percent": 41.8,
+      "period_start": "2026-08-17T07:57:50.647Z",
+      "reset_at": "2026-08-24T07:57:50.647Z",
+      "days_remaining": 4
+    }
+  },
+  {
+    "name": "snake_case",
+    "now": "2026-08-20T07:57:50.647Z",
+    "payload": {
+      "current_period_start": "2026-08-17T07:57:50.647Z",
+      "next_reset_timestamp_utc": "2026-08-24T07:57:50.647Z",
+      "usage_percent": 12,
+      "has_available_usage": true,
+      "has_non_zero_included_limit": true
+    },
+    "expected": {
+      "shows_grok_bot": true,
+      "percent_used": 12.0,
+      "remaining_percent": 88.0,
+      "period_start": "2026-08-17T07:57:50.647Z",
+      "reset_at": "2026-08-24T07:57:50.647Z",
+      "days_remaining": 4
+    }
+  },
+  {
+    "name": "epoch_ms",
+    "now": "2026-08-20T07:57:50.000Z",
+    "payload": {
+      "currentPeriodStart": 1771077734000,
+      "nextResetTimestampUtc": "1771682534000",
+      "usagePercent": 0,
+      "hasNonZeroIncludedLimit": true
+    },
+    "expected": {
+      "shows_grok_bot": true,
+      "percent_used": 0.0,
+      "remaining_percent": 100.0,
+      "period_start": "2026-02-14T14:02:14Z",
+      "reset_at": "2026-02-21T14:02:14Z",
+      "days_remaining": 0
+    }
+  },
+  {
+    "name": "start_only_no_reset",
+    "payload": {
+      "currentPeriodStart": "2026-08-17T07:57:50.647Z",
+      "usagePercent": 10,
+      "hasNonZeroIncludedLimit": true
+    },
+    "expected": {
+      "shows_grok_bot": true,
+      "percent_used": 10.0,
+      "remaining_percent": 90.0,
+      "period_start": "2026-08-17T07:57:50.647Z",
+      "reset_at": null,
+      "days_remaining": null
+    }
+  },
+  {
+    "name": "no_included_limit",
+    "payload": {
+      "usagePercent": 0,
+      "hasAvailableUsage": false,
+      "hasNonZeroIncludedLimit": false
+    },
+    "expected": {
+      "shows_grok_bot": false
+    }
+  },
+  {
+    "name": "included_limit_zero",
+    "payload": {
+      "usagePercent": 0,
+      "includedLimitZero": true,
+      "hasNonZeroIncludedLimit": true
+    },
+    "expected": {
+      "shows_grok_bot": false
+    }
+  },
+  {
+    "name": "pooled_enterprise",
+    "payload": {
+      "usagePercent": 12,
+      "hasNonZeroIncludedLimit": true,
+      "usesPooledEnterpriseAllowance": true
+    },
+    "expected": {
+      "shows_grok_bot": false
+    }
+  },
+  {
+    "name": "missing_percent",
+    "payload": {
+      "hasNonZeroIncludedLimit": true
+    },
+    "expected": {
+      "shows_grok_bot": false
+    }
+  },
+  {
+    "name": "missing_included_flag",
+    "payload": {
+      "usagePercent": 40
+    },
+    "expected": {
+      "shows_grok_bot": false
+    }
+  }
+]

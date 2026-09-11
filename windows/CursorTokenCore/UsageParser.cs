@@ -7,6 +7,7 @@ namespace CursorTokenCore;
 public record ModelTokenUsage(string Name, int Tokens, double Cents, int Tier, double? UsagePercent = null)
 {
     public bool IsCursorModel => Tier == UsageParser.CursorModelTier;
+    public bool IsGrokBot => UsageParser.IsGrokBotModel(Name);
 }
 
 public sealed class UsageSnapshot
@@ -36,9 +37,22 @@ public sealed class UsageSnapshot
     public string LimitType { get; set; } = "";
     public bool IsUnlimited { get; set; }
     public bool BillingCycleEndOverridden { get; set; }
+    public double? GrokBotPercentUsed { get; set; }
+    public double? GrokBotRemainingPercent { get; set; }
+    public string? GrokBotPeriodStart { get; set; }
+    public string? GrokBotResetAt { get; set; }
+    public int? GrokBotDaysRemaining { get; set; }
     public bool IsTeamAccount => UsageParser.IsTeamMembership(MembershipType, LimitType);
     public bool ShowsAmount => UsedCents is not null && LimitCents is > 0 && (BillingMode == "amount" || IsTeamAccount);
+    public bool ShowsGrokBot => GrokBotPercentUsed is not null;
 }
+
+public sealed record GrokBotUsage(
+    double PercentUsed,
+    double RemainingPercent,
+    string? PeriodStart,
+    string? ResetAt,
+    int? DaysRemaining);
 
 public static class UsageParser
 {
@@ -49,6 +63,8 @@ public static class UsageParser
     public static readonly string[] UsageEndpoints = ["/api/usage-summary", "/api/dashboard/usage-summary"];
     public const string AggregatedEndpoint = "/api/dashboard/get-aggregated-usage-events";
     public const string FilteredEndpoint = "/api/dashboard/get-filtered-usage-events";
+    public const string SandUsageEndpoint = "/api/dashboard/get-sand-usage-status";
+    public const double SandUsageTimeout = 8;
     public const int UsageEventsPageSize = 100;
     public const int UsageEventsMaxPages = 50;
 
@@ -105,6 +121,43 @@ public static class UsageParser
     }
 
     public static string FormatSpendRange(double? used, double? limit) => $"{FormatUsdCents(used)} / {FormatUsdCents(limit)}";
+
+    public static bool IsGrokBotModel(string? name)
+    {
+        var key = (name ?? "").Trim().ToLowerInvariant();
+        return key.StartsWith("grok-bot-") || key.StartsWith("sand-");
+    }
+
+    public static void ApplySandUsage(UsageSnapshot snapshot, JsonBag payload, DateTimeOffset? now = null)
+    {
+        var parsed = ParseSandUsageStatus(payload, now);
+        if (parsed is null) return;
+        snapshot.GrokBotPercentUsed = parsed.PercentUsed;
+        snapshot.GrokBotRemainingPercent = parsed.RemainingPercent;
+        snapshot.GrokBotPeriodStart = parsed.PeriodStart;
+        snapshot.GrokBotResetAt = parsed.ResetAt;
+        snapshot.GrokBotDaysRemaining = parsed.DaysRemaining;
+    }
+
+    public static GrokBotUsage? ParseSandUsageStatus(JsonBag payload, DateTimeOffset? now = null)
+    {
+        if (!payload.IsObject || payload.IsEmpty) return null;
+        if (OptBool(payload, "usesPooledEnterpriseAllowance", "uses_pooled_enterprise_allowance") == true) return null;
+        if (OptBool(payload, "includedLimitZero", "included_limit_zero") == true) return null;
+        if (OptBool(payload, "hasNonZeroIncludedLimit", "has_non_zero_included_limit") != true) return null;
+        var percent = FirstPresent(payload, "usagePercent", "usage_percent").AsDouble();
+        if (percent is null) return null;
+        var used = Numbers.ClampPercent(percent.Value);
+        var start = TimestampToIso(FirstPresent(payload, "currentPeriodStart", "current_period_start"));
+        var reset = TimestampToIso(FirstPresent(payload, "nextResetTimestampUtc", "next_reset_timestamp_utc"));
+        var clock = now ?? DateTimeOffset.UtcNow;
+        return new GrokBotUsage(
+            Numbers.Round1(used),
+            Numbers.Round1(100 - used),
+            start,
+            reset,
+            reset is null ? null : DaysUntil(reset, clock));
+    }
 
     public static string FormatTokenCount(double? count)
     {
@@ -251,11 +304,13 @@ public static class UsageParser
             var totalOnly = SumTokenFields(payload);
             return ([], totalOnly > 0 ? totalOnly : 0);
         }
-        var cursorRows = Allocate(rows.Where(m => m.IsCursorModel).ToList(), autoPercent);
-        var otherRows = Allocate(rows.Where(m => !m.IsCursorModel).ToList(), apiPercent);
+        var grokRows = Allocate(rows.Where(m => m.IsGrokBot).ToList(), null);
+        var cursorRows = Allocate(rows.Where(m => m.IsCursorModel && !m.IsGrokBot).ToList(), autoPercent);
+        var otherRows = Allocate(rows.Where(m => !m.IsCursorModel && !m.IsGrokBot).ToList(), apiPercent);
         cursorRows = cursorRows.OrderByDescending(m => m.UsagePercent ?? 0).ThenByDescending(m => m.Tokens).ToList();
         otherRows = otherRows.OrderByDescending(m => m.UsagePercent ?? 0).ThenByDescending(m => m.Tokens).ToList();
-        var allocated = cursorRows.Concat(otherRows).ToList();
+        grokRows = grokRows.OrderByDescending(m => m.Tokens).ToList();
+        var allocated = cursorRows.Concat(otherRows).Concat(grokRows).ToList();
         var total = allocated.Sum(m => m.Tokens);
         var header = SumTokenFields(payload);
         if (header > total) total = header;
@@ -394,6 +449,43 @@ public static class UsageParser
             double? pct = categoryPercent is null ? null : Numbers.Round1(share * categoryPercent.Value);
             return model with { UsagePercent = pct };
         }).ToList();
+    }
+
+    static JsonBag FirstPresent(JsonBag obj, params string[] keys)
+    {
+        foreach (var key in keys)
+            if (obj.Has(key)) return obj[key];
+        return JsonBag.Null;
+    }
+
+    static bool? OptBool(JsonBag obj, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!obj.Has(key)) continue;
+            return obj[key].AsBool();
+        }
+        return null;
+    }
+
+    public static string? TimestampToIso(JsonBag value)
+    {
+        var raw = value.AsString()?.Trim();
+        if (!string.IsNullOrEmpty(raw) && (raw.Contains('T') || raw.EndsWith("Z", StringComparison.Ordinal)))
+            return ParseIso(raw) is null ? null : raw;
+        if (value.AsDouble() is not { } num) return null;
+        var seconds = Math.Abs(num) > 10_000_000_000 ? num / 1000.0 : num;
+        try
+        {
+            var dt = DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(seconds * 1000.0)).ToUniversalTime();
+            return dt.Millisecond == 0
+                ? dt.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture)
+                : dt.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     static DateTimeOffset? ParseIso(string? iso)

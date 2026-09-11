@@ -17,6 +17,8 @@ CURSOR_BASE = "https://cursor.com"
 USAGE_ENDPOINTS = ("/api/usage-summary", "/api/dashboard/usage-summary")
 AGGREGATED_USAGE_ENDPOINT = "/api/dashboard/get-aggregated-usage-events"
 FILTERED_USAGE_ENDPOINT = "/api/dashboard/get-filtered-usage-events"
+SAND_USAGE_ENDPOINT = "/api/dashboard/get-sand-usage-status"
+SAND_USAGE_TIMEOUT = 8.0
 USAGE_URL = "https://cursor.com/dashboard/usage"
 SPENDING_URL = "https://cursor.com/dashboard/spending"
 BILLING_URL = "https://cursor.com/dashboard/billing"
@@ -43,6 +45,7 @@ _MEMBERSHIP_LABELS = {
 # Dashboard Included Usage：tier 2 = Cursor 模型，其余为其他模型
 CURSOR_MODEL_TIER = 2
 _MODEL_NAME_ALIASES = {"default": "auto"}
+_GROK_BOT_MODEL_PREFIXES = ("grok-bot-", "sand-")
 
 # HTTP 头必须是 latin-1；复制时常见脏字符
 _TOKEN_JUNK = (
@@ -67,6 +70,10 @@ class ModelTokenUsage:
     @property
     def is_cursor_model(self) -> bool:
         return self.tier == CURSOR_MODEL_TIER
+
+    @property
+    def is_grok_bot(self) -> bool:
+        return is_grok_bot_model(self.name)
 
 
 @dataclass
@@ -97,9 +104,17 @@ class UsageSnapshot:
     limit_type: str = ""
     is_unlimited: bool = False
     billing_cycle_end_overridden: bool = False
+    grok_bot_percent_used: float | None = None
+    grok_bot_remaining_percent: float | None = None
+    grok_bot_period_start: str | None = None
+    grok_bot_reset_at: str | None = None
+    grok_bot_days_remaining: int | None = None
 
     def is_team_account(self) -> bool:
         return is_team_membership(self.membership_type, self.limit_type)
+
+    def shows_grok_bot(self) -> bool:
+        return self.grok_bot_percent_used is not None
 
     def shows_amount(self) -> bool:
         if self.used_cents is None or self.limit_cents is None or self.limit_cents <= 0:
@@ -373,7 +388,21 @@ def fetch_usage_summary(session_token: str, timeout: float = 30.0) -> UsageSnaps
     except Exception:
         # 明细失败不影响套餐剩余；飞出层仍显示百分比
         pass
+    try:
+        attach_grok_bot_usage(snapshot, token, timeout=min(timeout, SAND_USAGE_TIMEOUT))
+    except Exception:
+        # Grok Bot 周额度是独立接口，失败不影响 Cursor 月度剩余
+        pass
     return snapshot
+
+
+def attach_grok_bot_usage(
+    snapshot: UsageSnapshot,
+    token: str,
+    timeout: float = SAND_USAGE_TIMEOUT,
+) -> None:
+    payload = _request_json("POST", SAND_USAGE_ENDPOINT, token, body={}, timeout=timeout)
+    apply_sand_usage_status(snapshot, payload)
 
 
 def attach_aggregated_tokens(
@@ -432,13 +461,16 @@ def parse_aggregated_usage(
         total = _sum_token_fields(payload)
         return (), total if total > 0 else 0
 
-    cursor_rows = [m for m in rows if m.is_cursor_model]
-    other_rows = [m for m in rows if not m.is_cursor_model]
+    grok_rows = [m for m in rows if m.is_grok_bot]
+    cursor_rows = [m for m in rows if m.is_cursor_model and not m.is_grok_bot]
+    other_rows = [m for m in rows if not m.is_cursor_model and not m.is_grok_bot]
     cursor_rows = _allocate_usage_percents(cursor_rows, auto_percent)
     other_rows = _allocate_usage_percents(other_rows, api_percent)
+    grok_rows = _allocate_usage_percents(grok_rows, None)
     cursor_rows.sort(key=lambda m: (m.usage_percent or 0.0, m.tokens), reverse=True)
     other_rows.sort(key=lambda m: (m.usage_percent or 0.0, m.tokens), reverse=True)
-    allocated = (*cursor_rows, *other_rows)
+    grok_rows.sort(key=lambda m: m.tokens, reverse=True)
+    allocated = (*cursor_rows, *other_rows, *grok_rows)
     total = sum(m.tokens for m in allocated)
     header_total = _sum_token_fields(payload)
     if header_total > total:
@@ -600,6 +632,54 @@ def parse_usage_summary(payload: dict[str, Any]) -> UsageSnapshot:
         limit_type=limit_type,
         is_unlimited=is_unlimited,
     )
+
+
+def is_grok_bot_model(name: str | None) -> bool:
+    key = (name or "").strip().lower()
+    return any(key.startswith(prefix) for prefix in _GROK_BOT_MODEL_PREFIXES)
+
+
+def apply_sand_usage_status(
+    snapshot: UsageSnapshot,
+    payload: dict[str, Any],
+    now: datetime | None = None,
+) -> None:
+    parsed = parse_sand_usage_status(payload, now=now)
+    if parsed is None:
+        return
+    snapshot.grok_bot_percent_used = parsed["percent_used"]
+    snapshot.grok_bot_remaining_percent = parsed["remaining_percent"]
+    snapshot.grok_bot_period_start = parsed["period_start"]
+    snapshot.grok_bot_reset_at = parsed["reset_at"]
+    snapshot.grok_bot_days_remaining = parsed["days_remaining"]
+
+
+def parse_sand_usage_status(
+    payload: dict[str, Any] | None,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Grok Bot 独立周额度。无套餐内额度 / 企业池化账号不画环。"""
+    if not isinstance(payload, dict) or not payload:
+        return None
+    if _first_bool(payload, "usesPooledEnterpriseAllowance", "uses_pooled_enterprise_allowance"):
+        return None
+    if _first_bool(payload, "includedLimitZero", "included_limit_zero"):
+        return None
+    if _first_bool(payload, "hasNonZeroIncludedLimit", "has_non_zero_included_limit") is not True:
+        return None
+    percent = _as_float(_first_present(payload, "usagePercent", "usage_percent"))
+    if percent is None:
+        return None
+    used = min(100.0, max(0.0, float(percent)))
+    start = _timestamp_to_iso(_first_present(payload, "currentPeriodStart", "current_period_start"))
+    reset = _timestamp_to_iso(_first_present(payload, "nextResetTimestampUtc", "next_reset_timestamp_utc"))
+    return {
+        "percent_used": round(used, 1),
+        "remaining_percent": round(100.0 - used, 1),
+        "period_start": start,
+        "reset_at": reset,
+        "days_remaining": days_until(reset, now) if reset else None,
+    }
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -818,6 +898,55 @@ def _display_model_name(raw: str) -> str:
     if not name:
         return ""
     return _MODEL_NAME_ALIASES.get(name, name)
+
+
+def _first_present(block: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in block and block[key] is not None:
+            return block[key]
+    return None
+
+
+def _first_bool(block: dict[str, Any], *keys: str) -> bool | None:
+    value = _first_present(block, *keys)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes"}:
+        return True
+    if text in {"0", "false", "no"}:
+        return False
+    return None
+
+
+def _timestamp_to_iso(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if "T" in text or text.endswith("Z"):
+            return text if _parse_iso(text) is not None else None
+        num = _as_float(text)
+        if num is None:
+            return None
+        return _timestamp_to_iso(num)
+    num = _as_float(value)
+    if num is None:
+        return None
+    seconds = num / 1000.0 if abs(num) > 10_000_000_000 else num
+    try:
+        dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    if dt.microsecond:
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _model_tier(name: str, tier: Any) -> int:

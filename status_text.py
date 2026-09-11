@@ -34,9 +34,12 @@ def format_summary_text(
     plan = format_plan_caption(usage.membership_type, account_label)
     if usage.is_unlimited:
         plan = f"{plan} · 不限量"
+    grok = ""
+    if usage.shows_grok_bot() and usage.grok_bot_remaining_percent is not None:
+        grok = f" | Grok Bot 剩余 {usage.grok_bot_remaining_percent:.1f}%"
     return (
         f"剩余 {usage.remaining_percent:.1f}% | {plan} | "
-        f"{spend}{tokens}First-party {auto} | API {api} | 预计可用 {est} | 更新 {updated_at or '—'}"
+        f"{spend}{tokens}First-party {auto} | API {api}{grok} | 预计可用 {est} | 更新 {updated_at or '—'}"
     )
 
 
@@ -216,6 +219,16 @@ def build_status_lines(
         auto = "—" if usage.auto_percent_used is None else f"{usage.auto_percent_used:.1f}%"
         api = "—" if usage.api_percent_used is None else f"{usage.api_percent_used:.1f}%"
         rows.append(("明细", f"First-party {auto} · API {api}"))
+    if usage.shows_grok_bot() and usage.grok_bot_percent_used is not None:
+        grok = f"剩余 {usage.grok_bot_remaining_percent:.1f}%（本周已用 {usage.grok_bot_percent_used:.1f}%）"
+        if usage.grok_bot_reset_at:
+            reset_text = format_reset_date(usage.grok_bot_reset_at)
+            remaining = format_cycle_remaining(usage.grok_bot_reset_at, usage.grok_bot_days_remaining)
+            if remaining:
+                grok += f" · {reset_text}（{remaining}）"
+            else:
+                grok += f" · {reset_text} 重置"
+        rows.append(("Grok Bot", grok))
 
     if usage.billing_cycle_end:
         end_text = format_reset_date(

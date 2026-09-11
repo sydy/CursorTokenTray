@@ -39,7 +39,15 @@ public sealed class CursorClient
         }
         if (snap is null) throw last ?? new CursorApiException("接口返回格式异常");
         try { await AttachAggregated(snap, token, timeout, ct); } catch { }
+        try { await AttachGrokBot(snap, token, timeout, ct); } catch { }
         return snap;
+    }
+
+    async Task AttachGrokBot(UsageSnapshot snap, string token, double timeout, CancellationToken ct)
+    {
+        var limit = Math.Min(timeout, UsageParser.SandUsageTimeout);
+        var payload = await RequestJson("POST", UsageParser.SandUsageEndpoint, token, "{}", limit, ct);
+        UsageParser.ApplySandUsage(snap, payload);
     }
 
     async Task AttachAggregated(UsageSnapshot snap, string token, double timeout, CancellationToken ct)
