@@ -454,11 +454,16 @@ sealed class TrayContext : ApplicationContext
                     _report.RequestSync();
                     return;
                 }
-                _report = new ReportForm(_client, () => new ReportForm.ReportState(
-                    _config.ActiveAccount?.Token ?? _config.SessionToken,
-                    _config.ActiveAccountId,
-                    _usage,
-                    _usage?.IsTeamAccount == true));
+                _report = new ReportForm(_client, () =>
+                {
+                    var usage = _usage;
+                    return new ReportForm.ReportState(
+                        _config.ActiveAccount?.Token ?? _config.SessionToken,
+                        _config.ActiveAccountId,
+                        usage,
+                        usage?.IsTeamAccount == true,
+                        _config.SpendSettings(usage?.MembershipType));
+                });
                 _report.FormClosed += (_, _) => _report = null;
                 _report.Show();
             }

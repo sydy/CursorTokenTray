@@ -22,10 +22,12 @@ public sealed class UsageEvent
     public double? TotalCents { get; set; }
     public bool IsHeadless { get; set; }
     public bool IsChargeable { get; set; }
+    [JsonIgnore]
+    public double AllocatedCny { get; set; }
 }
 
-public sealed record DailyUsageRow(string Date, long Tokens, double Cents, int Count);
-public sealed record ModelUsageRow(string Name, long Tokens, double Cents, int Count, int HeadlessCount);
+public sealed record DailyUsageRow(string Date, long Tokens, double Cents, int Count, double Cny = 0);
+public sealed record ModelUsageRow(string Name, long Tokens, double Cents, int Count, int HeadlessCount, double Cny = 0);
 public sealed record ChartSlice(string Model, long Tokens, double Cents, int Count);
 public sealed record ChartBucket(string Key, string Label, long Tokens, double Cents, int Count, List<ChartSlice> Slices);
 public sealed class UsageChartSeries
@@ -58,6 +60,16 @@ public sealed class UsageReport
     public List<DailyUsageRow> Daily { get; init; } = [];
     public List<ModelUsageRow> Models { get; init; } = [];
     public List<UsageEvent> Events { get; init; } = [];
+    public double TotalCny { get; init; }
+    public double PlanCny { get; init; }
+    public double OnDemandCny { get; init; }
+    public double UsdCnyRate { get; init; }
+    public double MonthlyPlanUsd { get; init; }
+}
+
+public readonly record struct CnySpendSettings(double MonthlyPlanUsd, double UsdCnyRate, string MembershipType)
+{
+    public static CnySpendSettings Default => new(0, UsageEvents.DefaultUsdCnyRate, "");
 }
 
 public sealed record UsageEventsSyncResult(List<UsageEvent> Events, int Fetched, int TotalAvailable, bool Truncated);
@@ -69,7 +81,8 @@ public static class UsageEvents
     public const string KindOnDemand = "on_demand";
     public const string KindOther = "other";
     public const string TzLabel = "北京时间";
-    public const string CsvHeader = "日期(北京时间),用户,类型,模型,Token,费用,云端Agent";
+    public const string CsvHeader = "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent";
+    public const double DefaultUsdCnyRate = 7.50;
     public const int HourlyChartWindowHours = 48;
     const long MsHour = 3_600_000;
     const long MsDay = 86_400_000;
@@ -117,6 +130,89 @@ public static class UsageEvents
         if (ev.Kind == KindIncluded)
             return cents > 0 ? UsageParser.FormatUsdCents(cents) + " 套餐内" : "套餐内";
         return cents > 0 ? UsageParser.FormatUsdCents(cents) : "—";
+    }
+
+    public static double ClampUsdCnyRate(double rate)
+    {
+        if (double.IsNaN(rate) || double.IsInfinity(rate)) return DefaultUsdCnyRate;
+        return Math.Clamp(rate, 0.01, 100);
+    }
+
+    public static double ClampMonthlyPlanUsd(double usd)
+    {
+        if (double.IsNaN(usd) || double.IsInfinity(usd) || usd < 0) return 0;
+        return Math.Min(usd, 10_000);
+    }
+
+    public static double DefaultMonthlyPlanUsd(string? membership)
+    {
+        var key = (membership ?? "").Trim().ToLowerInvariant().Replace(" ", "");
+        if (key.EndsWith("套餐", StringComparison.Ordinal)) key = key[..^2];
+        return key switch
+        {
+            "pro" => 20,
+            "pro+" or "pro_plus" or "proplus" => 60,
+            "ultra" => 200,
+            _ => 0,
+        };
+    }
+
+    public static double ResolveMonthlyPlanUsd(double monthlyPlanUsd, string? membership = null)
+    {
+        var stored = ClampMonthlyPlanUsd(monthlyPlanUsd);
+        return stored > 0 ? stored : DefaultMonthlyPlanUsd(membership);
+    }
+
+    public static bool IsPlanCovered(string? kind)
+    {
+        var key = (kind ?? "").Trim().ToLowerInvariant();
+        return key is not KindOnDemand and not KindFree;
+    }
+
+    public static string FormatCny(double? yuan)
+    {
+        if (yuan is null) return "—";
+        var n = Math.Max(0, yuan.Value);
+        return "¥" + n.ToString("0.00", CultureInfo.InvariantCulture);
+    }
+
+    public static string FormatEventCny(UsageEvent ev, double? amount = null)
+    {
+        if (ev.Kind == KindFree) return "—";
+        return FormatCny(amount ?? ev.AllocatedCny);
+    }
+
+    public static double AllocateEventCny(UsageEvent ev, double includedCostSum, int includedCount, double planCny, double rate)
+    {
+        if (ev.Kind == KindFree) return 0;
+        if (ev.Kind == KindOnDemand) return CostCents(ev) / 100.0 * rate;
+        var cents = CostCents(ev);
+        if (includedCostSum > 1e-9) return planCny * (cents / includedCostSum);
+        if (includedCount > 0 && planCny > 0) return planCny / includedCount;
+        return 0;
+    }
+
+    static (Dictionary<string, double> byId, double planCny, double onDemandCny, double monthly, double rate) CnyById(
+        IList<UsageEvent> events, CnySpendSettings? spend)
+    {
+        if (spend is null) return ([], 0, 0, 0, 0);
+        var rate = ClampUsdCnyRate(spend.Value.UsdCnyRate);
+        var monthly = ResolveMonthlyPlanUsd(spend.Value.MonthlyPlanUsd, spend.Value.MembershipType);
+        var planCny = monthly * rate;
+        var included = events.Where(ev => IsPlanCovered(ev.Kind)).ToList();
+        var includedCostSum = included.Sum(CostCents);
+        var includedCount = included.Count;
+        var byId = new Dictionary<string, double>(StringComparer.Ordinal);
+        var onDemandCny = 0.0;
+        for (var i = 0; i < events.Count; i++)
+        {
+            var ev = events[i];
+            var amount = AllocateEventCny(ev, includedCostSum, includedCount, planCny, rate);
+            var key = ev.Id.Length > 0 ? ev.Id : $"#{i}";
+            byId[key] = amount;
+            if (ev.Kind == KindOnDemand) onDemandCny += amount;
+        }
+        return (byId, planCny, onDemandCny, monthly, rate);
     }
 
     public static string FormatTime(long timestampMs)
@@ -340,32 +436,41 @@ public static class UsageEvents
             ? dollars * 100.0 : null;
     }
 
-    public static UsageReport BuildReport(IEnumerable<UsageEvent> events, UsageReportFilter? filter = null)
+    public static UsageReport BuildReport(IEnumerable<UsageEvent> events, UsageReportFilter? filter = null, CnySpendSettings? spend = null)
     {
         filter ??= new UsageReportFilter();
         var kind = (filter.Kind ?? "").Trim().ToLowerInvariant();
         var model = (filter.Model ?? "").Trim();
         var owning = (filter.OwningUser ?? "").Trim();
-        var selected = events.Where(ev =>
+        var source = events as IList<UsageEvent> ?? events.ToList();
+        var (cnyById, planCny, onDemandCny, monthly, rate) = CnyById(source, spend);
+        var selected = new List<UsageEvent>();
+        for (var i = 0; i < source.Count; i++)
         {
-            if (kind.Length > 0 && ev.Kind != kind) return false;
-            if (model.Length > 0 && ev.Model != model) return false;
-            if (filter.Headless is { } h && ev.IsHeadless != h) return false;
-            if (owning.Length > 0 && ev.OwningUser != owning) return false;
-            return true;
-        }).OrderByDescending(ev => ev.TimestampMs).ToList();
+            var ev = source[i];
+            if (kind.Length > 0 && ev.Kind != kind) continue;
+            if (model.Length > 0 && ev.Model != model) continue;
+            if (filter.Headless is { } h && ev.IsHeadless != h) continue;
+            if (owning.Length > 0 && ev.OwningUser != owning) continue;
+            var key = ev.Id.Length > 0 ? ev.Id : $"#{i}";
+            ev.AllocatedCny = cnyById.TryGetValue(key, out var cny) ? cny : 0;
+            selected.Add(ev);
+        }
+        selected = selected.OrderByDescending(ev => ev.TimestampMs).ToList();
 
-        var dailyMap = new Dictionary<string, (long tokens, double cents, int count)>(StringComparer.Ordinal);
-        var modelMap = new Dictionary<string, (long tokens, double cents, int count, int headless)>(StringComparer.Ordinal);
+        var dailyMap = new Dictionary<string, (long tokens, double cents, int count, double cny)>(StringComparer.Ordinal);
+        var modelMap = new Dictionary<string, (long tokens, double cents, int count, int headless, double cny)>(StringComparer.Ordinal);
         var included = 0; var free = 0; var onDemand = 0; var other = 0; var headless = 0;
         long totalTokens = 0;
         double totalCents = 0;
+        double totalCny = 0;
         var hasCost = false;
         foreach (var ev in selected)
         {
             var cents = CostCents(ev);
             totalTokens += ev.Tokens;
             totalCents += cents;
+            totalCny += ev.AllocatedCny;
             if (cents > 0) hasCost = true;
             if (ev.Kind == KindIncluded) included++;
             else if (ev.Kind == KindFree) free++;
@@ -374,10 +479,10 @@ public static class UsageEvents
             if (ev.IsHeadless) headless++;
             var day = EventDate(ev.TimestampMs);
             dailyMap.TryGetValue(day, out var d);
-            dailyMap[day] = (d.tokens + ev.Tokens, d.cents + cents, d.count + 1);
+            dailyMap[day] = (d.tokens + ev.Tokens, d.cents + cents, d.count + 1, d.cny + ev.AllocatedCny);
             var name = string.IsNullOrEmpty(ev.Model) ? "—" : ev.Model;
             modelMap.TryGetValue(name, out var m);
-            modelMap[name] = (m.tokens + ev.Tokens, m.cents + cents, m.count + 1, m.headless + (ev.IsHeadless ? 1 : 0));
+            modelMap[name] = (m.tokens + ev.Tokens, m.cents + cents, m.count + 1, m.headless + (ev.IsHeadless ? 1 : 0), m.cny + ev.AllocatedCny);
         }
         return new UsageReport
         {
@@ -390,26 +495,50 @@ public static class UsageEvents
             OnDemandCount = onDemand,
             OtherCount = other,
             HeadlessCount = headless,
-            Daily = dailyMap.OrderBy(kv => kv.Key).Select(kv => new DailyUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count)).ToList(),
-            Models = modelMap.Select(kv => new ModelUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.headless))
+            Daily = dailyMap.OrderBy(kv => kv.Key).Select(kv => new DailyUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.cny)).ToList(),
+            Models = modelMap.Select(kv => new ModelUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.headless, kv.Value.cny))
                 .OrderByDescending(m => m.Tokens).ThenByDescending(m => m.Cents).ThenByDescending(m => m.Count).ToList(),
             Events = selected,
+            TotalCny = totalCny,
+            PlanCny = planCny,
+            OnDemandCny = onDemandCny,
+            UsdCnyRate = rate,
+            MonthlyPlanUsd = monthly,
         };
     }
 
-    public static string ToCsv(IEnumerable<UsageEvent> events)
+    public static string ToCsv(IEnumerable<UsageEvent> events, CnySpendSettings? spend = null, IEnumerable<UsageEvent>? allocationBase = null)
     {
+        var rows = events as IList<UsageEvent> ?? events.ToList();
+        Dictionary<string, double> cnyById = [];
+        if (spend is not null)
+        {
+            var baseEvents = allocationBase as IList<UsageEvent> ?? allocationBase?.ToList() ?? rows;
+            cnyById = CnyById(baseEvents, spend).byId;
+        }
         var sb = new StringBuilder();
         sb.Append('\uFEFF');
         sb.AppendLine(CsvHeader);
-        foreach (var ev in events)
+        for (var i = 0; i < rows.Count; i++)
         {
+            var ev = rows[i];
+            string cnyText;
+            if (spend is not null)
+            {
+                var key = ev.Id.Length > 0 ? ev.Id : $"#{i}";
+                cnyText = FormatEventCny(ev, cnyById.GetValueOrDefault(key));
+            }
+            else if (ev.AllocatedCny > 0)
+                cnyText = FormatEventCny(ev);
+            else
+                cnyText = "—";
             sb.Append(EscapeCsv(FormatTime(ev.TimestampMs))).Append(',');
             sb.Append(EscapeCsv(ev.UserEmail)).Append(',');
             sb.Append(EscapeCsv(KindLabel(ev.Kind))).Append(',');
             sb.Append(EscapeCsv(ev.Model)).Append(',');
             sb.Append(EscapeCsv(ev.Tokens.ToString(CultureInfo.InvariantCulture))).Append(',');
             sb.Append(EscapeCsv(FormatCost(ev))).Append(',');
+            sb.Append(EscapeCsv(cnyText)).Append(',');
             sb.Append(EscapeCsv(ev.IsHeadless ? "是" : "否"));
             sb.AppendLine();
         }

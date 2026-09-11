@@ -33,7 +33,11 @@ final class ReportStore: ObservableObject {
     }
 
     var report: UsageReport {
-        UsageEvents.buildReport(events, filter: filter)
+        UsageEvents.buildReport(events, filter: filter, spend: spend)
+    }
+
+    var spend: CnySpendSettings {
+        app.config.spendSettings(membership: app.usage?.membershipType)
     }
 
     var chartSeries: UsageChartSeries {
@@ -113,7 +117,7 @@ final class ReportStore: ObservableObject {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try UsageEvents.toCSV(rows).write(to: url, atomically: true, encoding: .utf8)
+            try UsageEvents.toCSV(rows, spend: spend, allocationBase: events).write(to: url, atomically: true, encoding: .utf8)
             status = "已导出 \(url.path)"
         } catch {
             status = "导出失败：\(error.localizedDescription)"
@@ -151,7 +155,7 @@ struct ReportRootView: View {
             details
         }
         .padding(16)
-        .frame(minWidth: 860, minHeight: 620)
+        .frame(minWidth: 920, minHeight: 620)
         .task { await store.sync() }
         .onChange(of: store.teamScope) { _ in
             Task { await store.sync() }
@@ -200,7 +204,13 @@ struct ReportRootView: View {
         var mix = "套餐内 \(report.includedCount) · 免费 \(report.freeCount) · 按需 \(report.onDemandCount)"
         if report.headlessCount > 0 { mix += " · 云端 \(report.headlessCount)" }
         let cost = report.hasCost ? "    费用 \(UsageParser.formatUSDCents(report.totalCents))" : ""
-        return "请求 \(report.eventCount)    Token \(UsageParser.formatTokenCount(Double(report.totalTokens)))    \(mix)\(cost)"
+        var text = "请求 \(report.eventCount)    Token \(UsageParser.formatTokenCount(Double(report.totalTokens)))    \(mix)\(cost)"
+        if report.planCny > 0 || report.onDemandCny > 0 {
+            let expected = report.planCny + report.onDemandCny
+            let rate = String(format: "%.2f", report.usdCnyRate)
+            text += "    预计实付 \(UsageEvents.formatCNY(expected))（月费 \(UsageEvents.formatCNY(report.planCny)) + 按需 \(UsageEvents.formatCNY(report.onDemandCny))）· 汇率 \(rate)"
+        }
+        return text
     }
 
     var models: some View {
@@ -210,6 +220,7 @@ struct ReportRootView: View {
                 TableColumn("模型") { row in Text(row.name) }
                 TableColumn("Token") { row in Text(UsageParser.formatTokenCount(Double(row.tokens))) }
                 TableColumn("费用") { row in Text(row.cents > 0 ? UsageParser.formatUSDCents(row.cents) : "—") }
+                TableColumn("实付") { row in Text(row.cny > 0 ? UsageEvents.formatCNY(row.cny) : "—") }
                 TableColumn("次数") { row in Text(String(row.count)) }
                 TableColumn("云端") { row in Text(row.headlessCount > 0 ? String(row.headlessCount) : "—") }
             }
@@ -227,6 +238,7 @@ struct ReportRootView: View {
                 TableColumn("模型") { ev in Text(ev.model) }
                 TableColumn("Token") { ev in Text(UsageParser.formatTokenCount(Double(ev.tokens))) }
                 TableColumn("费用") { ev in Text(UsageEvents.formatCost(ev)) }
+                TableColumn("实付") { ev in Text(UsageEvents.formatEventCny(ev)) }
                 TableColumn("云端") { ev in Text(ev.isHeadless ? "是" : "否") }
             }
         }
@@ -261,7 +273,7 @@ final class ReportWindowController: NSObject, NSWindowDelegate {
                 defer: false
             )
             win.title = "用量报表"
-            win.minSize = NSSize(width: 820, height: 580)
+            win.minSize = NSSize(width: 880, height: 580)
             win.isReleasedWhenClosed = false
             win.delegate = self
             window = win

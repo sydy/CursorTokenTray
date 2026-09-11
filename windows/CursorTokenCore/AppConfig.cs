@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
@@ -65,6 +66,8 @@ public sealed class AppConfig
     public bool NotifyExhaustionRisk { get; set; } = true;
     public bool AutostartEnabled { get; set; } = true;
     public string TrayDisplayMode { get; set; } = "ring";
+    public double MonthlyPlanUsd { get; set; }
+    public double UsdCnyRate { get; set; } = UsageEvents.DefaultUsdCnyRate;
     public bool LowQuotaNotified { get; set; }
     public bool AuthErrorNotified { get; set; }
     public List<int> AlertNotifiedLevels { get; set; } = [];
@@ -86,6 +89,9 @@ public sealed class AppConfig
 
     public Account? ActiveAccount =>
         Accounts.FirstOrDefault(a => a.Id == ActiveAccountId) ?? Accounts.FirstOrDefault();
+
+    public CnySpendSettings SpendSettings(string? membership = null) =>
+        new(MonthlyPlanUsd, UsdCnyRate, membership ?? ActiveAccount?.MembershipType ?? "");
 
     public (Account acc, bool created) UpsertAccount(string rawToken, string? label = null, string? membershipType = null, double? remaining = null, string? error = null, bool activate = true)
     {
@@ -425,6 +431,8 @@ public static class ConfigStore
         }
         var mode = Str(raw, "tray_display_mode", "ring").Trim().ToLowerInvariant();
         cfg.TrayDisplayMode = mode is "ring" or "number" or "dot" ? mode : "ring";
+        cfg.MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(DoubleVal(raw, "monthly_plan_usd", 0));
+        cfg.UsdCnyRate = UsageEvents.ClampUsdCnyRate(DoubleVal(raw, "usd_cny_rate", UsageEvents.DefaultUsdCnyRate));
         if (!raw.TryGetProperty("alert_thresholds", out _) && raw.TryGetProperty("low_quota_threshold", out _))
             cfg.AlertThresholds = [cfg.LowQuotaThreshold];
         else
@@ -566,6 +574,16 @@ public static class ConfigStore
         return null;
     }
 
+    static double DoubleVal(JsonElement raw, string key, double fallback)
+    {
+        if (!raw.TryGetProperty(key, out var v)) return fallback;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+        if (v.ValueKind == JsonValueKind.String
+            && double.TryParse((v.GetString() ?? "").Replace("，", "."), NumberStyles.Float, CultureInfo.InvariantCulture, out d))
+            return d;
+        return fallback;
+    }
+
     static object ToDict(AppConfig cfg) => new
     {
         session_token = TokenProtector.DiskToken(cfg.SessionToken, cfg.StoredSessionToken, cfg.DecryptError && string.IsNullOrEmpty(cfg.SessionToken)),
@@ -596,6 +614,8 @@ public static class ConfigStore
         notify_exhaustion_risk = cfg.NotifyExhaustionRisk,
         autostart_enabled = cfg.AutostartEnabled,
         tray_display_mode = cfg.TrayDisplayMode,
+        monthly_plan_usd = cfg.MonthlyPlanUsd,
+        usd_cny_rate = cfg.UsdCnyRate,
         low_quota_notified = cfg.LowQuotaNotified,
         auth_error_notified = cfg.AuthErrorNotified,
         alert_notified_levels = cfg.AlertNotifiedLevels,

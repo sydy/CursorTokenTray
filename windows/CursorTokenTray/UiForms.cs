@@ -1,3 +1,4 @@
+using System.Globalization;
 using CursorTokenCore;
 
 namespace CursorTokenTray;
@@ -14,6 +15,15 @@ sealed class SettingsForm : Form
     };
     readonly TextBox _token = new() { Multiline = true, Height = 64, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
     readonly TextBox _interval = new() { Width = 80 };
+    readonly TextBox _planUsd = new() { Width = 80 };
+    readonly TextBox _cnyRate = new() { Width = 80 };
+    readonly Label _spendHint = new()
+    {
+        Text = "月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。报表「实付」= 月费按套餐内费用分摊 + 按需×汇率。",
+        AutoSize = true,
+        ForeColor = Color.DimGray,
+        Margin = new Padding(0, 0, 0, 8),
+    };
     readonly TextBox _thresholds = new() { Width = 180 };
     readonly CheckBox _notify = new() { Text = "启用用量通知", AutoSize = true, Margin = new Padding(0, 6, 0, 4) };
     readonly CheckBox _exhaust = new() { Text = "启用耗尽风险通知", AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
@@ -106,6 +116,9 @@ sealed class SettingsForm : Form
         _root.Controls.Add(_status);
         _root.Controls.Add(_hint);
         _root.Controls.Add(FieldRow("刷新间隔（分钟）", _interval));
+        _root.Controls.Add(FieldRow("月费（美元）", _planUsd));
+        _root.Controls.Add(FieldRow("美元兑人民币", _cnyRate));
+        _root.Controls.Add(_spendHint);
         _root.Controls.Add(FieldRow("告警阈值", _thresholds));
         _root.Controls.Add(_notify);
         _root.Controls.Add(_exhaust);
@@ -211,7 +224,7 @@ sealed class SettingsForm : Form
     void WrapText()
     {
         var inner = Math.Max(200, ClientSize.Width - _root.Padding.Horizontal - 8);
-        foreach (var label in new[] { _addCaption, _status, _hint, _syncStatus, _syncHint, _endAt })
+        foreach (var label in new[] { _addCaption, _status, _hint, _syncStatus, _syncHint, _endAt, _spendHint })
             label.MaximumSize = new Size(inner, 0);
     }
 
@@ -371,6 +384,10 @@ sealed class SettingsForm : Form
             _token.Text = "";
             _token.PlaceholderText = "粘贴新 Token 以添加或更换账号（已保存的不会显示）";
             _interval.Text = cfg.RefreshIntervalMinutes.ToString();
+            var membership = cfg.ActiveAccount?.MembershipType ?? "";
+            var plan = cfg.MonthlyPlanUsd > 0 ? cfg.MonthlyPlanUsd : UsageEvents.DefaultMonthlyPlanUsd(membership);
+            _planUsd.Text = plan.ToString("0.##", CultureInfo.InvariantCulture);
+            _cnyRate.Text = cfg.UsdCnyRate.ToString("0.##", CultureInfo.InvariantCulture);
             _thresholds.Text = string.Join(",", cfg.AlertThresholds);
             _notify.Checked = cfg.NotifyEnabled;
             _exhaust.Checked = cfg.NotifyExhaustionRisk;
@@ -563,6 +580,10 @@ sealed class SettingsForm : Form
     {
         CopyRuntimeFromDisk();
         if (int.TryParse(_interval.Text, out var n) && n >= 1) _cfg.RefreshIntervalMinutes = n;
+        if (TryParseDecimal(_planUsd.Text, out var planUsd))
+            _cfg.MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(planUsd);
+        if (TryParseDecimal(_cnyRate.Text, out var rate))
+            _cfg.UsdCnyRate = UsageEvents.ClampUsdCnyRate(rate);
         _cfg.AlertThresholds = ConfigStore.ParseThresholds(_thresholds.Text);
         _cfg.NotifyEnabled = _notify.Checked;
         _cfg.NotifyExhaustionRisk = _exhaust.Checked;
@@ -686,5 +707,11 @@ static class CursorLoginUi
             displayName: display,
             closeIfRunning: true,
             relaunch: true));
+    }
+
+    static bool TryParseDecimal(string text, out double value)
+    {
+        var cleaned = (text ?? "").Trim().Replace("，", ".");
+        return double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
     }
 }

@@ -16,6 +16,7 @@ public struct UsageEvent: Equatable, Sendable {
     public var totalCents: Double?
     public var isHeadless: Bool
     public var isChargeable: Bool
+    public var allocatedCny: Double
 
     public init(
         id: String = "",
@@ -32,7 +33,8 @@ public struct UsageEvent: Equatable, Sendable {
         chargedCents: Double? = nil,
         totalCents: Double? = nil,
         isHeadless: Bool = false,
-        isChargeable: Bool = false
+        isChargeable: Bool = false,
+        allocatedCny: Double = 0
     ) {
         self.id = id
         self.timestampMs = timestampMs
@@ -49,6 +51,7 @@ public struct UsageEvent: Equatable, Sendable {
         self.totalCents = totalCents
         self.isHeadless = isHeadless
         self.isChargeable = isChargeable
+        self.allocatedCny = allocatedCny
     }
 }
 
@@ -57,6 +60,15 @@ public struct DailyUsageRow: Equatable, Sendable {
     public var tokens: Int
     public var cents: Double
     public var count: Int
+    public var cny: Double
+
+    public init(date: String, tokens: Int, cents: Double, count: Int, cny: Double = 0) {
+        self.date = date
+        self.tokens = tokens
+        self.cents = cents
+        self.count = count
+        self.cny = cny
+    }
 }
 
 public struct ModelUsageRow: Equatable, Sendable {
@@ -65,6 +77,16 @@ public struct ModelUsageRow: Equatable, Sendable {
     public var cents: Double
     public var count: Int
     public var headlessCount: Int
+    public var cny: Double
+
+    public init(name: String, tokens: Int, cents: Double, count: Int, headlessCount: Int, cny: Double = 0) {
+        self.name = name
+        self.tokens = tokens
+        self.cents = cents
+        self.count = count
+        self.headlessCount = headlessCount
+        self.cny = cny
+    }
 }
 
 public struct ChartSlice: Equatable, Sendable {
@@ -118,6 +140,23 @@ public struct UsageReport: Equatable, Sendable {
     public var daily: [DailyUsageRow]
     public var models: [ModelUsageRow]
     public var events: [UsageEvent]
+    public var totalCny: Double = 0
+    public var planCny: Double = 0
+    public var onDemandCny: Double = 0
+    public var usdCnyRate: Double = 0
+    public var monthlyPlanUsd: Double = 0
+}
+
+public struct CnySpendSettings: Equatable, Sendable {
+    public var monthlyPlanUsd: Double
+    public var usdCnyRate: Double
+    public var membershipType: String
+
+    public init(monthlyPlanUsd: Double = 0, usdCnyRate: Double = UsageEvents.defaultUsdCnyRate, membershipType: String = "") {
+        self.monthlyPlanUsd = monthlyPlanUsd
+        self.usdCnyRate = usdCnyRate
+        self.membershipType = membershipType
+    }
 }
 
 public struct UsageEventsSyncResult: Sendable {
@@ -133,7 +172,8 @@ public enum UsageEvents {
     public static let kindOnDemand = "on_demand"
     public static let kindOther = "other"
     public static let tzLabel = "北京时间"
-    public static let csvHeader = "日期(北京时间),用户,类型,模型,Token,费用,云端Agent"
+    public static let csvHeader = "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent"
+    public static let defaultUsdCnyRate = 7.50
     public static let hourlyChartWindowHours = 48
     static let msHour: Int64 = 3_600_000
     static let msDay: Int64 = 86_400_000
@@ -173,6 +213,90 @@ public enum UsageEvents {
             return cents > 0 ? "\(UsageParser.formatUSDCents(cents)) 套餐内" : "套餐内"
         }
         return cents > 0 ? UsageParser.formatUSDCents(cents) : "—"
+    }
+
+    public static func clampUsdCnyRate(_ rate: Double) -> Double {
+        if rate.isNaN || rate.isInfinite { return defaultUsdCnyRate }
+        return min(100, max(0.01, rate))
+    }
+
+    public static func clampMonthlyPlanUsd(_ usd: Double) -> Double {
+        if usd.isNaN || usd.isInfinite || usd < 0 { return 0 }
+        return min(10_000, usd)
+    }
+
+    public static func defaultMonthlyPlanUsd(_ membership: String?) -> Double {
+        var key = (membership ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            .replacingOccurrences(of: " ", with: "")
+        if key.hasSuffix("套餐") {
+            key = String(key.dropLast(2))
+        }
+        switch key {
+        case "pro": return 20
+        case "pro+", "pro_plus", "proplus": return 60
+        case "ultra": return 200
+        default: return 0
+        }
+    }
+
+    public static func resolveMonthlyPlanUsd(_ monthlyPlanUsd: Double, membership: String? = nil) -> Double {
+        let stored = clampMonthlyPlanUsd(monthlyPlanUsd)
+        return stored > 0 ? stored : defaultMonthlyPlanUsd(membership)
+    }
+
+    public static func isPlanCovered(_ kind: String?) -> Bool {
+        let key = (kind ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        return key != kindOnDemand && key != kindFree
+    }
+
+    public static func formatCNY(_ yuan: Double?) -> String {
+        guard let yuan else { return "—" }
+        let n = max(0, yuan)
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        f.numberStyle = .decimal
+        return "¥" + (f.string(from: NSNumber(value: n)) ?? "0.00")
+    }
+
+    public static func formatEventCny(_ ev: UsageEvent, amount: Double? = nil) -> String {
+        if ev.kind == kindFree { return "—" }
+        return formatCNY(amount ?? ev.allocatedCny)
+    }
+
+    public static func allocateEventCny(
+        _ ev: UsageEvent,
+        includedCostSum: Double,
+        includedCount: Int,
+        planCny: Double,
+        rate: Double
+    ) -> Double {
+        if ev.kind == kindFree { return 0 }
+        if ev.kind == kindOnDemand { return costCents(ev) / 100.0 * rate }
+        let cents = costCents(ev)
+        if includedCostSum > 1e-9 { return planCny * (cents / includedCostSum) }
+        if includedCount > 0 && planCny > 0 { return planCny / Double(includedCount) }
+        return 0
+    }
+
+    static func cnyById(_ events: [UsageEvent], spend: CnySpendSettings?) -> (byId: [String: Double], planCny: Double, onDemandCny: Double, monthly: Double, rate: Double) {
+        guard let spend else { return ([:], 0, 0, 0, 0) }
+        let rate = clampUsdCnyRate(spend.usdCnyRate)
+        let monthly = resolveMonthlyPlanUsd(spend.monthlyPlanUsd, membership: spend.membershipType)
+        let planCny = monthly * rate
+        let included = events.filter { isPlanCovered($0.kind) }
+        let includedCostSum = included.reduce(0.0) { $0 + costCents($1) }
+        let includedCount = included.count
+        var byId: [String: Double] = [:]
+        var onDemandCny = 0.0
+        for (i, ev) in events.enumerated() {
+            let amount = allocateEventCny(ev, includedCostSum: includedCostSum, includedCount: includedCount, planCny: planCny, rate: rate)
+            let key = ev.id.isEmpty ? "#\(i)" : ev.id
+            byId[key] = amount
+            if ev.kind == kindOnDemand { onDemandCny += amount }
+        }
+        return (byId, planCny, onDemandCny, monthly, rate)
     }
 
     public static func formatTime(_ timestampMs: Int64) -> String {
@@ -421,28 +545,36 @@ public enum UsageEvents {
         return dollars * 100.0
     }
 
-    public static func buildReport(_ events: [UsageEvent], filter: UsageReportFilter = UsageReportFilter()) -> UsageReport {
+    public static func buildReport(_ events: [UsageEvent], filter: UsageReportFilter = UsageReportFilter(), spend: CnySpendSettings? = nil) -> UsageReport {
         let kind = filter.kind.trimmingCharacters(in: .whitespaces).lowercased()
         let model = filter.model.trimmingCharacters(in: .whitespaces)
         let owning = filter.owningUser.trimmingCharacters(in: .whitespaces)
-        let selected = events.filter { ev in
-            if !kind.isEmpty && ev.kind != kind { return false }
-            if !model.isEmpty && ev.model != model { return false }
-            if let h = filter.headless, ev.isHeadless != h { return false }
-            if !owning.isEmpty && ev.owningUser != owning { return false }
-            return true
-        }.sorted { $0.timestampMs > $1.timestampMs }
+        let allocated = cnyById(events, spend: spend)
+        var selected: [UsageEvent] = []
+        for (i, ev) in events.enumerated() {
+            if !kind.isEmpty && ev.kind != kind { continue }
+            if !model.isEmpty && ev.model != model { continue }
+            if let h = filter.headless, ev.isHeadless != h { continue }
+            if !owning.isEmpty && ev.owningUser != owning { continue }
+            var copy = ev
+            let key = ev.id.isEmpty ? "#\(i)" : ev.id
+            copy.allocatedCny = allocated.byId[key] ?? 0
+            selected.append(copy)
+        }
+        selected.sort { $0.timestampMs > $1.timestampMs }
 
-        var dailyMap: [String: (Int, Double, Int)] = [:]
-        var modelMap: [String: (Int, Double, Int, Int)] = [:]
+        var dailyMap: [String: (Int, Double, Int, Double)] = [:]
+        var modelMap: [String: (Int, Double, Int, Int, Double)] = [:]
         var included = 0, free = 0, onDemand = 0, other = 0, headless = 0
         var totalTokens = 0
         var totalCents = 0.0
+        var totalCny = 0.0
         var hasCost = false
         for ev in selected {
             let cents = costCents(ev)
             totalTokens += ev.tokens
             totalCents += cents
+            totalCny += ev.allocatedCny
             if cents > 0 { hasCost = true }
             switch ev.kind {
             case kindIncluded: included += 1
@@ -452,18 +584,18 @@ public enum UsageEvents {
             }
             if ev.isHeadless { headless += 1 }
             let day = eventDate(ev.timestampMs)
-            let d = dailyMap[day] ?? (0, 0, 0)
-            dailyMap[day] = (d.0 + ev.tokens, d.1 + cents, d.2 + 1)
+            let d = dailyMap[day] ?? (0, 0, 0, 0)
+            dailyMap[day] = (d.0 + ev.tokens, d.1 + cents, d.2 + 1, d.3 + ev.allocatedCny)
             let name = ev.model.isEmpty ? "—" : ev.model
-            let m = modelMap[name] ?? (0, 0, 0, 0)
-            modelMap[name] = (m.0 + ev.tokens, m.1 + cents, m.2 + 1, m.3 + (ev.isHeadless ? 1 : 0))
+            let m = modelMap[name] ?? (0, 0, 0, 0, 0)
+            modelMap[name] = (m.0 + ev.tokens, m.1 + cents, m.2 + 1, m.3 + (ev.isHeadless ? 1 : 0), m.4 + ev.allocatedCny)
         }
         let daily = dailyMap.keys.sorted().map { key in
             let v = dailyMap[key]!
-            return DailyUsageRow(date: key, tokens: v.0, cents: v.1, count: v.2)
+            return DailyUsageRow(date: key, tokens: v.0, cents: v.1, count: v.2, cny: v.3)
         }
         let models = modelMap.map { key, v in
-            ModelUsageRow(name: key, tokens: v.0, cents: v.1, count: v.2, headlessCount: v.3)
+            ModelUsageRow(name: key, tokens: v.0, cents: v.1, count: v.2, headlessCount: v.3, cny: v.4)
         }.sorted { lhs, rhs in
             if lhs.tokens != rhs.tokens { return lhs.tokens > rhs.tokens }
             if lhs.cents != rhs.cents { return lhs.cents > rhs.cents }
@@ -481,13 +613,28 @@ public enum UsageEvents {
             headlessCount: headless,
             daily: daily,
             models: models,
-            events: selected
+            events: selected,
+            totalCny: totalCny,
+            planCny: allocated.planCny,
+            onDemandCny: allocated.onDemandCny,
+            usdCnyRate: allocated.rate,
+            monthlyPlanUsd: allocated.monthly
         )
     }
 
-    public static func toCSV(_ events: [UsageEvent]) -> String {
+    public static func toCSV(_ events: [UsageEvent], spend: CnySpendSettings? = nil, allocationBase: [UsageEvent]? = nil) -> String {
+        let allocated = spend == nil ? (byId: [String: Double](), planCny: 0.0, onDemandCny: 0.0, monthly: 0.0, rate: 0.0) : cnyById(allocationBase ?? events, spend: spend)
         var lines = ["\u{FEFF}\(csvHeader)"]
-        for ev in events {
+        for (i, ev) in events.enumerated() {
+            let cnyText: String
+            if spend != nil {
+                let key = ev.id.isEmpty ? "#\(i)" : ev.id
+                cnyText = formatEventCny(ev, amount: allocated.byId[key] ?? 0)
+            } else if ev.allocatedCny > 0 {
+                cnyText = formatEventCny(ev)
+            } else {
+                cnyText = "—"
+            }
             let cols = [
                 escapeCSV(formatTime(ev.timestampMs)),
                 escapeCSV(ev.userEmail),
@@ -495,6 +642,7 @@ public enum UsageEvents {
                 escapeCSV(ev.model),
                 escapeCSV(String(ev.tokens)),
                 escapeCSV(formatCost(ev)),
+                escapeCSV(cnyText),
                 escapeCSV(ev.isHeadless ? "是" : "否"),
             ]
             lines.append(cols.joined(separator: ","))
