@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -34,7 +34,14 @@ KIND_LABELS = {
 
 DISPLAY_TZ = timezone(timedelta(hours=8))
 TZ_LABEL = "北京时间"
-CSV_HEADER = f"日期({TZ_LABEL}),用户,类型,模型,Token,费用,云端Agent"
+CSV_HEADER = f"日期({TZ_LABEL}),用户,类型,模型,Token,费用,实付,云端Agent"
+DEFAULT_USD_CNY_RATE = 7.50
+_PLAN_USD = {
+    "pro": 20.0,
+    "pro_plus": 60.0,
+    "pro+": 60.0,
+    "ultra": 200.0,
+}
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,7 @@ class UsageEvent:
     total_cents: float | None
     is_headless: bool
     is_chargeable: bool
+    allocated_cny: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,7 @@ class DailyUsageRow:
     tokens: int
     cents: float
     count: int
+    cny: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -71,6 +80,7 @@ class ModelUsageRow:
     cents: float
     count: int
     headless_count: int
+    cny: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -118,6 +128,11 @@ class UsageReport:
     daily: tuple[DailyUsageRow, ...]
     models: tuple[ModelUsageRow, ...]
     events: tuple[UsageEvent, ...]
+    total_cny: float = 0.0
+    plan_cny: float = 0.0
+    on_demand_cny: float = 0.0
+    usd_cny_rate: float = 0.0
+    monthly_plan_usd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +141,13 @@ class UsageReportFilter:
     model: str = ""
     headless: bool | None = None
     owning_user: str = ""
+
+
+@dataclass(frozen=True)
+class CnySpendSettings:
+    monthly_plan_usd: float = 0.0
+    usd_cny_rate: float = DEFAULT_USD_CNY_RATE
+    membership_type: str = ""
 
 
 def classify_usage_kind(
@@ -174,6 +196,107 @@ def format_event_cost(event: UsageEvent) -> str:
     if cents > 0:
         return format_usd_cents(cents)
     return "—"
+
+
+def clamp_usd_cny_rate(rate: float | None) -> float:
+    try:
+        n = float(rate) if rate is not None else DEFAULT_USD_CNY_RATE
+    except (TypeError, ValueError):
+        return DEFAULT_USD_CNY_RATE
+    if n != n or n in (float("inf"), float("-inf")):
+        return DEFAULT_USD_CNY_RATE
+    return min(100.0, max(0.01, n))
+
+
+def clamp_monthly_plan_usd(usd: float | None) -> float:
+    try:
+        n = float(usd) if usd is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    if n != n or n in (float("inf"), float("-inf")) or n < 0:
+        return 0.0
+    return min(10_000.0, n)
+
+
+def default_monthly_plan_usd(membership: str | None) -> float:
+    key = (membership or "").strip().lower().replace(" ", "")
+    if key.endswith("套餐"):
+        key = key[:-2]
+    return _PLAN_USD.get(key, 0.0)
+
+
+def resolve_monthly_plan_usd(monthly_plan_usd: float | None, membership: str | None = None) -> float:
+    stored = clamp_monthly_plan_usd(monthly_plan_usd)
+    if stored > 0:
+        return stored
+    return default_monthly_plan_usd(membership)
+
+
+def plan_cny_amount(spend: CnySpendSettings | None) -> float:
+    if spend is None:
+        return 0.0
+    rate = clamp_usd_cny_rate(spend.usd_cny_rate)
+    return resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type) * rate
+
+
+def is_plan_covered_kind(kind: str | None) -> bool:
+    key = (kind or "").strip().lower()
+    return key not in {KIND_ON_DEMAND, KIND_FREE}
+
+
+def format_cny(amount: float | None) -> str:
+    if amount is None:
+        return "—"
+    n = max(0.0, float(amount))
+    return f"¥{n:.2f}"
+
+
+def format_event_cny(event: UsageEvent, amount: float | None = None) -> str:
+    if event.kind == KIND_FREE:
+        return "—"
+    return format_cny(event.allocated_cny if amount is None else amount)
+
+
+def allocate_event_cny(
+    event: UsageEvent,
+    included_cost_sum: float,
+    included_count: int,
+    plan_cny: float,
+    rate: float,
+) -> float:
+    if event.kind == KIND_FREE:
+        return 0.0
+    if event.kind == KIND_ON_DEMAND:
+        return event_cost_cents(event) / 100.0 * rate
+    cents = event_cost_cents(event)
+    if included_cost_sum > 1e-9:
+        return plan_cny * (cents / included_cost_sum)
+    if included_count > 0 and plan_cny > 0:
+        return plan_cny / included_count
+    return 0.0
+
+
+def _cny_by_id(
+    events: list[UsageEvent] | tuple[UsageEvent, ...],
+    spend: CnySpendSettings | None,
+) -> tuple[dict[str, float], float, float, float, float]:
+    if spend is None:
+        return {}, 0.0, 0.0, 0.0, 0.0
+    rate = clamp_usd_cny_rate(spend.usd_cny_rate)
+    monthly = resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type)
+    plan_cny = monthly * rate
+    included = [ev for ev in events if is_plan_covered_kind(ev.kind)]
+    included_cost_sum = sum(event_cost_cents(ev) for ev in included)
+    included_count = len(included)
+    by_id: dict[str, float] = {}
+    on_demand_cny = 0.0
+    for i, ev in enumerate(events):
+        amount = allocate_event_cny(ev, included_cost_sum, included_count, plan_cny, rate)
+        key = ev.id or f"#{i}"
+        by_id[key] = amount
+        if ev.kind == KIND_ON_DEMAND:
+            on_demand_cny += amount
+    return by_id, plan_cny, on_demand_cny, monthly, rate
 
 
 def format_event_time(timestamp_ms: int) -> str:
@@ -441,13 +564,16 @@ def parse_money_cents(value: Any) -> float | None:
 def build_usage_report(
     events: list[UsageEvent] | tuple[UsageEvent, ...],
     filt: UsageReportFilter | None = None,
+    spend: CnySpendSettings | None = None,
 ) -> UsageReport:
     filt = filt or UsageReportFilter()
     kind = (filt.kind or "").strip().lower()
     model = (filt.model or "").strip()
     owning = (filt.owning_user or "").strip()
+    source = list(events)
+    cny_by_id, plan_cny, on_demand_cny, monthly, rate = _cny_by_id(source, spend)
     selected: list[UsageEvent] = []
-    for event in events:
+    for i, event in enumerate(source):
         if kind and event.kind != kind:
             continue
         if model and event.model != model:
@@ -456,7 +582,8 @@ def build_usage_report(
             continue
         if owning and event.owning_user != owning:
             continue
-        selected.append(event)
+        key = event.id or f"#{i}"
+        selected.append(replace(event, allocated_cny=cny_by_id.get(key, 0.0)))
     selected.sort(key=lambda e: e.timestamp_ms, reverse=True)
 
     daily_map: dict[str, list[int | float]] = {}
@@ -464,11 +591,13 @@ def build_usage_report(
     included = free = on_demand = other = headless = 0
     total_tokens = 0
     total_cents = 0.0
+    total_cny = 0.0
     has_cost = False
     for event in selected:
         cents = event_cost_cents(event)
         total_tokens += event.tokens
         total_cents += cents
+        total_cny += event.allocated_cny
         if cents > 0:
             has_cost = True
         if event.kind == KIND_INCLUDED:
@@ -482,19 +611,27 @@ def build_usage_report(
         if event.is_headless:
             headless += 1
         day = event_date(event.timestamp_ms)
-        bucket = daily_map.setdefault(day, [0, 0.0, 0])
+        bucket = daily_map.setdefault(day, [0, 0.0, 0, 0.0])
         bucket[0] = int(bucket[0]) + event.tokens
         bucket[1] = float(bucket[1]) + cents
         bucket[2] = int(bucket[2]) + 1
-        row = model_map.setdefault(event.model or "—", [0, 0.0, 0, 0])
+        bucket[3] = float(bucket[3]) + event.allocated_cny
+        row = model_map.setdefault(event.model or "—", [0, 0.0, 0, 0, 0.0])
         row[0] = int(row[0]) + event.tokens
         row[1] = float(row[1]) + cents
         row[2] = int(row[2]) + 1
         if event.is_headless:
             row[3] = int(row[3]) + 1
+        row[4] = float(row[4]) + event.allocated_cny
 
     daily = tuple(
-        DailyUsageRow(date=day, tokens=int(vals[0]), cents=float(vals[1]), count=int(vals[2]))
+        DailyUsageRow(
+            date=day,
+            tokens=int(vals[0]),
+            cents=float(vals[1]),
+            count=int(vals[2]),
+            cny=float(vals[3]),
+        )
         for day, vals in sorted(daily_map.items())
     )
     models = tuple(
@@ -506,6 +643,7 @@ def build_usage_report(
                     cents=float(vals[1]),
                     count=int(vals[2]),
                     headless_count=int(vals[3]),
+                    cny=float(vals[4]),
                 )
                 for name, vals in model_map.items()
             ),
@@ -526,14 +664,33 @@ def build_usage_report(
         daily=daily,
         models=models,
         events=tuple(selected),
+        total_cny=total_cny,
+        plan_cny=plan_cny,
+        on_demand_cny=on_demand_cny,
+        usd_cny_rate=rate,
+        monthly_plan_usd=monthly,
     )
 
 
-def usage_events_to_csv(events: list[UsageEvent] | tuple[UsageEvent, ...]) -> str:
+def usage_events_to_csv(
+    events: list[UsageEvent] | tuple[UsageEvent, ...],
+    spend: CnySpendSettings | None = None,
+    allocation_base: list[UsageEvent] | tuple[UsageEvent, ...] | None = None,
+) -> str:
+    cny_by_id: dict[str, float] = {}
+    if spend is not None:
+        cny_by_id, _, _, _, _ = _cny_by_id(allocation_base if allocation_base is not None else events, spend)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(CSV_HEADER.split(","))
-    for event in events:
+    for i, event in enumerate(events):
+        key = event.id or f"#{i}"
+        if spend is not None:
+            cny_text = format_event_cny(event, cny_by_id.get(key, 0.0))
+        elif event.allocated_cny:
+            cny_text = format_event_cny(event)
+        else:
+            cny_text = "—"
         writer.writerow(
             [
                 format_event_time(event.timestamp_ms),
@@ -542,6 +699,7 @@ def usage_events_to_csv(events: list[UsageEvent] | tuple[UsageEvent, ...]) -> st
                 event.model,
                 str(event.tokens),
                 format_event_cost(event),
+                cny_text,
                 "是" if event.is_headless else "否",
             ]
         )

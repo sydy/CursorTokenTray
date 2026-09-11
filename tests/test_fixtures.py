@@ -153,6 +153,43 @@ class GoldenFixtureTests(unittest.TestCase):
                 [(m.name, m.tokens, m.cents, m.count, m.headless_count) for m in report.models],
                 [(m["name"], m["tokens"], m["cents"], m["count"], m["headless_count"]) for m in exp["models"]],
             )
+        from usage_report import CnySpendSettings, default_monthly_plan_usd, format_cny
+
+        for row in data["cny_spend"]["defaults"]:
+            self.assertEqual(default_monthly_plan_usd(row["membership"]), row["output"])
+        for row in data["cny_spend"]["format"]:
+            self.assertEqual(format_cny(row["cny"]), row["output"])
+        for cse in data["cny_spend"]["cases"]:
+            events = [e for e in (usage_event_from_dict(row) for row in cse["events"]) if e is not None]
+            filt = cse["filter"]
+            spend_raw = cse["spend"]
+            report = build_usage_report(
+                events,
+                UsageReportFilter(
+                    kind=filt["kind"],
+                    model=filt["model"],
+                    headless=filt["headless"],
+                    owning_user=filt.get("owning_user", ""),
+                ),
+                CnySpendSettings(
+                    monthly_plan_usd=spend_raw["monthly_plan_usd"],
+                    usd_cny_rate=spend_raw["usd_cny_rate"],
+                    membership_type=spend_raw.get("membership_type", ""),
+                ),
+            )
+            exp = cse["expected"]
+            self.assertAlmostEqual(report.monthly_plan_usd, exp["monthly_plan_usd"], places=3)
+            self.assertAlmostEqual(report.usd_cny_rate, exp["usd_cny_rate"], places=3)
+            self.assertAlmostEqual(report.plan_cny, exp["plan_cny"], places=3)
+            self.assertAlmostEqual(report.on_demand_cny, exp["on_demand_cny"], places=3)
+            self.assertAlmostEqual(report.total_cny, exp["total_cny"], places=3)
+            self.assertEqual(len(report.events), len(exp["event_cny"]))
+            for got, want in zip(report.events, exp["event_cny"]):
+                self.assertAlmostEqual(got.allocated_cny, want, places=3)
+            self.assertEqual(len(report.models), len(exp["models"]))
+            for got, want in zip(report.models, exp["models"]):
+                self.assertEqual(got.name, want["name"])
+                self.assertAlmostEqual(got.cny, want["cny"], places=3)
         for row in data["cost_format"]:
             ev = UsageEvent(
                 id="x",

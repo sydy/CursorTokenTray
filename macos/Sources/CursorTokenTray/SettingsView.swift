@@ -8,6 +8,8 @@ struct SettingsRootView: View {
     @State private var importing = false
     @State private var tokenText = ""
     @State private var intervalText = "10"
+    @State private var planUsdText = "0"
+    @State private var cnyRateText = "7.5"
     @State private var thresholdText = "50,20,5"
     @State private var syncPath = ""
     @State private var syncSecret = ""
@@ -25,10 +27,16 @@ struct SettingsRootView: View {
             syncPage.tabItem { Label("同步", systemImage: "arrow.triangle.2.circlepath") }
         }
         .padding(20)
-        .frame(width: 540, height: 560)
+        .frame(width: 540, height: 600)
         .onAppear {
             tokenText = ""
             intervalText = String(store.config.refreshIntervalMinutes)
+            let membership = store.config.activeAccount?.membershipType ?? ""
+            let plan = store.config.monthlyPlanUsd > 0
+                ? store.config.monthlyPlanUsd
+                : UsageEvents.defaultMonthlyPlanUsd(membership)
+            planUsdText = formatDecimal(plan)
+            cnyRateText = formatDecimal(store.config.usdCnyRate)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
             syncPath = store.config.syncPath
             syncSecret = ""
@@ -126,6 +134,17 @@ struct SettingsRootView: View {
                 Text("刷新间隔（分钟）")
                 TextField("10", text: $intervalText).frame(width: 72)
             }
+            HStack {
+                Text("月费（美元）")
+                TextField("20", text: $planUsdText).frame(width: 72)
+            }
+            HStack {
+                Text("美元兑人民币")
+                TextField("7.5", text: $cnyRateText).frame(width: 72)
+            }
+            Text("月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。报表「实付」= 月费按套餐内费用分摊 + 按需×汇率。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Text("告警阈值，例如 50,20,5")
                 TextField("50,20,5", text: $thresholdText).frame(width: 160)
@@ -357,6 +376,12 @@ struct SettingsRootView: View {
         if let n = Int(intervalText.trimmingCharacters(in: .whitespaces)), n >= 1 {
             cfg.refreshIntervalMinutes = n
         }
+        if let plan = parseDecimal(planUsdText) {
+            cfg.monthlyPlanUsd = UsageEvents.clampMonthlyPlanUsd(plan)
+        }
+        if let rate = parseDecimal(cnyRateText) {
+            cfg.usdCnyRate = UsageEvents.clampUsdCnyRate(rate)
+        }
         cfg.alertThresholds = ConfigStore.parseThresholds(thresholdText)
         cfg.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
         if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -501,6 +526,20 @@ struct SettingsRootView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
         await MainActor.run { store.importStatus = "等待登录超时，请手动粘贴 Token。" }
+    }
+
+    func formatDecimal(_ value: Double) -> String {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 4
+        f.numberStyle = .decimal
+        return f.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    func parseDecimal(_ text: String) -> Double? {
+        let cleaned = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "，", with: ".")
+        return Double(cleaned)
     }
 
     func bundleId(for app: String) -> String {

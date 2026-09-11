@@ -225,6 +225,49 @@ final class UsageParserFixtureTests: XCTestCase {
                 XCTAssertEqual(got.headlessCount, int(row["headless_count"]) ?? -1)
             }
         }
+        let cny = root["cny_spend"] as! [String: Any]
+        for row in cny["defaults"] as! [[String: Any]] {
+            XCTAssertEqual(UsageEvents.defaultMonthlyPlanUsd(str(row["membership"])), try XCTUnwrap(num(row["output"])))
+        }
+        for row in cny["format"] as! [[String: Any]] {
+            XCTAssertEqual(UsageEvents.formatCNY(num(row["cny"])), str(row["output"]))
+        }
+        for cse in cny["cases"] as! [[String: Any]] {
+            let events = (cse["events"] as! [[String: Any]]).compactMap(UsageEvents.fromDict)
+            let filt = cse["filter"] as! [String: Any]
+            let spendRaw = cse["spend"] as! [String: Any]
+            let report = UsageEvents.buildReport(
+                events,
+                filter: UsageReportFilter(
+                    kind: str(filt["kind"]),
+                    model: str(filt["model"]),
+                    headless: filt["headless"] is NSNull ? nil : (filt["headless"] as? Bool),
+                    owningUser: str(filt["owning_user"])
+                ),
+                spend: CnySpendSettings(
+                    monthlyPlanUsd: num(spendRaw["monthly_plan_usd"]) ?? 0,
+                    usdCnyRate: num(spendRaw["usd_cny_rate"]) ?? UsageEvents.defaultUsdCnyRate,
+                    membershipType: str(spendRaw["membership_type"])
+                )
+            )
+            let exp = cse["expected"] as! [String: Any]
+            XCTAssertEqual(report.monthlyPlanUsd, try XCTUnwrap(num(exp["monthly_plan_usd"])), accuracy: 0.001)
+            XCTAssertEqual(report.usdCnyRate, try XCTUnwrap(num(exp["usd_cny_rate"])), accuracy: 0.001)
+            XCTAssertEqual(report.planCny, try XCTUnwrap(num(exp["plan_cny"])), accuracy: 0.001)
+            XCTAssertEqual(report.onDemandCny, try XCTUnwrap(num(exp["on_demand_cny"])), accuracy: 0.001)
+            XCTAssertEqual(report.totalCny, try XCTUnwrap(num(exp["total_cny"])), accuracy: 0.001)
+            let eventCny = (exp["event_cny"] as! [Any]).compactMap { num($0) }
+            XCTAssertEqual(report.events.count, eventCny.count)
+            for (got, want) in zip(report.events, eventCny) {
+                XCTAssertEqual(got.allocatedCny, want, accuracy: 0.001)
+            }
+            let models = exp["models"] as! [[String: Any]]
+            XCTAssertEqual(report.models.count, models.count)
+            for (got, row) in zip(report.models, models) {
+                XCTAssertEqual(got.name, str(row["name"]))
+                XCTAssertEqual(got.cny, try XCTUnwrap(num(row["cny"])), accuracy: 0.001)
+            }
+        }
         for row in root["cost_format"] as! [[String: Any]] {
             let ev = UsageEvent(
                 timestampMs: 1,

@@ -361,7 +361,248 @@
       "output": "$1.67"
     }
   ],
-  "csv_header": "日期(北京时间),用户,类型,模型,Token,费用,云端Agent",
+  "csv_header": "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent",
+  "cny_spend": {
+    "defaults": [
+      { "membership": "Pro", "output": 20 },
+      { "membership": "pro_plus", "output": 60 },
+      { "membership": "Pro+", "output": 60 },
+      { "membership": "Ultra", "output": 200 },
+      { "membership": "free", "output": 0 },
+      { "membership": "team", "output": 0 }
+    ],
+    "format": [
+      { "cny": 120, "output": "¥120.00" },
+      { "cny": 12.5, "output": "¥12.50" },
+      { "cny": 0, "output": "¥0.00" }
+    ],
+    "cases": [
+      {
+        "name": "plan_weighted_plus_on_demand",
+        "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "pro" },
+        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "inc",
+            "timestamp_ms": 1787884620000,
+            "model": "cursor-grok-4.6-high-fast",
+            "kind": "included",
+            "user_email": "celeste@example.com",
+            "owning_user": "152683922",
+            "tokens": 1800,
+            "charged_cents": 29.0,
+            "total_cents": 29.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "od",
+            "timestamp_ms": 1787884500000,
+            "model": "auto",
+            "kind": "on_demand",
+            "user_email": "celeste@example.com",
+            "owning_user": "152683922",
+            "tokens": 2100,
+            "charged_cents": 167.0,
+            "total_cents": null,
+            "is_headless": true,
+            "is_chargeable": true
+          },
+          {
+            "id": "free",
+            "timestamp_ms": 1787798220000,
+            "model": "cursor-grok-4.6-high",
+            "kind": "free",
+            "user_email": "other@example.com",
+            "owning_user": "99",
+            "tokens": 60,
+            "charged_cents": 0.0,
+            "total_cents": null,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 16.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 120.0,
+          "on_demand_cny": 12.525,
+          "total_cny": 132.525,
+          "event_cny": [120.0, 12.525, 0.0],
+          "models": [
+            { "name": "auto", "cny": 12.525 },
+            { "name": "cursor-grok-4.6-high-fast", "cny": 120.0 },
+            { "name": "cursor-grok-4.6-high", "cny": 0.0 }
+          ]
+        }
+      },
+      {
+        "name": "filter_keeps_full_denominator",
+        "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "pro" },
+        "filter": { "kind": "included", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "inc",
+            "timestamp_ms": 1787884620000,
+            "model": "cursor-grok-4.6-high-fast",
+            "kind": "included",
+            "user_email": "celeste@example.com",
+            "owning_user": "152683922",
+            "tokens": 1800,
+            "charged_cents": 29.0,
+            "total_cents": 29.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "od",
+            "timestamp_ms": 1787884500000,
+            "model": "auto",
+            "kind": "on_demand",
+            "user_email": "celeste@example.com",
+            "owning_user": "152683922",
+            "tokens": 2100,
+            "charged_cents": 167.0,
+            "total_cents": null,
+            "is_headless": true,
+            "is_chargeable": true
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 16.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 120.0,
+          "on_demand_cny": 12.525,
+          "total_cny": 120.0,
+          "event_cny": [120.0],
+          "models": [
+            { "name": "cursor-grok-4.6-high-fast", "cny": 120.0 }
+          ]
+        }
+      },
+      {
+        "name": "two_included_weights",
+        "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "" },
+        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "a",
+            "timestamp_ms": 2000,
+            "model": "opus",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 10,
+            "charged_cents": 71.0,
+            "total_cents": 71.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "b",
+            "timestamp_ms": 1000,
+            "model": "auto",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 10,
+            "charged_cents": 29.0,
+            "total_cents": 29.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 16.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 120.0,
+          "on_demand_cny": 0.0,
+          "total_cny": 120.0,
+          "event_cny": [85.2, 34.8],
+          "models": [
+            { "name": "opus", "cny": 85.2 },
+            { "name": "auto", "cny": 34.8 }
+          ]
+        }
+      },
+      {
+        "name": "auto_from_membership",
+        "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "Pro" },
+        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "a",
+            "timestamp_ms": 1000,
+            "model": "auto",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 10,
+            "charged_cents": 50.0,
+            "total_cents": 50.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 20.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 150.0,
+          "on_demand_cny": 0.0,
+          "total_cny": 150.0,
+          "event_cny": [150.0],
+          "models": [
+            { "name": "auto", "cny": 150.0 }
+          ]
+        }
+      },
+      {
+        "name": "zero_cost_equal_split",
+        "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "" },
+        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "a",
+            "timestamp_ms": 2000,
+            "model": "one",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 2,
+            "charged_cents": 0.0,
+            "total_cents": 0.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "b",
+            "timestamp_ms": 1000,
+            "model": "two",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 1,
+            "charged_cents": 0.0,
+            "total_cents": 0.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 16.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 120.0,
+          "on_demand_cny": 0.0,
+          "total_cny": 120.0,
+          "event_cny": [60.0, 60.0],
+          "models": [
+            { "name": "one", "cny": 60.0 },
+            { "name": "two", "cny": 60.0 }
+          ]
+        }
+      }
+    ]
+  },
   "times": [
     {
       "timestamp_ms": 1787884620000,

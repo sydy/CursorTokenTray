@@ -5,11 +5,11 @@ namespace CursorTokenTray;
 
 sealed class ReportForm : Form
 {
-    public readonly record struct ReportState(string Token, string AccountId, UsageSnapshot? Usage, bool IsTeam);
+    public readonly record struct ReportState(string Token, string AccountId, UsageSnapshot? Usage, bool IsTeam, CnySpendSettings Spend);
 
-    const int DesignWidth = 1040;
+    const int DesignWidth = 1100;
     const int DesignHeight = 880;
-    const int DesignMinWidth = 900;
+    const int DesignMinWidth = 940;
     const int DesignMinHeight = 640;
     const int DesignModelRow = 180;
     const int DesignHeaderH = 28;
@@ -36,8 +36,8 @@ sealed class ReportForm : Form
         RowCount = 6,
         Padding = new Padding(16),
     };
-    static readonly int[] ModelMinWidths = [160, 72, 72, 56, 48];
-    static readonly int[] DetailMinWidths = [110, 100, 56, 140, 64, 72, 48];
+    static readonly int[] ModelMinWidths = [160, 72, 72, 72, 56, 48];
+    static readonly int[] DetailMinWidths = [110, 100, 56, 140, 64, 72, 72, 48];
     List<UsageEvent> _all = [];
     bool _syncing;
     bool _teamScope;
@@ -67,19 +67,21 @@ sealed class ReportForm : Form
         _model.Items.Add("全部模型");
         _model.SelectedIndex = 0;
 
-        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "model", HeaderText = "模型", FillWeight = 40 });
-        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "tokens", HeaderText = "Token", FillWeight = 18 });
-        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cost", HeaderText = "费用", FillWeight = 16 });
-        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "count", HeaderText = "次数", FillWeight = 14 });
-        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cloud", HeaderText = "云端", FillWeight = 12 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "model", HeaderText = "模型", FillWeight = 36 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "tokens", HeaderText = "Token", FillWeight = 16 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cost", HeaderText = "费用", FillWeight = 14 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cny", HeaderText = "实付", FillWeight = 14 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "count", HeaderText = "次数", FillWeight = 12 });
+        _models.Columns.Add(new DataGridViewTextBoxColumn { Name = "cloud", HeaderText = "云端", FillWeight = 8 });
 
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "date", HeaderText = "日期 (北京时间)", FillWeight = 18 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "user", HeaderText = "用户", FillWeight = 18 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "kind", HeaderText = "类型", FillWeight = 10 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "model", HeaderText = "模型", FillWeight = 22 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "tokens", HeaderText = "Token", FillWeight = 10 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "cost", HeaderText = "费用", FillWeight = 14 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "cloud", HeaderText = "云端", FillWeight = 8 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "date", HeaderText = "日期 (北京时间)", FillWeight = 16 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "user", HeaderText = "用户", FillWeight = 16 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "kind", HeaderText = "类型", FillWeight = 9 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "model", HeaderText = "模型", FillWeight = 20 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "tokens", HeaderText = "Token", FillWeight = 9 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "cost", HeaderText = "费用", FillWeight = 12 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "cny", HeaderText = "实付", FillWeight = 12 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "cloud", HeaderText = "云端", FillWeight = 6 });
 
         var filters = new FlowLayoutPanel
         {
@@ -315,13 +317,15 @@ sealed class ReportForm : Form
         _model.EndUpdate();
     }
 
+    UsageReport CurrentReport() => UsageEvents.BuildReport(_all, CurrentFilter(), _state().Spend);
+
     void Render()
     {
-        var report = UsageEvents.BuildReport(_all, CurrentFilter());
+        var report = CurrentReport();
         var mix = $"套餐内 {report.IncludedCount} · 免费 {report.FreeCount} · 按需 {report.OnDemandCount}";
         if (report.HeadlessCount > 0) mix += $" · 云端 {report.HeadlessCount}";
         var cost = report.HasCost ? $"    费用 {UsageParser.FormatUsdCents(report.TotalCents)}" : "";
-        _kpi.Text = $"请求 {report.EventCount}    Token {UsageParser.FormatTokenCount(report.TotalTokens)}    {mix}{cost}";
+        _kpi.Text = $"请求 {report.EventCount}    Token {UsageParser.FormatTokenCount(report.TotalTokens)}    {mix}{cost}{SpendKpi(report)}";
         _chart.Bind(report.Events);
         _root.PerformLayout();
 
@@ -333,6 +337,7 @@ sealed class ReportForm : Form
                 row.Name,
                 UsageParser.FormatTokenCount(row.Tokens),
                 row.Cents > 0 ? UsageParser.FormatUsdCents(row.Cents) : "—",
+                row.Cny > 0 ? UsageEvents.FormatCny(row.Cny) : "—",
                 row.Count.ToString(CultureInfo.InvariantCulture),
                 row.HeadlessCount > 0 ? row.HeadlessCount.ToString(CultureInfo.InvariantCulture) : "—");
         }
@@ -349,6 +354,7 @@ sealed class ReportForm : Form
                 ev.Model,
                 UsageParser.FormatTokenCount(ev.Tokens),
                 UsageEvents.FormatCost(ev),
+                UsageEvents.FormatEventCny(ev),
                 ev.IsHeadless ? "是" : "否");
         }
         _grid.ResumeLayout();
@@ -357,9 +363,18 @@ sealed class ReportForm : Form
         ApplyGridMetrics(_grid, UiLayout.ScalePx(DesignHeaderH, DeviceDpi), UiLayout.ScalePx(DesignRowH, DeviceDpi), DetailMinWidths, DeviceDpi);
     }
 
+    static string SpendKpi(UsageReport report)
+    {
+        if (report.PlanCny <= 0 && report.OnDemandCny <= 0) return "";
+        var expected = report.PlanCny + report.OnDemandCny;
+        var rate = report.UsdCnyRate.ToString("0.00", CultureInfo.InvariantCulture);
+        return $"    预计实付 {UsageEvents.FormatCny(expected)}（月费 {UsageEvents.FormatCny(report.PlanCny)} + 按需 {UsageEvents.FormatCny(report.OnDemandCny)}）· 汇率 {rate}";
+    }
+
     void ExportCsv()
     {
-        var report = UsageEvents.BuildReport(_all, CurrentFilter());
+        var spend = _state().Spend;
+        var report = UsageEvents.BuildReport(_all, CurrentFilter(), spend);
         if (report.Events.Count == 0) return;
         using var dlg = new SaveFileDialog
         {
@@ -370,7 +385,7 @@ sealed class ReportForm : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            File.WriteAllText(dlg.FileName, UsageEvents.ToCsv(report.Events));
+            File.WriteAllText(dlg.FileName, UsageEvents.ToCsv(report.Events, spend, _all));
             _status.Text = "已导出 " + dlg.FileName;
         }
         catch (Exception ex)

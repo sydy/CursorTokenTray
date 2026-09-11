@@ -162,6 +162,8 @@ public struct AppConfig: Equatable, Sendable {
     public var notifyExhaustionRisk: Bool
     public var autostartEnabled: Bool
     public var trayDisplayMode: String
+    public var monthlyPlanUsd: Double
+    public var usdCnyRate: Double
     public var lowQuotaNotified: Bool
     public var authErrorNotified: Bool
     public var alertNotifiedLevels: [Int]
@@ -193,6 +195,8 @@ public struct AppConfig: Equatable, Sendable {
         notifyExhaustionRisk: true,
         autostartEnabled: true,
         trayDisplayMode: "ring",
+        monthlyPlanUsd: 0,
+        usdCnyRate: UsageEvents.defaultUsdCnyRate,
         lowQuotaNotified: false,
         authErrorNotified: false,
         alertNotifiedLevels: [],
@@ -214,6 +218,14 @@ public struct AppConfig: Equatable, Sendable {
     public var activeAccount: Account? {
         if let found = accounts.first(where: { $0.id == activeAccountId }) { return found }
         return accounts.first
+    }
+
+    public func spendSettings(membership: String? = nil) -> CnySpendSettings {
+        CnySpendSettings(
+            monthlyPlanUsd: monthlyPlanUsd,
+            usdCnyRate: usdCnyRate,
+            membershipType: membership ?? activeAccount?.membershipType ?? ""
+        )
     }
 
     public mutating func upsertAccount(
@@ -502,6 +514,12 @@ public enum ConfigStore {
         }
         let mode = ((raw["tray_display_mode"] as? String) ?? "ring").trimmingCharacters(in: .whitespaces).lowercased()
         cfg.trayDisplayMode = AppConfig.displayModes.contains(mode) ? mode : "ring"
+        if let v = doubleValue(raw["monthly_plan_usd"]) { cfg.monthlyPlanUsd = UsageEvents.clampMonthlyPlanUsd(v) }
+        if let v = doubleValue(raw["usd_cny_rate"]) {
+            cfg.usdCnyRate = UsageEvents.clampUsdCnyRate(v)
+        } else {
+            cfg.usdCnyRate = UsageEvents.defaultUsdCnyRate
+        }
         if raw["alert_thresholds"] == nil, raw["low_quota_threshold"] != nil {
             cfg.alertThresholds = [cfg.lowQuotaThreshold]
         } else {
@@ -641,6 +659,16 @@ public enum ConfigStore {
         return nil
     }
 
+    static func doubleValue(_ value: Any?) -> Double? {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let s = value as? String {
+            let cleaned = s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "，", with: ".")
+            return Double(cleaned)
+        }
+        if let d = value as? Double { return d }
+        return nil
+    }
+
     static func boolValue(_ value: Any?) -> Bool {
         if let b = value as? Bool { return b }
         if let n = value as? NSNumber { return n.boolValue }
@@ -687,6 +715,8 @@ public enum ConfigStore {
             "notify_exhaustion_risk": cfg.notifyExhaustionRisk,
             "autostart_enabled": cfg.autostartEnabled,
             "tray_display_mode": cfg.trayDisplayMode,
+            "monthly_plan_usd": cfg.monthlyPlanUsd,
+            "usd_cny_rate": cfg.usdCnyRate,
             "low_quota_notified": cfg.lowQuotaNotified,
             "auth_error_notified": cfg.authErrorNotified,
             "alert_notified_levels": cfg.alertNotifiedLevels,

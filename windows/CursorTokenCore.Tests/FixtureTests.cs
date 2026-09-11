@@ -199,6 +199,46 @@ public class FixtureTests
                 Assert.Equal(modelsExp[i].GetProperty("headless_count").GetInt32(), report.Models[i].HeadlessCount);
             }
         }
+        var cny = root.GetProperty("cny_spend");
+        foreach (var row in cny.GetProperty("defaults").EnumerateArray())
+            Assert.Equal(row.GetProperty("output").GetDouble(), UsageEvents.DefaultMonthlyPlanUsd(row.GetProperty("membership").GetString()));
+        foreach (var row in cny.GetProperty("format").EnumerateArray())
+            Assert.Equal(row.GetProperty("output").GetString(), UsageEvents.FormatCny(row.GetProperty("cny").GetDouble()));
+        foreach (var cse in cny.GetProperty("cases").EnumerateArray())
+        {
+            var events = cse.GetProperty("events").EnumerateArray()
+                .Select(row => UsageEvents.FromDict(JsonBag.Parse(row.GetRawText()))!)
+                .ToList();
+            var filtEl = cse.GetProperty("filter");
+            var spendEl = cse.GetProperty("spend");
+            var report = UsageEvents.BuildReport(events, new UsageReportFilter
+            {
+                Kind = filtEl.GetProperty("kind").GetString() ?? "",
+                Model = filtEl.GetProperty("model").GetString() ?? "",
+                Headless = NullBool(filtEl, "headless"),
+                OwningUser = NullStr(filtEl, "owning_user") ?? "",
+            }, new CnySpendSettings(
+                spendEl.GetProperty("monthly_plan_usd").GetDouble(),
+                spendEl.GetProperty("usd_cny_rate").GetDouble(),
+                NullStr(spendEl, "membership_type") ?? ""));
+            var exp = cse.GetProperty("expected");
+            Assert.Equal(exp.GetProperty("monthly_plan_usd").GetDouble(), report.MonthlyPlanUsd, 3);
+            Assert.Equal(exp.GetProperty("usd_cny_rate").GetDouble(), report.UsdCnyRate, 3);
+            Assert.Equal(exp.GetProperty("plan_cny").GetDouble(), report.PlanCny, 3);
+            Assert.Equal(exp.GetProperty("on_demand_cny").GetDouble(), report.OnDemandCny, 3);
+            Assert.Equal(exp.GetProperty("total_cny").GetDouble(), report.TotalCny, 3);
+            var eventCny = exp.GetProperty("event_cny").EnumerateArray().Select(x => x.GetDouble()).ToList();
+            Assert.Equal(eventCny.Count, report.Events.Count);
+            for (var i = 0; i < eventCny.Count; i++)
+                Assert.Equal(eventCny[i], report.Events[i].AllocatedCny, 3);
+            var modelsExp = exp.GetProperty("models").EnumerateArray().ToList();
+            Assert.Equal(modelsExp.Count, report.Models.Count);
+            for (var i = 0; i < modelsExp.Count; i++)
+            {
+                Assert.Equal(modelsExp[i].GetProperty("name").GetString(), report.Models[i].Name);
+                Assert.Equal(modelsExp[i].GetProperty("cny").GetDouble(), report.Models[i].Cny, 3);
+            }
+        }
         foreach (var row in root.GetProperty("cost_format").EnumerateArray())
         {
             var ev = new UsageEvent
