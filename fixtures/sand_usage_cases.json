@@ -5,14 +5,14 @@
     "payload": {
       "currentPeriodStart": "2026-08-17T07:57:50.647Z",
       "nextResetTimestampUtc": "2026-08-24T07:57:50.647Z",
-      "usagePercent": 58.25,
+      "usagePercent": 58.3,
       "hasAvailableUsage": true,
       "hasNonZeroIncludedLimit": true
     },
     "expected": {
       "shows_grok_bot": true,
-      "percent_used": 58.2,
-      "remaining_percent": 41.8,
+      "percent_used": 58.3,
+      "remaining_percent": 41.7,
       "period_start": "2026-08-17T07:57:50.647Z",
       "reset_at": "2026-08-24T07:57:50.647Z",
       "days_remaining": 4

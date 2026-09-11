@@ -383,16 +383,16 @@ class SourceGuardTests(unittest.TestCase):
             {
                 "currentPeriodStart": "2026-08-17T07:57:50.647Z",
                 "nextResetTimestampUtc": "2026-08-24T07:57:50.647Z",
-                "usagePercent": 58.25,
+                "usagePercent": 58.3,
                 "hasNonZeroIncludedLimit": True,
             },
             now=datetime(2026, 8, 20, 7, 57, 50, 647000, tzinfo=timezone.utc),
         )
         self.assertTrue(snap.shows_grok_bot())
-        self.assertEqual(snap.grok_bot_percent_used, 58.2)
+        self.assertEqual(snap.grok_bot_percent_used, 58.3)
         summary = format_summary_text(snap, None, "12:00")
-        self.assertIn("Grok Bot 剩余 41.8%", summary)
+        self.assertIn("Grok Bot 剩余 41.7%", summary)
         lines = dict(build_status_lines(snap, None, "12:00"))
         self.assertIn("Grok Bot", lines)
-        self.assertIn("本周已用 58.2%", lines["Grok Bot"])
+        self.assertIn("本周已用 58.3%", lines["Grok Bot"])
         self.assertIn("8月24日", lines["Grok Bot"])

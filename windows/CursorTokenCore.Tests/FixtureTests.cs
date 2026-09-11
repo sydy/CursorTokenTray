@@ -576,7 +576,8 @@ public class FixtureTests
         var handler = new SeqHandler([500, 500, 200]);
         var client = new CursorClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan });
         var snap = await client.FetchUsageSummary("user_01HTTP%3A%3Aaaa.bbb.ccc", 5);
-        Assert.Equal(3, handler.Calls);
+        // usage-summary: 500, 500, 200; then optional Grok Bot sand-usage POST
+        Assert.Equal(4, handler.Calls);
         Assert.Equal(0, snap.UsedPercent);
     }
 
