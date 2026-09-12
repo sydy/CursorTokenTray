@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.messageText = "已在后台运行"
-            alert.informativeText = "Cursor Token 剩余进度已经在菜单栏运行。若看不到图标，请打开「活动监视器」结束 CursorTokenTray 后再打开本程序。也可点菜单栏「•••」展开隐藏项。"
+            alert.informativeText = "余量已经在菜单栏运行。若看不到图标，请打开「活动监视器」结束「\(AppPaths.displayName)」后再打开本程序。也可点菜单栏「•••」展开隐藏项。"
             alert.runModal()
             NSApp.terminate(nil)
             return

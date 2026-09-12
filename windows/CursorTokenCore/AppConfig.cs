@@ -271,6 +271,8 @@ public sealed class AppConfig
 public static class AppPaths
 {
     public const string AppName = "CursorTokenTray";
+    public const string DisplayName = "Cursor 余量";
+    public const string SettingsTitle = "余量设置";
 
     public static string ConfigDirectory(string? overrideDir = null)
     {

@@ -1,4 +1,4 @@
-# Cursor Token 剩余进度（系统托盘 / 菜单栏）
+# Cursor 余量（系统托盘 / 菜单栏）
 
 Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，用**圆形进度条**显示**剩余百分比**。
 
@@ -71,7 +71,7 @@ open macos/dist/CursorTokenTray.app
 swift test --package-path macos
 ```
 
-图标会出现在屏幕右上角菜单栏。首次从 Safari 导入 Cookie 时，如读不到请到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。
+图标会出现在屏幕右上角菜单栏。首次从 Safari 导入 Cookie 时，如读不到请到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开「Cursor 余量」。
 
 本地运行日志：`~/Library/Logs/CursorTokenTray.log`。
 
@@ -142,7 +142,7 @@ PR 不上传制品。打 `v*` 标签（例如 `v1.0.0`）会创建正式 GitHub 
 
 **Windows**：可从 **Cursor 应用**或 **Firefox** 导入。Chrome / Edge 使用 App-Bound Cookie 加密，本工具无法读取，请改用 Firefox 或手动粘贴。
 
-**macOS**：优先 Cursor 应用、Safari / Firefox。Safari 若读不到，到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开 CursorTokenTray。设置窗会检测权限并提供跳转。Chrome 系仍会尝试钥匙串解密，失败时请改用 Safari / Firefox。
+**macOS**：优先 Cursor 应用、Safari / Firefox。Safari 若读不到，到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」打开「Cursor 余量」。设置窗会检测权限并提供跳转。Chrome 系仍会尝试钥匙串解密，失败时请改用 Safari / Firefox。
 
 ### 方式二：手动粘贴
 
@@ -173,8 +173,8 @@ macOS：`~/Library/Application Support/CursorTokenTray/config.json`
 - 「登录到 Cursor」会礼貌关闭客户端（不强制结束），只改登录相关键；聊天记录、机器码、Electron Cookie 不动。若 10 秒内没退出，会放弃写入以免冲掉未保存文件
 - Windows：托盘、右键菜单、状态飞出层、设置都在**同一个 .NET 8 进程**里用 WinForms 完成（`NotifyIcon` + 系统菜单）。若图标在溢出区，可拖到任务栏常显
 - 这是 **macOS 菜单栏**应用，不是 iOS；没有 Dock 图标，圆环在屏幕**最上方**菜单栏右侧（Wi‑Fi / 控制中心旁边），并带剩余百分比文字
-- macOS：若看不到图标，点菜单栏「•••」或「控制中心」展开隐藏项；也可在「活动监视器」结束 CursorTokenTray 后重新打开
+- macOS：若看不到图标，点菜单栏「•••」或「控制中心」展开隐藏项；也可在「活动监视器」结束「Cursor 余量」后重新打开
 - 首次打开若立刻提示「已在后台运行」，多半是旧进程还在，先在活动监视器里退出再启动
 - macOS 点「设置…」会在**当前菜单栏进程**弹出系统原生设置窗，不另起子进程。打开设置 / 用量报表 / 账号对比时 Dock 可能短暂出现图标；窗口都关掉后图标会收回，菜单栏圆环应还在
-- 升级后请先在「活动监视器」结束旧的 CursorTokenTray，再打开新下载的 `.app`，不要两个版本叠着跑
+- 升级后请先在「活动监视器」结束旧的「Cursor 余量」，再打开新下载的 `.app`，不要两个版本叠着跑
 - Token 过期后请重新导入或粘贴；飞出层会提示并可一键打开设置

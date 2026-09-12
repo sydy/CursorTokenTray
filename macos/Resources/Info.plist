@@ -5,7 +5,7 @@
     <key>CFBundleName</key>
     <string>CursorTokenTray</string>
     <key>CFBundleDisplayName</key>
-    <string>Cursor Token 剩余进度</string>
+    <string>Cursor 余量</string>
     <key>CFBundleIdentifier</key>
     <string>com.harker.cursortokentray</string>
     <key>CFBundleVersion</key>
