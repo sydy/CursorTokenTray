@@ -110,6 +110,31 @@ public enum UsageHistory {
         try? text.write(to: path, atomically: true, encoding: .utf8)
     }
 
+    public static func replace(_ points: [HistoryPoint], accountId: String, directory: URL? = nil) {
+        let aid = accountId.trimmingCharacters(in: .whitespaces)
+        if aid.isEmpty { return }
+        let dir = directory ?? AppPaths.configDirectory()
+        AppPaths.ensureDirectory(dir)
+        let path = AppPaths.historyPath(accountId: aid, in: dir)
+        let cutoff = Date().timeIntervalSince1970 - Double(keepDays) * 86_400
+        var lines: [String] = []
+        for point in points.sorted(by: { $0.ts < $1.ts }) where point.ts >= cutoff {
+            var obj: [String: Any] = [
+                "ts": point.ts,
+                "remaining": round2(point.remaining),
+                "account_id": aid,
+            ]
+            obj["auto"] = point.auto.map(round2) ?? NSNull()
+            obj["api"] = point.api.map(round2) ?? NSNull()
+            guard let data = try? JSONSerialization.data(withJSONObject: obj),
+                  let line = String(data: data, encoding: .utf8)
+            else { continue }
+            lines.append(line)
+        }
+        let text = lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+        try? text.write(to: path, atomically: true, encoding: .utf8)
+    }
+
     public static func loadRecent(days: Int = 7, accountId: String? = nil, directory: URL? = nil) -> [HistoryPoint] {
         let dir = directory ?? AppPaths.configDirectory()
         var aid = (accountId ?? "").trimmingCharacters(in: .whitespaces)

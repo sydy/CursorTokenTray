@@ -37,7 +37,7 @@ sealed class SettingsForm : Form
     readonly Label _syncStatus = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 4, 0, 4) };
     readonly Label _syncHint = new()
     {
-        Text = "登录后自动同步账号和设置。数据用登录密码在本地加密，服务器看不到 Token。",
+        Text = "登录后自动同步账号、设置和用量。数据用登录密码在本地加密，服务器看不到 Token。",
         AutoSize = true,
         ForeColor = Color.DimGray,
         Margin = new Padding(0, 4, 0, 8),

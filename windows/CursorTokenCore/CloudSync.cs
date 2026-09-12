@@ -12,7 +12,7 @@ public static class CloudSyncApi
 
 public static class CloudSync
 {
-    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
+    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(60) };
     static readonly JsonSerializerOptions JsonOpt = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -107,9 +107,9 @@ public static class CloudSync
             status.Ok = true;
             status.Changed = changed;
             status.Message = changed && status.Pushed ? "已合并并对齐云端"
-                : changed ? "已从云端导入账号和设置"
+                : changed ? "已从云端导入账号、设置和用量"
                 : status.Pushed ? "已上传到云端"
-                : "账号和设置已与云端一致";
+                : "账号、设置和用量已与云端一致";
             return status;
         }
         catch (CursorApiException ex) when (ex.StatusCode == 401)

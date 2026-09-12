@@ -77,9 +77,9 @@ public enum CloudSync {
             status.ok = true
             status.changed = changed
             if changed && status.pushed { status.message = "已合并并对齐云端" }
-            else if changed { status.message = "已从云端导入账号和设置" }
+            else if changed { status.message = "已从云端导入账号、设置和用量" }
             else if status.pushed { status.message = "已上传到云端" }
-            else { status.message = "账号和设置已与云端一致" }
+            else { status.message = "账号、设置和用量已与云端一致" }
             return status
         } catch let err as CursorAPIError where err.statusCode == 401 {
             clearSession(&cfg)
@@ -136,7 +136,7 @@ public enum CloudSync {
         guard let url = URL(string: CloudSyncApi.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
             throw CursorAPIError("无法连接同步服务器")
         }
-        var req = URLRequest(url: url, timeoutInterval: 20)
+        var req = URLRequest(url: url, timeoutInterval: 60)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let access, !access.isEmpty {
@@ -154,7 +154,7 @@ public enum CloudSync {
             box.error = error
             sem.signal()
         }.resume()
-        _ = sem.wait(timeout: .now() + 25)
+        _ = sem.wait(timeout: .now() + 70)
         if box.error != nil { throw CursorAPIError("无法连接同步服务器") }
         let status = (box.response as? HTTPURLResponse)?.statusCode ?? 0
         let obj = (try? JSONSerialization.jsonObject(with: box.data ?? Data())) as? [String: Any] ?? [:]

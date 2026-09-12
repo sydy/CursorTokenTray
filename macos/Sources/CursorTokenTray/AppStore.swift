@@ -307,6 +307,7 @@ final class AppStore: ObservableObject {
         }
         reloadHistory()
         for n in notices { notify(n.0, n.1) }
+        _ = reconcileAccounts(refresh: false)
     }
 
     private struct RefreshTarget: Sendable {

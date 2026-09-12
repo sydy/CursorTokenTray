@@ -959,6 +959,40 @@ public class FixtureTests
                 Assert.Equal(expSettings.GetProperty("notify_enabled").GetBoolean(), merged.Settings.NotifyEnabled);
                 Assert.Equal(expSettings.GetProperty("monthly_plan_usd").GetDouble(), merged.Settings.MonthlyPlanUsd);
             }
+            if (expected.TryGetProperty("remaining", out var rem))
+            {
+                foreach (var kv in rem.EnumerateObject())
+                    Assert.Equal(kv.Value.GetDouble(), merged.Accounts.First(a => a.Id == kv.Name).LastRemaining);
+            }
+            if (expected.TryGetProperty("billing_cycle_end", out var ends))
+            {
+                foreach (var kv in ends.EnumerateObject())
+                    Assert.Equal(kv.Value.GetString(), merged.Accounts.First(a => a.Id == kv.Name).BillingCycleEnd);
+            }
+            if (expected.TryGetProperty("usage_history_ts", out var hist))
+            {
+                foreach (var kv in hist.EnumerateObject())
+                {
+                    var got = merged.Usage!.First(u => u.AccountId == kv.Name).History.Select(p => p.Ts).ToList();
+                    Assert.Equal(kv.Value.EnumerateArray().Select(x => x.GetDouble()).ToList(), got);
+                }
+            }
+            if (expected.TryGetProperty("usage_event_ids", out var evs))
+            {
+                foreach (var kv in evs.EnumerateObject())
+                {
+                    var got = merged.Usage!.First(u => u.AccountId == kv.Name).Events.Select(e => e.Id).OrderBy(x => x).ToList();
+                    Assert.Equal(kv.Value.EnumerateArray().Select(x => x.GetString()!).OrderBy(x => x).ToList(), got);
+                }
+            }
+            if (expected.TryGetProperty("usage_team_event_ids", out var team))
+            {
+                foreach (var kv in team.EnumerateObject())
+                {
+                    var got = merged.Usage!.First(u => u.AccountId == kv.Name).TeamEvents.Select(e => e.Id).OrderBy(x => x).ToList();
+                    Assert.Equal(kv.Value.EnumerateArray().Select(x => x.GetString()!).OrderBy(x => x).ToList(), got);
+                }
+            }
             _ = name;
         }
         var crypto = root.GetProperty("crypto");

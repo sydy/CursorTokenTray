@@ -60,6 +60,21 @@ class MergeFixtureTests(unittest.TestCase):
                     self.assertEqual(merged["settings"]["tray_display_mode"], exp["settings"]["tray_display_mode"])
                     self.assertEqual(merged["settings"]["notify_enabled"], exp["settings"]["notify_enabled"])
                     self.assertEqual(merged["settings"]["monthly_plan_usd"], exp["settings"]["monthly_plan_usd"])
+                if "remaining" in exp:
+                    got = {a["id"]: a.get("last_remaining") for a in merged["accounts"]}
+                    self.assertEqual(got, exp["remaining"])
+                if "billing_cycle_end" in exp:
+                    got = {a["id"]: a.get("billing_cycle_end") for a in merged["accounts"]}
+                    self.assertEqual(got, exp["billing_cycle_end"])
+                if "usage_history_ts" in exp:
+                    by_id = {row["account_id"]: [p["ts"] for p in row["history"]] for row in merged.get("usage") or []}
+                    self.assertEqual(by_id, exp["usage_history_ts"])
+                if "usage_event_ids" in exp:
+                    by_id = {row["account_id"]: sorted(e["id"] for e in row["events"]) for row in merged.get("usage") or []}
+                    self.assertEqual(by_id, exp["usage_event_ids"])
+                if "usage_team_event_ids" in exp:
+                    by_id = {row["account_id"]: sorted(e["id"] for e in row["team_events"]) for row in merged.get("usage") or []}
+                    self.assertEqual(by_id, exp["usage_team_event_ids"])
 
 
 class CryptoFixtureTests(unittest.TestCase):
@@ -169,6 +184,54 @@ class ExportImportTests(unittest.TestCase):
         apply_snapshot_to_config(other, snap)
         self.assertEqual(other["accounts"][0]["actual_cny"], 88)
         self.assertEqual(other["actual_cny"], 88)
+
+    def test_usage_history_and_events_roundtrip(self) -> None:
+        import config
+        from account_sync import apply_snapshot_to_config, snapshot_from_config
+        from accounts import apply_snapshot_to_account, upsert_account
+        from usage_history import load_points, replace_points
+        from usage_report import event_to_dict, load_cached_events, save_cached_events, usage_event_from_dict
+
+        old_dir = config.CONFIG_DIR
+        with tempfile.TemporaryDirectory() as tmp:
+            config.CONFIG_DIR = Path(tmp)
+            try:
+                cfg: dict = {"accounts": [], "active_account_id": "", "session_token": "", "deleted_accounts": []}
+                upsert_account(cfg, "user_01USE%3A%3Ajwt.part.sig", label="用量", activate=True)
+                aid = cfg["active_account_id"]
+                apply_snapshot_to_account(cfg["accounts"][0], remaining=33.5, billing_cycle_end="2026-10-01T00:00:00.000Z")
+                now_ts = __import__("time").time()
+                replace_points([{"ts": now_ts, "remaining": 40, "auto": 8, "api": None}], account_id=aid, directory=Path(tmp))
+                ev = usage_event_from_dict(
+                    {
+                        "id": "ev-sync",
+                        "timestamp_ms": int(now_ts * 1000),
+                        "model": "opus",
+                        "kind": "included",
+                        "tokens": 12,
+                    }
+                )
+                self.assertIsNotNone(ev)
+                save_cached_events([ev], aid, False, Path(tmp))
+                snap = snapshot_from_config(cfg)
+                self.assertEqual(snap["accounts"][0]["last_remaining"], 33.5)
+                self.assertEqual(snap["usage"][0]["history"][0]["remaining"], 40)
+                self.assertEqual(snap["usage"][0]["events"][0]["id"], "ev-sync")
+
+                other_dir = Path(tmp) / "other"
+                other_dir.mkdir()
+                config.CONFIG_DIR = other_dir
+                other: dict = {"accounts": [], "active_account_id": "", "session_token": "", "deleted_accounts": []}
+                apply_snapshot_to_config(other, snap)
+                self.assertEqual(other["accounts"][0]["last_remaining"], 33.5)
+                self.assertEqual(other["accounts"][0]["billing_cycle_end"], "2026-10-01T00:00:00.000Z")
+                hist = load_points(days=10_000, account_id=aid, directory=other_dir)
+                self.assertEqual(hist[0]["remaining"], 40)
+                loaded = load_cached_events(aid, False, other_dir)
+                self.assertEqual(loaded[0].id, "ev-sync")
+                self.assertEqual(event_to_dict(loaded[0])["tokens"], 12)
+            finally:
+                config.CONFIG_DIR = old_dir
 
 
 class ConfigRoundtripTests(unittest.TestCase):

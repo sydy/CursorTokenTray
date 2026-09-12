@@ -1,6 +1,6 @@
 # CursorTokenTray 云同步服务
 
-FastAPI + SQLite。客户端把账号和配置封进 PBKDF2 + AES-256-GCM 信封后上传，**服务器不解密，也看不到 Token**。
+FastAPI + SQLite。客户端把账号、配置和用量封进 PBKDF2 + AES-256-GCM 信封后上传，**服务器不解密，也看不到 Token**。
 
 对外地址写死在客户端：`https://sync.harker.cn`
 
