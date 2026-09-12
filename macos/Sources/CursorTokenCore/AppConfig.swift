@@ -5,6 +5,8 @@ import Darwin
 
 public enum AppPaths {
     public static let appSupportName = "CursorTokenTray"
+    public static let displayName = "Cursor 余量"
+    public static let settingsTitle = "余量设置"
     public static let launchLabel = "com.harker.cursortokentray"
 
     public static func configDirectory(home: URL? = nil) -> URL {

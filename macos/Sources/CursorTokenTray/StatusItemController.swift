@@ -100,7 +100,7 @@ final class StatusItemController: NSObject {
         button.imageScaling = .scaleNone
         button.title = ""
         if button.toolTip == nil {
-            button.toolTip = "Cursor Token 剩余进度"
+            button.toolTip = AppPaths.displayName
         }
     }
 

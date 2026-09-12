@@ -20,7 +20,7 @@ def app_config_dir() -> Path:
     return Path.home() / ".config" / "CursorTokenTray"
 
 
-APP_NAME = "CursorToken剩余进度"
+APP_NAME = "Cursor 余量"
 CONFIG_DIR = app_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 

@@ -24,7 +24,7 @@ static class Program
         using var mutex = new Mutex(true, @"Local\CursorTokenTray_SingleInstance_v2", out var created);
         if (!created)
         {
-            MessageBox.Show("Cursor Token 剩余进度已经在托盘运行。", "已在后台运行", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("余量已经在托盘运行。", "已在后台运行", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         Application.Run(new TrayContext());
@@ -136,7 +136,7 @@ sealed class TrayContext : ApplicationContext
         _icon = new NotifyIcon
         {
             Visible = true,
-            Text = "Cursor Token 剩余进度",
+            Text = AppPaths.DisplayName,
             Icon = IconRenderer.Make(null, false, _config.TrayDisplayMode),
             ContextMenuStrip = _menu,
         };
@@ -376,7 +376,7 @@ sealed class TrayContext : ApplicationContext
         var label = _config.ActiveAccount?.DisplayLabel ?? "";
         var tip = error ? (_error ?? "异常")
             : remaining is { } r ? (string.IsNullOrEmpty(label) ? $"{r:0}%" : $"{label} · {r:0}%")
-            : "Cursor Token 剩余进度";
+            : AppPaths.DisplayName;
         if (tip.Length > 63) tip = tip[..63];
         _icon.Text = tip;
         _dashboardItem.Text = UsageParser.DashboardMenuLabel(_usage);

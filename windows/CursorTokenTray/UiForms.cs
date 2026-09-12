@@ -86,7 +86,7 @@ sealed class SettingsForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScroll = true;
-        Text = "Cursor Token 设置";
+        Text = AppPaths.SettingsTitle;
         var icon = AppWindow.CreateIcon();
         if (icon is not null) Icon = icon;
         ClientSize = new Size(540, 760);

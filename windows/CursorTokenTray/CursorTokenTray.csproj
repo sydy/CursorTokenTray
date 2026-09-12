@@ -8,6 +8,8 @@
     <ApplicationIcon>..\..\assets\app_icon.ico</ApplicationIcon>
     <AssemblyName>CursorTokenTray</AssemblyName>
     <RootNamespace>CursorTokenTray</RootNamespace>
+    <Product>Cursor 余量</Product>
+    <AssemblyTitle>Cursor 余量</AssemblyTitle>
     <Version>2.0.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>

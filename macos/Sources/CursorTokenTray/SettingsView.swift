@@ -623,7 +623,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            win.title = "Cursor Token 设置"
+            win.title = AppPaths.settingsTitle
             win.isReleasedWhenClosed = false
             win.delegate = self
             window = win
