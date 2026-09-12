@@ -164,103 +164,60 @@ struct CompareRootView: View {
             Text("窗口按各账号自己的最新周期或有效期。日均持有 = 折合月费÷30。窗口实付把月费按窗口天数折算后再摊到套餐内请求；按需仍按费用×汇率。表内同时给出 First-party / API / Grok Bot 的次数、Token 与单位成本。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            table
+            list
         }
         .padding(16)
-        .frame(minWidth: 1120, minHeight: 560)
+        .frame(minWidth: 880, minHeight: 560)
         .onAppear { store.loadCache() }
     }
 
-    var table: some View {
-        Table(displayRows) {
-            TableColumn("账号") { row in cell(row.name, bold: row.isGroup) }
-            TableColumn("渠道") { row in cell(row.channel, bold: row.isGroup) }
-            TableColumn("套餐") { row in cell(row.membership) }
-            TableColumn("窗口") { row in cell(row.window) }
-            TableColumn("天数") { row in cell(row.days) }
-            TableColumn("日均持有") { row in cell(row.dailyHolding, bold: row.isGroup) }
-            TableColumn("窗口实付") { row in cell(row.totalCny, bold: row.isGroup) }
-            TableColumn("请求") { row in cell(row.requests) }
-            TableColumn("Token") { row in cell(row.tokens) }
-            TableColumn("¥/百万") { row in cell(row.perMillion) }
-            TableColumn("¥/次") { row in cell(row.perRequest) }
-            TableColumn("FP次数") { row in cell(row.fpCount) }
-            TableColumn("FP Token") { row in cell(row.fpTokens) }
-            TableColumn("FP实付") { row in cell(row.fpCny) }
-            TableColumn("FP ¥/百万") { row in cell(row.fpPerMillion) }
-            TableColumn("FP ¥/次") { row in cell(row.fpPerRequest) }
-            TableColumn("API次数") { row in cell(row.apiCount) }
-            TableColumn("API Token") { row in cell(row.apiTokens) }
-            TableColumn("API实付") { row in cell(row.apiCny) }
-            TableColumn("API ¥/百万") { row in cell(row.apiPerMillion) }
-            TableColumn("API ¥/次") { row in cell(row.apiPerRequest) }
-            TableColumn("Grok次数") { row in cell(row.grokCount) }
-            TableColumn("Grok Token") { row in cell(row.grokTokens) }
-            TableColumn("Grok实付") { row in cell(row.grokCny) }
-            TableColumn("Grok ¥/百万") { row in cell(row.grokPerMillion) }
-            TableColumn("Grok ¥/次") { row in cell(row.grokPerRequest) }
-        }
-    }
-
-    func cell(_ text: String, bold: Bool = false) -> some View {
-        Text(text)
-            .font(bold ? .body.weight(.semibold) : .body)
-            .lineLimit(1)
-    }
-
-    var displayRows: [CompareDisplayRow] {
-        var rows: [CompareDisplayRow] = []
-        for group in store.report.groups {
-            for row in group.rows {
-                rows.append(displayRow(
-                    id: row.accountId,
-                    isGroup: false,
-                    name: row.label,
-                    channel: row.channelLabel,
-                    membership: UsageParser.formatMembershipType(row.membershipType),
-                    window: row.windowLabel,
-                    days: formatDays(row.windowDays),
-                    dailyHolding: row.dailyHoldingCny,
-                    totalCny: row.totalCny,
-                    requests: row.eventCount,
-                    tokens: row.totalTokens,
-                    perMillion: row.cnyPerMillion,
-                    perRequest: row.cnyPerRequest,
-                    firstParty: row.firstParty,
-                    api: row.api,
-                    grok: row.grokBot
-                ))
+    var list: some View {
+        List {
+            ForEach(store.report.groups, id: \.channel) { group in
+                Section(group.channelLabel) {
+                    ForEach(group.rows, id: \.accountId) { row in
+                        card(
+                            title: row.label,
+                            subtitle: [
+                                row.channelLabel,
+                                UsageParser.formatMembershipType(row.membershipType),
+                                "\(row.windowLabel) \(formatDays(row.windowDays))天",
+                            ].filter { !$0.isEmpty }.joined(separator: " · "),
+                            bold: false,
+                            dailyHolding: row.dailyHoldingCny,
+                            totalCny: row.totalCny,
+                            requests: row.eventCount,
+                            tokens: row.totalTokens,
+                            perMillion: row.cnyPerMillion,
+                            perRequest: row.cnyPerRequest,
+                            firstParty: row.firstParty,
+                            api: row.api,
+                            grok: row.grokBot
+                        )
+                    }
+                    card(
+                        title: "\(group.channelLabel)合计",
+                        subtitle: "",
+                        bold: true,
+                        dailyHolding: group.dailyHoldingCny,
+                        totalCny: group.totalCny,
+                        requests: group.eventCount,
+                        tokens: group.totalTokens,
+                        perMillion: group.cnyPerMillion,
+                        perRequest: group.cnyPerRequest,
+                        firstParty: group.firstParty,
+                        api: group.api,
+                        grok: group.grokBot
+                    )
+                }
             }
-            rows.append(displayRow(
-                id: "group:\(group.channel)",
-                isGroup: true,
-                name: "\(group.channelLabel)合计",
-                channel: group.channelLabel,
-                membership: "",
-                window: "",
-                days: "",
-                dailyHolding: group.dailyHoldingCny,
-                totalCny: group.totalCny,
-                requests: group.eventCount,
-                tokens: group.totalTokens,
-                perMillion: group.cnyPerMillion,
-                perRequest: group.cnyPerRequest,
-                firstParty: group.firstParty,
-                api: group.api,
-                grok: group.grokBot
-            ))
         }
-        return rows
     }
 
-    func displayRow(
-        id: String,
-        isGroup: Bool,
-        name: String,
-        channel: String,
-        membership: String,
-        window: String,
-        days: String,
+    func card(
+        title: String,
+        subtitle: String,
+        bold: Bool,
         dailyHolding: Double,
         totalCny: Double,
         requests: Int,
@@ -270,37 +227,25 @@ struct CompareRootView: View {
         firstParty: AccountCompareCategory,
         api: AccountCompareCategory,
         grok: AccountCompareCategory
-    ) -> CompareDisplayRow {
-        CompareDisplayRow(
-            id: id,
-            isGroup: isGroup,
-            name: name,
-            channel: channel,
-            membership: membership,
-            window: window,
-            days: days,
-            dailyHolding: UsageEvents.formatCNY(dailyHolding),
-            totalCny: UsageEvents.formatCNY(totalCny),
-            requests: String(requests),
-            tokens: UsageParser.formatTokenCount(Double(tokens)),
-            perMillion: UsageEvents.formatCnyUnit(perMillion, suffix: "/百万"),
-            perRequest: UsageEvents.formatCnyUnit(perRequest, suffix: "/次"),
-            fpCount: String(firstParty.count),
-            fpTokens: UsageParser.formatTokenCount(Double(firstParty.tokens)),
-            fpCny: UsageEvents.formatCNY(firstParty.cny),
-            fpPerMillion: UsageEvents.formatCnyUnit(firstParty.cnyPerMillion, suffix: "/百万"),
-            fpPerRequest: UsageEvents.formatCnyUnit(firstParty.cnyPerRequest, suffix: "/次"),
-            apiCount: String(api.count),
-            apiTokens: UsageParser.formatTokenCount(Double(api.tokens)),
-            apiCny: UsageEvents.formatCNY(api.cny),
-            apiPerMillion: UsageEvents.formatCnyUnit(api.cnyPerMillion, suffix: "/百万"),
-            apiPerRequest: UsageEvents.formatCnyUnit(api.cnyPerRequest, suffix: "/次"),
-            grokCount: String(grok.count),
-            grokTokens: UsageParser.formatTokenCount(Double(grok.tokens)),
-            grokCny: UsageEvents.formatCNY(grok.cny),
-            grokPerMillion: UsageEvents.formatCnyUnit(grok.cnyPerMillion, suffix: "/百万"),
-            grokPerRequest: UsageEvents.formatCnyUnit(grok.cnyPerRequest, suffix: "/次")
-        )
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(bold ? .headline : .body.weight(.semibold))
+            if !subtitle.isEmpty {
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("日均持有 \(UsageEvents.formatCNY(dailyHolding))    窗口实付 \(UsageEvents.formatCNY(totalCny))    请求 \(requests)    Token \(UsageParser.formatTokenCount(Double(tokens)))    \(UsageEvents.formatCnyUnit(perMillion, suffix: "/百万"))    \(UsageEvents.formatCnyUnit(perRequest, suffix: "/次"))")
+                .font(.callout)
+            categoryLine("First-party", firstParty)
+            categoryLine("API", api)
+            categoryLine("Grok Bot", grok)
+        }
+        .padding(.vertical, 4)
+    }
+
+    func categoryLine(_ name: String, _ cat: AccountCompareCategory) -> some View {
+        Text("\(name)  \(cat.count) 次 · \(UsageParser.formatTokenCount(Double(cat.tokens))) · \(UsageEvents.formatCNY(cat.cny)) · \(UsageEvents.formatCnyUnit(cat.cnyPerMillion, suffix: "/百万")) · \(UsageEvents.formatCnyUnit(cat.cnyPerRequest, suffix: "/次"))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     func formatDays(_ days: Double) -> String {

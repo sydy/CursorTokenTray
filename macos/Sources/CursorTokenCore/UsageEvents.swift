@@ -279,6 +279,12 @@ public struct AccountCompareReport: Equatable, Sendable {
     public var rows: [AccountCompareRow]
     public var groups: [AccountCompareGroup]
     public var holdingDays: Double
+
+    public init(rows: [AccountCompareRow] = [], groups: [AccountCompareGroup] = [], holdingDays: Double = UsageEvents.holdingDays) {
+        self.rows = rows
+        self.groups = groups
+        self.holdingDays = holdingDays
+    }
 }
 
 public struct UsageEventsSyncResult: Sendable {
