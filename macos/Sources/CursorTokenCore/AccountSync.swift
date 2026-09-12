@@ -25,6 +25,7 @@ public struct SyncAccount: Equatable, Sendable {
     public var tempValidDays: Int
     public var tempValidHours: Int
     public var actualCny: Double
+    public var channel: String
     public var syncUpdatedAt: String
     public init(
         id: String = "",
@@ -36,6 +37,7 @@ public struct SyncAccount: Equatable, Sendable {
         tempValidDays: Int = 0,
         tempValidHours: Int = 0,
         actualCny: Double = 0,
+        channel: String = "",
         syncUpdatedAt: String = ""
     ) {
         self.id = id
@@ -47,6 +49,7 @@ public struct SyncAccount: Equatable, Sendable {
         self.tempValidDays = AccountValidity.clampDays(tempValidDays)
         self.tempValidHours = AccountValidity.clampHours(tempValidHours)
         self.actualCny = UsageEvents.clampActualCny(actualCny)
+        self.channel = UsageEvents.sanitizeChannel(channel)
         self.syncUpdatedAt = syncUpdatedAt
     }
 }
@@ -204,6 +207,7 @@ public enum AccountSync {
             tempValidDays: account.tempValidDays,
             tempValidHours: account.tempValidHours,
             actualCny: account.actualCny,
+            channel: account.channel,
             syncUpdatedAt: account.syncUpdatedAt.trimmingCharacters(in: .whitespaces)
         )
     }
@@ -219,6 +223,7 @@ public enum AccountSync {
             tempValidDays: account.tempValidDays,
             tempValidHours: account.tempValidHours,
             actualCny: account.actualCny,
+            channel: account.channel,
             syncUpdatedAt: account.syncUpdatedAt.trimmingCharacters(in: .whitespaces)
         )
     }
@@ -241,7 +246,7 @@ public enum AccountSync {
 
     public static func snapshotIdentity(_ snap: SyncSnapshot) -> String {
         let accounts = snap.accounts.sorted { $0.id < $1.id }.map {
-            "\($0.id)\n\($0.label)\n\($0.token)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.syncUpdatedAt)"
+            "\($0.id)\n\($0.label)\n\($0.token)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.channel)\n\($0.syncUpdatedAt)"
         }.joined(separator: "|")
         let deleted = snap.deleted.sorted { $0.id < $1.id }.map { "\($0.id)\n\($0.deletedAt)" }.joined(separator: "|")
         return "\(snap.activeAccountId)\n\(accounts)\n\(deleted)"
@@ -282,7 +287,7 @@ public enum AccountSync {
 
     @discardableResult
     public static func applySnapshotToConfig(_ cfg: inout AppConfig, _ snap: SyncSnapshot) -> Bool {
-        let before = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
+        let before = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.channel)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
         var existing: [String: Account] = [:]
         for acc in cfg.accounts { existing[acc.id] = acc }
         var merged: [Account] = []
@@ -298,6 +303,7 @@ public enum AccountSync {
                 old.tempValidDays = ident.tempValidDays
                 old.tempValidHours = ident.tempValidHours
                 old.actualCny = ident.actualCny
+                old.channel = ident.channel
                 old.syncUpdatedAt = ident.syncUpdatedAt
                 merged.append(old)
             } else {
@@ -310,7 +316,8 @@ public enum AccountSync {
                     tempStartAt: ident.tempStartAt,
                     tempValidDays: ident.tempValidDays,
                     tempValidHours: ident.tempValidHours,
-                    actualCny: ident.actualCny
+                    actualCny: ident.actualCny,
+                    channel: ident.channel
                 )
                 acc.syncUpdatedAt = ident.syncUpdatedAt
                 merged.append(acc)
@@ -322,7 +329,7 @@ public enum AccountSync {
         if ids.contains(snap.activeAccountId) { cfg.activeAccountId = snap.activeAccountId }
         else { cfg.activeAccountId = merged.first?.id ?? "" }
         cfg.syncLegacyFields()
-        let after = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
+        let after = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.channel)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
         return before != after
     }
 
@@ -371,6 +378,9 @@ public enum AccountSync {
             }
             if acc.actualCny != 0 {
                 extra += ",\"actual_cny\":\(canonicalNumber(acc.actualCny))"
+            }
+            if !acc.channel.isEmpty {
+                extra += ",\"channel\":\(q(acc.channel))"
             }
             return "{\"id\":\(q(acc.id)),\"label\":\(q(acc.label)),\"membership_type\":\(q(acc.membershipType)),\"sync_updated_at\":\(q(acc.syncUpdatedAt)),\"token\":\(q(acc.token))\(extra)}"
         }.joined(separator: ",")
@@ -457,6 +467,7 @@ public enum AccountSync {
                     tempValidDays: AccountValidity.clampDays($0["temp_valid_days"]),
                     tempValidHours: AccountValidity.clampHours($0["temp_valid_hours"]),
                     actualCny: UsageEvents.clampActualCny(num($0["actual_cny"]) ?? num($0["actualCny"]) ?? 0),
+                    channel: UsageEvents.sanitizeChannel($0["channel"] as? String),
                     syncUpdatedAt: str($0["sync_updated_at"]).trimmingCharacters(in: .whitespaces)
                 )
             }.filter { !$0.id.isEmpty }

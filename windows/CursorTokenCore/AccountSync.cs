@@ -22,6 +22,7 @@ public sealed class SyncAccount
     public int TempValidDays { get; set; }
     public int TempValidHours { get; set; }
     public double ActualCny { get; set; }
+    public string Channel { get; set; } = "";
     public string SyncUpdatedAt { get; set; } = "";
 }
 
@@ -152,6 +153,7 @@ public static class AccountSync
         TempValidDays = AccountValidity.ClampDays(account.TempValidDays),
         TempValidHours = AccountValidity.ClampHours(account.TempValidHours),
         ActualCny = UsageEvents.ClampActualCny(account.ActualCny),
+        Channel = UsageEvents.SanitizeChannel(account.Channel),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
@@ -166,6 +168,7 @@ public static class AccountSync
         TempValidDays = AccountValidity.ClampDays(account.TempValidDays),
         TempValidHours = AccountValidity.ClampHours(account.TempValidHours),
         ActualCny = UsageEvents.ClampActualCny(account.ActualCny),
+        Channel = UsageEvents.SanitizeChannel(account.Channel),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
@@ -192,7 +195,7 @@ public static class AccountSync
     public static string SnapshotIdentity(SyncSnapshot snap)
     {
         var accounts = snap.Accounts.OrderBy(a => a.Id, StringComparer.Ordinal)
-            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.SyncUpdatedAt}");
+            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}");
         var deleted = snap.Deleted.OrderBy(d => d.Id, StringComparer.Ordinal)
             .Select(d => $"{d.Id}\n{d.DeletedAt}");
         return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}";
@@ -246,7 +249,7 @@ public static class AccountSync
     public static bool ApplySnapshotToConfig(AppConfig cfg, SyncSnapshot snap)
     {
         string Before() => string.Join("|", cfg.Accounts.Select(a =>
-            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.SyncUpdatedAt}"));
+            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}"));
         var before = Before();
         var existing = cfg.Accounts.ToDictionary(a => a.Id, StringComparer.Ordinal);
         var merged = new List<Account>();
@@ -267,6 +270,7 @@ public static class AccountSync
                     TempValidDays = ident.TempValidDays,
                     TempValidHours = ident.TempValidHours,
                     ActualCny = ident.ActualCny,
+                    Channel = ident.Channel,
                     SyncUpdatedAt = ident.SyncUpdatedAt,
                 });
                 continue;
@@ -279,6 +283,7 @@ public static class AccountSync
             old.TempValidDays = ident.TempValidDays;
             old.TempValidHours = ident.TempValidHours;
             old.ActualCny = ident.ActualCny;
+            old.Channel = ident.Channel;
             old.SyncUpdatedAt = ident.SyncUpdatedAt;
             merged.Add(old);
         }
@@ -320,6 +325,8 @@ public static class AccountSync
             }
             if (a.ActualCny != 0)
                 extra += $",\"actual_cny\":{CanonicalNumber(a.ActualCny)}";
+            if (!string.IsNullOrEmpty(a.Channel))
+                extra += $",\"channel\":{Q(a.Channel)}";
             return $"{{\"id\":{Q(a.Id)},\"label\":{Q(a.Label)},\"membership_type\":{Q(a.MembershipType)},\"sync_updated_at\":{Q(a.SyncUpdatedAt)},\"token\":{Q(a.Token)}{extra}}}";
         }));
         var deleted = string.Join(",", snap.Deleted.Select(d =>
@@ -410,6 +417,7 @@ public static class AccountSync
                     TempValidDays = AccountValidity.ClampDays(IntVal(item, "temp_valid_days")),
                     TempValidHours = AccountValidity.ClampHours(IntVal(item, "temp_valid_hours")),
                     ActualCny = UsageEvents.ClampActualCny(DoubleVal(item, "actual_cny")),
+                    Channel = UsageEvents.SanitizeChannel(Str(item, "channel")),
                     SyncUpdatedAt = Str(item, "sync_updated_at").Trim(),
                 };
                 if (acc.Id.Length > 0) snap.Accounts.Add(acc);

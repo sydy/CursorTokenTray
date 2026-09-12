@@ -114,6 +114,29 @@ class AccountStateTests(unittest.TestCase):
         self.assertEqual(list_accounts(cfg), [])
         self.assertEqual(cfg["session_token"], "")
 
+    def test_channel_and_billing_cycle_are_per_account(self) -> None:
+        from accounts import (
+            apply_snapshot_to_account,
+            set_account_channel,
+            upsert_account,
+        )
+
+        cfg: dict = {"accounts": [], "active_account_id": "", "session_token": ""}
+        a, _ = upsert_account(cfg, _token_for("user_01A"), activate=True)
+        b, _ = upsert_account(cfg, _token_for("user_01B"), activate=False)
+        self.assertTrue(set_account_channel(cfg, a["id"], "自费"))
+        self.assertTrue(set_account_channel(cfg, b["id"], "third_party"))
+        self.assertEqual(a["channel"], "self_pay")
+        self.assertEqual(b["channel"], "third_party")
+        apply_snapshot_to_account(
+            a,
+            billing_cycle_start="2026-09-01T00:00:00.000Z",
+            billing_cycle_end="2026-10-01T00:00:00.000Z",
+        )
+        self.assertEqual(a["billing_cycle_start"], "2026-09-01T00:00:00.000Z")
+        self.assertEqual(a["billing_cycle_end"], "2026-10-01T00:00:00.000Z")
+        self.assertEqual(b.get("billing_cycle_start"), "")
+
     def test_actual_cny_is_per_account(self) -> None:
         from accounts import (
             normalize_account_state,

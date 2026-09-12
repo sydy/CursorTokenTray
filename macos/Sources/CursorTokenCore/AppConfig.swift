@@ -78,6 +78,9 @@ public struct Account: Equatable, Sendable, Codable {
     public var tokenDecryptFailed: Bool
     public var storedToken: String
     public var actualCny: Double
+    public var channel: String
+    public var billingCycleStart: String
+    public var billingCycleEnd: String
 
     public init(
         id: String = "",
@@ -98,7 +101,10 @@ public struct Account: Equatable, Sendable, Codable {
         lowQuotaNotified: Bool = false,
         tokenDecryptFailed: Bool = false,
         storedToken: String = "",
-        actualCny: Double = 0
+        actualCny: Double = 0,
+        channel: String = "",
+        billingCycleStart: String = "",
+        billingCycleEnd: String = ""
     ) {
         self.id = id
         self.label = label
@@ -119,6 +125,9 @@ public struct Account: Equatable, Sendable, Codable {
         self.tokenDecryptFailed = tokenDecryptFailed
         self.storedToken = storedToken
         self.actualCny = UsageEvents.clampActualCny(actualCny)
+        self.channel = UsageEvents.sanitizeChannel(channel)
+        self.billingCycleStart = billingCycleStart.trimmingCharacters(in: .whitespaces)
+        self.billingCycleEnd = billingCycleEnd.trimmingCharacters(in: .whitespaces)
     }
 
     public var displayLabel: String {
@@ -247,6 +256,18 @@ public struct AppConfig: Equatable, Sendable {
         return true
     }
 
+    public mutating func setChannel(_ accountId: String, _ channel: String) -> Bool {
+        guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else { return false }
+        let sanitized = UsageEvents.sanitizeChannel(channel)
+        if accounts[idx].channel != sanitized {
+            accounts[idx].channel = sanitized
+            AccountSync.touchAccount(&accounts[idx])
+        } else {
+            accounts[idx].channel = sanitized
+        }
+        return true
+    }
+
     public mutating func upsertAccount(
         token rawToken: String,
         label: String? = nil,
@@ -365,7 +386,9 @@ public struct AppConfig: Equatable, Sendable {
         membershipType: String? = nil,
         remaining: Double? = nil,
         error: String? = nil,
-        updatedAt: String? = nil
+        updatedAt: String? = nil,
+        billingCycleStart: String? = nil,
+        billingCycleEnd: String? = nil
     ) {
         guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else { return }
         if let membershipType { accounts[idx].membershipType = membershipType.trimmingCharacters(in: .whitespaces) }
@@ -376,6 +399,8 @@ public struct AppConfig: Equatable, Sendable {
             accounts[idx].lastError = ""
         }
         if let updatedAt { accounts[idx].updatedAt = updatedAt }
+        if let billingCycleStart { accounts[idx].billingCycleStart = billingCycleStart.trimmingCharacters(in: .whitespaces) }
+        if let billingCycleEnd { accounts[idx].billingCycleEnd = billingCycleEnd.trimmingCharacters(in: .whitespaces) }
     }
 
     public mutating func syncLegacyFields() {
@@ -671,6 +696,11 @@ public enum ConfigStore {
         if raw["actual_cny"] != nil || raw["actualCny"] != nil {
             acc.actualCny = UsageEvents.clampActualCny(doubleValue(raw["actual_cny"] ?? raw["actualCny"]) ?? 0)
         }
+        acc.channel = UsageEvents.sanitizeChannel(raw["channel"] as? String)
+        acc.billingCycleStart = (raw["billing_cycle_start"] as? String ?? raw["billingCycleStart"] as? String ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        acc.billingCycleEnd = (raw["billing_cycle_end"] as? String ?? raw["billingCycleEnd"] as? String ?? "")
+            .trimmingCharacters(in: .whitespaces)
         return acc
     }
 
@@ -747,6 +777,9 @@ public enum ConfigStore {
                 ]
                 if let r = acc.lastRemaining { d["last_remaining"] = r } else { d["last_remaining"] = NSNull() }
                 d["actual_cny"] = acc.actualCny
+                d["channel"] = acc.channel
+                d["billing_cycle_start"] = acc.billingCycleStart
+                d["billing_cycle_end"] = acc.billingCycleEnd
                 return d
             },
             "active_account_id": cfg.activeAccountId,

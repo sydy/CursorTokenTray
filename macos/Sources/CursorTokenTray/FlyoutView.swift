@@ -143,6 +143,10 @@ struct FlyoutView: View {
                     FlyoutWindowController.shared.close()
                     store.openReport()
                 }
+                toolButton("对比", "tablecells") {
+                    FlyoutWindowController.shared.close()
+                    store.openCompare()
+                }
                 toolButton("设置", "gearshape") {
                     FlyoutWindowController.shared.close()
                     store.openSettings(focusToken: store.errorMessage != nil)

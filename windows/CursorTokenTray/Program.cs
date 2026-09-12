@@ -108,6 +108,7 @@ sealed class TrayContext : ApplicationContext
     SettingsForm? _settings;
     FlyoutForm? _flyout;
     ReportForm? _report;
+    CompareForm? _compare;
     CancellationTokenSource _cts = new();
     CancellationTokenSource? _delayCts;
     bool _refreshNow;
@@ -177,6 +178,7 @@ sealed class TrayContext : ApplicationContext
         _dashboardItem.Click += DashboardClick;
         _menu.Items.Add(_dashboardItem);
         _menu.Items.Add("用量报表…", null, (_, _) => OpenReport());
+        _menu.Items.Add("账号对比…", null, (_, _) => OpenCompare());
         _menu.Items.Add(_switcher);
         _menu.Items.Add("在 Cursor 登录当前账号…", null, (_, _) => LoginToCursor());
         _menu.Items.Add("导入 Token…", null, (_, _) => OpenSettings(true, true));
@@ -284,7 +286,7 @@ sealed class TrayContext : ApplicationContext
                     if (o.Snap is { } snap)
                     {
                         AccountValidity.ApplyEndOverride(snap, acc);
-                        live.ApplySnapshot(o.Id, snap.MembershipType, snap.RemainingPercent, "", o.Stamp);
+                        live.ApplySnapshot(o.Id, snap.MembershipType, snap.RemainingPercent, "", o.Stamp, snap.BillingCycleStart, snap.BillingCycleEnd);
                         acc.AuthErrorNotified = false;
                         foreach (var n in AlertLogic.Evaluate(live, acc, snap))
                             notices.Add((n.Title, n.Body, false));
@@ -410,7 +412,8 @@ sealed class TrayContext : ApplicationContext
                         }
                         catch { }
                     },
-                    OpenReport);
+                    OpenReport,
+                    OpenCompare);
                 var hist = UsageHistory.LoadRecent(7, _config.ActiveAccount?.Id);
                 _flyout.Render(_usage, _error, _updated, _config, hist.Select(p => p.Remaining).ToList(), UsageHistory.DailyAvgBurn(hist));
                 _flyout.PopupNear(anchor ?? Cursor.Position);
@@ -438,6 +441,37 @@ sealed class TrayContext : ApplicationContext
                 result.Ok ? ToolTipIcon.Info : ToolTipIcon.Warning));
         }
         catch (Exception ex) { CrashLog.Write(ex); }
+    }
+
+    void OpenCompare()
+    {
+        OnUi(() =>
+        {
+            try
+            {
+                _flyout?.Hide();
+                if (_compare is { IsDisposed: false })
+                {
+                    _compare.Show();
+                    _compare.Activate();
+                    return;
+                }
+                _compare = new CompareForm(_client, () => new CompareForm.CompareState(
+                    _config.Accounts.ToList(),
+                    _config.MonthlyPlanUsd,
+                    _config.UsdCnyRate,
+                    (id, membership, start, end) =>
+                    {
+                        _config = ConfigStore.Update(live =>
+                        {
+                            live.ApplySnapshot(id, membershipType: membership, billingCycleStart: start, billingCycleEnd: end);
+                        });
+                    }));
+                _compare.FormClosed += (_, _) => _compare = null;
+                _compare.Show();
+            }
+            catch (Exception ex) { CrashLog.Write(ex); }
+        });
     }
 
     void OpenReport()
@@ -538,6 +572,7 @@ sealed class TrayContext : ApplicationContext
         _menu.Dispose();
         _flyout?.Dispose();
         _report?.Dispose();
+        _compare?.Dispose();
         _settings?.Dispose();
         _sync.Dispose();
         Application.Exit();

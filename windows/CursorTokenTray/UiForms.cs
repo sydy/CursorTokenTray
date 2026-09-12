@@ -17,6 +17,7 @@ sealed class SettingsForm : Form
     readonly TextBox _interval = new() { Width = 80 };
     readonly TextBox _planUsd = new() { Width = 80 };
     readonly TextBox _actualCny = new() { Width = 80 };
+    readonly ComboBox _channel = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly TextBox _cnyRate = new() { Width = 80 };
     readonly Label _spendHint = new()
     {
@@ -107,10 +108,12 @@ sealed class SettingsForm : Form
         _tempFields.Controls.Add(LabeledSpin("", _hours, "小时"));
         _root.Controls.Add(_tempFields);
         _root.Controls.Add(_endAt);
+        _channel.Items.AddRange(["未标", "自费", "第三方"]);
+        _root.Controls.Add(FieldRow("渠道", _channel));
         _root.Controls.Add(FieldRow("实际成本（人民币）", _actualCny));
         _root.Controls.Add(new Label
         {
-            Text = "仅当前账号。企业 / 团队额度不是真实支出；填了则按套餐内费用分摊，优先于月费。按需仍按费用×汇率。",
+            Text = "仅当前账号，填折合月费。短期号请买价÷天数×30。企业 / 团队额度不是真实支出；填了则按套餐内费用分摊，优先于月费。按需仍按费用×汇率。",
             AutoSize = true,
             ForeColor = Color.DimGray,
             Margin = new Padding(0, 0, 0, 8),
@@ -159,9 +162,11 @@ sealed class SettingsForm : Form
             if (_loading) return;
             ReadKindInto(_cfg.ActiveAccount);
             ReadActualCnyInto(_cfg.ActiveAccount);
+            ReadChannelInto(_cfg.ActiveAccount);
             if (_accounts.SelectedItem is AccountItem item) { _cfg.SetActiveAccount(item.Id); NotifySaved(); }
             WriteKindFrom(_cfg.ActiveAccount);
             WriteActualCnyFrom(_cfg.ActiveAccount);
+            WriteChannelFrom(_cfg.ActiveAccount);
         };
         rename.Click += (_, _) => RenameActive();
         login.Click += async (_, _) => await LoginToCursor();
@@ -399,6 +404,7 @@ sealed class SettingsForm : Form
             var plan = cfg.MonthlyPlanUsd > 0 ? cfg.MonthlyPlanUsd : UsageEvents.DefaultMonthlyPlanUsd(membership);
             _planUsd.Text = plan.ToString("0.##", CultureInfo.InvariantCulture);
             WriteActualCnyFrom(cfg.ActiveAccount);
+            WriteChannelFrom(cfg.ActiveAccount);
             _cnyRate.Text = cfg.UsdCnyRate.ToString("0.##", CultureInfo.InvariantCulture);
             _thresholds.Text = string.Join(",", cfg.AlertThresholds);
             _notify.Checked = cfg.NotifyEnabled;
@@ -433,6 +439,30 @@ sealed class SettingsForm : Form
     {
         var value = acc?.ActualCny ?? _cfg.ActualCny;
         _actualCny.Text = value.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    void ReadChannelInto(Account? acc)
+    {
+        if (acc is null) return;
+        var value = _channel.SelectedIndex switch { 1 => UsageEvents.ChannelSelfPay, 2 => UsageEvents.ChannelThirdParty, _ => "" };
+        _cfg.SetChannel(acc.Id, value);
+    }
+
+    void WriteChannelFrom(Account? acc)
+    {
+        var prev = _loading;
+        _loading = true;
+        try
+        {
+            _channel.Enabled = acc is not null;
+            _channel.SelectedIndex = UsageEvents.SanitizeChannel(acc?.Channel) switch
+            {
+                UsageEvents.ChannelSelfPay => 1,
+                UsageEvents.ChannelThirdParty => 2,
+                _ => 0,
+            };
+        }
+        finally { _loading = prev; }
     }
 
     void ReadKindInto(Account? acc)
@@ -608,6 +638,7 @@ sealed class SettingsForm : Form
         if (TryParseDecimal(_planUsd.Text, out var planUsd))
             _cfg.MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(planUsd);
         ReadActualCnyInto(_cfg.ActiveAccount);
+        ReadChannelInto(_cfg.ActiveAccount);
         if (TryParseDecimal(_cnyRate.Text, out var rate))
             _cfg.UsdCnyRate = UsageEvents.ClampUsdCnyRate(rate);
         _cfg.AlertThresholds = ConfigStore.ParseThresholds(_thresholds.Text);

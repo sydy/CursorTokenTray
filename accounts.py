@@ -37,6 +37,9 @@ ACCOUNT_KEYS = (
     "exhaustion_notified",
     "low_quota_notified",
     "actual_cny",
+    "channel",
+    "billing_cycle_start",
+    "billing_cycle_end",
 )
 
 
@@ -123,6 +126,9 @@ def empty_account(*, token: str = "", account_id: str = "", label: str = "") -> 
         "exhaustion_notified": False,
         "low_quota_notified": False,
         "actual_cny": 0.0,
+        "channel": "",
+        "billing_cycle_start": "",
+        "billing_cycle_end": "",
     }
 
 
@@ -165,6 +171,11 @@ def sanitize_account(raw: Any) -> dict[str, Any] | None:
     from usage_report import clamp_actual_cny
 
     acc["actual_cny"] = clamp_actual_cny(raw.get("actual_cny", raw.get("actualCny")))
+    from usage_report import sanitize_account_channel
+
+    acc["channel"] = sanitize_account_channel(raw.get("channel"))
+    acc["billing_cycle_start"] = str(raw.get("billing_cycle_start") or raw.get("billingCycleStart") or "").strip()
+    acc["billing_cycle_end"] = str(raw.get("billing_cycle_end") or raw.get("billingCycleEnd") or "").strip()
     return acc
 
 
@@ -303,6 +314,23 @@ def resolved_actual_cny(cfg: dict[str, Any]) -> float:
     from usage_report import clamp_actual_cny
 
     return clamp_actual_cny(cfg.get("actual_cny"))
+
+
+def set_account_channel(cfg: dict[str, Any], account_id: str, channel: str) -> bool:
+    acc = find_account(cfg, account_id)
+    if acc is None:
+        return False
+    from usage_report import sanitize_account_channel
+
+    new = sanitize_account_channel(channel)
+    if acc.get("channel") != new:
+        from account_sync import touch_account
+
+        acc["channel"] = new
+        touch_account(acc)
+    else:
+        acc["channel"] = new
+    return True
 
 
 def set_account_actual_cny(cfg: dict[str, Any], account_id: str, amount: float | None) -> bool:
@@ -489,6 +517,8 @@ def apply_snapshot_to_account(
     *,
     membership_type: str | None = None,
     remaining: float | None = None,
+    billing_cycle_start: str | None = None,
+    billing_cycle_end: str | None = None,
     error: str | None = None,
     updated_at: str | None = None,
 ) -> None:
@@ -496,6 +526,10 @@ def apply_snapshot_to_account(
         account["membership_type"] = str(membership_type).strip()
     if remaining is not None:
         account["last_remaining"] = round(float(remaining), 2)
+    if billing_cycle_start is not None:
+        account["billing_cycle_start"] = str(billing_cycle_start).strip()
+    if billing_cycle_end is not None:
+        account["billing_cycle_end"] = str(billing_cycle_end).strip()
     if error is not None:
         account["last_error"] = str(error)
     elif remaining is not None:

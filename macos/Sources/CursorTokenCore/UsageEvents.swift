@@ -168,6 +168,119 @@ public struct CnySpendSettings: Equatable, Sendable {
     }
 }
 
+public struct AccountCompareCategory: Equatable, Sendable {
+    public var category: String
+    public var count: Int
+    public var tokens: Int
+    public var cny: Double
+
+    public init(category: String, count: Int = 0, tokens: Int = 0, cny: Double = 0) {
+        self.category = category
+        self.count = count
+        self.tokens = tokens
+        self.cny = cny
+    }
+
+    public var cnyPerMillion: Double? { UsageEvents.unitCny(cny, tokens > 0 ? Double(tokens) / 1_000_000.0 : 0) }
+    public var cnyPerRequest: Double? { UsageEvents.unitCny(cny, Double(count)) }
+}
+
+public struct AccountCompareInput: Sendable {
+    public var accountId: String
+    public var label: String
+    public var channel: String
+    public var membershipType: String
+    public var accountKind: String
+    public var tempStartAt: String
+    public var tempValidDays: Int
+    public var tempValidHours: Int
+    public var billingCycleStart: String
+    public var billingCycleEnd: String
+    public var lastRemaining: Double?
+    public var events: [UsageEvent]
+    public var spend: CnySpendSettings?
+
+    public init(
+        accountId: String,
+        label: String = "",
+        channel: String = "",
+        membershipType: String = "",
+        accountKind: String = "long_term",
+        tempStartAt: String = "",
+        tempValidDays: Int = 0,
+        tempValidHours: Int = 0,
+        billingCycleStart: String = "",
+        billingCycleEnd: String = "",
+        lastRemaining: Double? = nil,
+        events: [UsageEvent] = [],
+        spend: CnySpendSettings? = nil
+    ) {
+        self.accountId = accountId
+        self.label = label
+        self.channel = channel
+        self.membershipType = membershipType
+        self.accountKind = accountKind
+        self.tempStartAt = tempStartAt
+        self.tempValidDays = tempValidDays
+        self.tempValidHours = tempValidHours
+        self.billingCycleStart = billingCycleStart
+        self.billingCycleEnd = billingCycleEnd
+        self.lastRemaining = lastRemaining
+        self.events = events
+        self.spend = spend
+    }
+}
+
+public struct AccountCompareRow: Equatable, Sendable {
+    public var accountId: String
+    public var label: String
+    public var channel: String
+    public var membershipType: String
+    public var windowSource: String
+    public var windowStartMs: Int64
+    public var windowEndMs: Int64
+    public var windowDays: Double
+    public var planCny: Double
+    public var dailyHoldingCny: Double
+    public var windowPlanCny: Double
+    public var onDemandCny: Double
+    public var totalCny: Double
+    public var eventCount: Int
+    public var totalTokens: Int
+    public var firstParty: AccountCompareCategory
+    public var api: AccountCompareCategory
+    public var grokBot: AccountCompareCategory
+    public var lastRemaining: Double?
+    public var usesActualCny: Bool
+
+    public var channelLabel: String { UsageEvents.channelLabel(channel) }
+    public var windowLabel: String { UsageEvents.windowLabel(windowSource) }
+    public var cnyPerMillion: Double? { UsageEvents.unitCny(totalCny, totalTokens > 0 ? Double(totalTokens) / 1_000_000.0 : 0) }
+    public var cnyPerRequest: Double? { UsageEvents.unitCny(totalCny, Double(eventCount)) }
+}
+
+public struct AccountCompareGroup: Equatable, Sendable {
+    public var channel: String
+    public var rows: [AccountCompareRow]
+    public var dailyHoldingCny: Double
+    public var totalCny: Double
+    public var eventCount: Int
+    public var totalTokens: Int
+    public var firstParty: AccountCompareCategory
+    public var api: AccountCompareCategory
+    public var grokBot: AccountCompareCategory
+
+    public var channelLabel: String { UsageEvents.channelLabel(channel) }
+    public var cnyPerMillion: Double? { UsageEvents.unitCny(totalCny, totalTokens > 0 ? Double(totalTokens) / 1_000_000.0 : 0) }
+    public var cnyPerRequest: Double? { UsageEvents.unitCny(totalCny, Double(eventCount)) }
+}
+
+public struct AccountCompareReport: Equatable, Sendable {
+    public var rows: [AccountCompareRow]
+    public var groups: [AccountCompareGroup]
+    public var holdingDays: Double
+}
+
 public struct UsageEventsSyncResult: Sendable {
     public var events: [UsageEvent]
     public var fetched: Int
@@ -183,6 +296,13 @@ public enum UsageEvents {
     public static let categoryFirstParty = "first_party"
     public static let categoryAPI = "api"
     public static let categoryGrokBot = "grok_bot"
+    public static let channelSelfPay = "self_pay"
+    public static let channelThirdParty = "third_party"
+    public static let holdingDays = 30.0
+    public static let windowCycle = "cycle"
+    public static let windowValidity = "validity"
+    public static let windowFallback = "fallback"
+    static let channelOrder = [channelSelfPay, channelThirdParty, ""]
     public static let tzLabel = "北京时间"
     public static let csvHeader = "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent"
     public static let defaultUsdCnyRate = 7.50
@@ -284,6 +404,279 @@ public enum UsageEvents {
     public static func isPlanCovered(_ kind: String?) -> Bool {
         let key = (kind ?? "").trimmingCharacters(in: .whitespaces).lowercased()
         return key != kindOnDemand && key != kindFree
+    }
+
+    public static func sanitizeChannel(_ raw: String?) -> String {
+        let key = (raw ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "")
+        if ["self_pay", "self", "selfpay", "自费"].contains(key) { return channelSelfPay }
+        if ["third_party", "third", "thirdparty", "第三方"].contains(key) { return channelThirdParty }
+        return ""
+    }
+
+    public static func channelLabel(_ channel: String?) -> String {
+        switch sanitizeChannel(channel) {
+        case channelSelfPay: return "自费"
+        case channelThirdParty: return "第三方"
+        default: return "未标"
+        }
+    }
+
+    public static func windowLabel(_ source: String?) -> String {
+        switch (source ?? "").trimmingCharacters(in: .whitespaces).lowercased() {
+        case windowCycle: return "本周期"
+        case windowValidity: return "有效期"
+        default: return "近30天"
+        }
+    }
+
+    public static func unitCny(_ amount: Double, _ denom: Double) -> Double? {
+        if denom <= 1e-12 { return nil }
+        return max(0, amount) / denom
+    }
+
+    public static func formatCnyUnit(_ amount: Double?, suffix: String) -> String {
+        guard let amount else { return "—" }
+        return formatCNY(amount) + suffix
+    }
+
+    public static func resolveCompareWindow(
+        accountKind: String = "",
+        tempStartAt: String = "",
+        tempValidDays: Int = 0,
+        tempValidHours: Int = 0,
+        billingCycleStart: String = "",
+        billingCycleEnd: String = "",
+        nowMs: Int64? = nil
+    ) -> (startMs: Int64, endMs: Int64, source: String) {
+        let now = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
+        let kind = accountKind.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "-", with: "_")
+        if ["temporary", "temp", "short"].contains(kind) {
+            if let start = UsageParser.isoToMs(tempStartAt).map({ Int64($0) }) {
+                let end = tempEndMs(tempStartAt, days: tempValidDays, hours: tempValidHours) ?? now
+                return (start, min(end, now), windowValidity)
+            }
+        }
+        if let start = UsageParser.isoToMs(billingCycleStart).map({ Int64($0) }) {
+            let end = UsageParser.isoToMs(billingCycleEnd).map({ Int64($0) }) ?? now
+            return (start, min(end, now), windowCycle)
+        }
+        return (now - 30 * msDay, now, windowFallback)
+    }
+
+    static func tempEndMs(_ startAt: String, days: Int, hours: Int) -> Int64? {
+        guard let iso = AccountValidity.computeEndIso(startAt: startAt, days: days, hours: hours) else { return nil }
+        return UsageParser.isoToMs(iso).map { Int64($0) }
+    }
+
+    public static func compareWindowDays(_ startMs: Int64, _ endMs: Int64) -> Double {
+        let span = max(0, endMs - startMs)
+        return max(Double(span) / Double(msDay), 1.0 / 24.0)
+    }
+
+    public static func compareInput(from account: Account, events: [UsageEvent], monthlyPlanUsd: Double, usdCnyRate: Double) -> AccountCompareInput {
+        AccountCompareInput(
+            accountId: account.id,
+            label: account.label,
+            channel: account.channel,
+            membershipType: account.membershipType,
+            accountKind: account.accountKind,
+            tempStartAt: account.tempStartAt,
+            tempValidDays: account.tempValidDays,
+            tempValidHours: account.tempValidHours,
+            billingCycleStart: account.billingCycleStart,
+            billingCycleEnd: account.billingCycleEnd,
+            lastRemaining: account.lastRemaining,
+            events: events,
+            spend: CnySpendSettings(
+                monthlyPlanUsd: monthlyPlanUsd,
+                usdCnyRate: usdCnyRate,
+                membershipType: account.membershipType,
+                actualCny: account.actualCny
+            )
+        )
+    }
+
+    public static func buildAccountCompareRow(_ item: AccountCompareInput, nowMs: Int64? = nil) -> AccountCompareRow {
+        let window = resolveCompareWindow(
+            accountKind: item.accountKind,
+            tempStartAt: item.tempStartAt,
+            tempValidDays: item.tempValidDays,
+            tempValidHours: item.tempValidHours,
+            billingCycleStart: item.billingCycleStart,
+            billingCycleEnd: item.billingCycleEnd,
+            nowMs: nowMs
+        )
+        let windowDays = compareWindowDays(window.startMs, window.endMs)
+        let windowEvents = item.events.filter { $0.timestampMs >= window.startMs && $0.timestampMs <= window.endMs }
+        let spend = item.spend ?? CnySpendSettings()
+        let resolved = resolvePlanCny(spend)
+        let dailyHolding = resolved.planCny > 0 ? resolved.planCny / holdingDays : 0
+        let windowPlan = dailyHolding * windowDays
+        let included = windowEvents.filter { isPlanCovered($0.kind) }
+        let includedCostSum = included.reduce(0.0) { $0 + costCents($1) }
+        let includedCount = included.count
+        var cats: [String: (Int, Int, Double)] = [
+            categoryFirstParty: (0, 0, 0),
+            categoryAPI: (0, 0, 0),
+            categoryGrokBot: (0, 0, 0),
+        ]
+        var onDemandCny = 0.0
+        var totalCny = 0.0
+        var totalTokens = 0
+        for ev in windowEvents {
+            let amount = allocateEventCny(ev, includedCostSum: includedCostSum, includedCount: includedCount, planCny: windowPlan, rate: resolved.rate)
+            totalCny += amount
+            totalTokens += ev.tokens
+            if ev.kind == kindOnDemand { onDemandCny += amount }
+            let bucket = classifyCategory(ev.model)
+            var row = cats[bucket] ?? (0, 0, 0)
+            row.0 += 1
+            row.1 += ev.tokens
+            row.2 += amount
+            cats[bucket] = row
+        }
+        func cat(_ name: String) -> AccountCompareCategory {
+            let row = cats[name] ?? (0, 0, 0)
+            return AccountCompareCategory(category: name, count: row.0, tokens: row.1, cny: row.2)
+        }
+        return AccountCompareRow(
+            accountId: item.accountId,
+            label: item.label.isEmpty ? item.accountId : item.label,
+            channel: sanitizeChannel(item.channel),
+            membershipType: item.membershipType,
+            windowSource: window.source,
+            windowStartMs: window.startMs,
+            windowEndMs: window.endMs,
+            windowDays: windowDays,
+            planCny: resolved.planCny,
+            dailyHoldingCny: dailyHolding,
+            windowPlanCny: windowPlan,
+            onDemandCny: onDemandCny,
+            totalCny: totalCny,
+            eventCount: windowEvents.count,
+            totalTokens: totalTokens,
+            firstParty: cat(categoryFirstParty),
+            api: cat(categoryAPI),
+            grokBot: cat(categoryGrokBot),
+            lastRemaining: item.lastRemaining,
+            usesActualCny: resolved.usesActual
+        )
+    }
+
+    public static func buildAccountCompareReport(_ items: [AccountCompareInput], nowMs: Int64? = nil) -> AccountCompareReport {
+        let rows = items.map { buildAccountCompareRow($0, nowMs: nowMs) }
+        var grouped: [String: [AccountCompareRow]] = [:]
+        for key in channelOrder { grouped[key] = [] }
+        for row in rows {
+            grouped[row.channel, default: []].append(row)
+        }
+        var groups: [AccountCompareGroup] = []
+        for channel in channelOrder {
+            let bucket = grouped[channel] ?? []
+            if !bucket.isEmpty { groups.append(sumCompareGroup(channel, bucket)) }
+        }
+        return AccountCompareReport(rows: rows, groups: groups, holdingDays: holdingDays)
+    }
+
+    static func sumCompareGroup(_ channel: String, _ rows: [AccountCompareRow]) -> AccountCompareGroup {
+        func add(_ name: String, _ parts: [AccountCompareCategory]) -> AccountCompareCategory {
+            AccountCompareCategory(
+                category: name,
+                count: parts.reduce(0) { $0 + $1.count },
+                tokens: parts.reduce(0) { $0 + $1.tokens },
+                cny: parts.reduce(0) { $0 + $1.cny }
+            )
+        }
+        return AccountCompareGroup(
+            channel: channel,
+            rows: rows,
+            dailyHoldingCny: rows.reduce(0) { $0 + $1.dailyHoldingCny },
+            totalCny: rows.reduce(0) { $0 + $1.totalCny },
+            eventCount: rows.reduce(0) { $0 + $1.eventCount },
+            totalTokens: rows.reduce(0) { $0 + $1.totalTokens },
+            firstParty: add(categoryFirstParty, rows.map(\.firstParty)),
+            api: add(categoryAPI, rows.map(\.api)),
+            grokBot: add(categoryGrokBot, rows.map(\.grokBot))
+        )
+    }
+
+    public static func accountCompareToCSV(_ report: AccountCompareReport) -> String {
+        var lines = [
+            "账号,渠道,套餐,窗口,窗口天数,日均持有,窗口实付,请求,Token,¥/百万Token,¥/次,First-party次数,First-party Token,First-party实付,First-party ¥/百万,First-party ¥/次,API次数,API Token,API实付,API ¥/百万,API ¥/次,Grok Bot次数,Grok Bot Token,Grok Bot实付,Grok Bot ¥/百万,Grok Bot ¥/次",
+        ]
+        for row in report.rows {
+            lines.append(compareCSVCells(row.label, row.channelLabel, row.membershipType, row.windowLabel, row.windowDays, row))
+        }
+        for group in report.groups {
+            lines.append(compareCSVCells("\(group.channelLabel)合计", group.channelLabel, "", "", 0, group))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    static func compareCSVCells(_ name: String, _ channel: String, _ membership: String, _ window: String, _ days: Double, _ row: AccountCompareRow) -> String {
+        compareCSVCells(
+            name, channel, membership, window, days,
+            dailyHolding: row.dailyHoldingCny, totalCny: row.totalCny,
+            eventCount: row.eventCount, totalTokens: row.totalTokens,
+            perMillion: row.cnyPerMillion, perRequest: row.cnyPerRequest,
+            firstParty: row.firstParty, api: row.api, grokBot: row.grokBot
+        )
+    }
+
+    static func compareCSVCells(_ name: String, _ channel: String, _ membership: String, _ window: String, _ days: Double, _ group: AccountCompareGroup) -> String {
+        compareCSVCells(
+            name, channel, membership, window, days,
+            dailyHolding: group.dailyHoldingCny, totalCny: group.totalCny,
+            eventCount: group.eventCount, totalTokens: group.totalTokens,
+            perMillion: group.cnyPerMillion, perRequest: group.cnyPerRequest,
+            firstParty: group.firstParty, api: group.api, grokBot: group.grokBot
+        )
+    }
+
+    static func compareCSVCells(
+        _ name: String,
+        _ channel: String,
+        _ membership: String,
+        _ window: String,
+        _ days: Double,
+        dailyHolding: Double,
+        totalCny: Double,
+        eventCount: Int,
+        totalTokens: Int,
+        perMillion: Double?,
+        perRequest: Double?,
+        firstParty: AccountCompareCategory,
+        api: AccountCompareCategory,
+        grokBot: AccountCompareCategory
+    ) -> String {
+        func catCells(_ cat: AccountCompareCategory) -> [String] {
+            [
+                String(cat.count),
+                String(cat.tokens),
+                String(format: "%.4f", cat.cny),
+                cat.cnyPerMillion.map { String(format: "%.4f", $0) } ?? "",
+                cat.cnyPerRequest.map { String(format: "%.4f", $0) } ?? "",
+            ]
+        }
+        var cols = [
+            escapeCSV(name),
+            escapeCSV(channel),
+            escapeCSV(membership),
+            escapeCSV(window),
+            days > 0 ? String(format: "%.2f", days) : "",
+            String(format: "%.4f", dailyHolding),
+            String(format: "%.4f", totalCny),
+            String(eventCount),
+            String(totalTokens),
+            perMillion.map { String(format: "%.4f", $0) } ?? "",
+            perRequest.map { String(format: "%.4f", $0) } ?? "",
+        ]
+        cols.append(contentsOf: catCells(firstParty))
+        cols.append(contentsOf: catCells(api))
+        cols.append(contentsOf: catCells(grokBot))
+        return cols.joined(separator: ",")
     }
 
     public static func formatCNY(_ yuan: Double?) -> String {
@@ -699,7 +1092,15 @@ public enum UsageEvents {
     }
 
     public static func fromDict(_ raw: [String: Any]) -> UsageEvent? {
-        guard let ts = number64(raw["timestamp_ms"]) else { return nil }
+        let ts: Int64?
+        if let n = number64(raw["timestamp_ms"]) ?? number64(raw["timestampMs"]) {
+            ts = n
+        } else if let iso = raw["timestamp"] as? String, !iso.isEmpty {
+            ts = UsageParser.isoToMs(iso).map { Int64($0) }
+        } else {
+            ts = number64(raw["timestamp"])
+        }
+        guard let ts else { return nil }
         return UsageEvent(
             id: str(raw["id"]),
             timestampMs: ts,
@@ -712,8 +1113,8 @@ public enum UsageEvents {
             outputTokens: max(0, intVal(raw["output_tokens"])),
             cacheWriteTokens: max(0, intVal(raw["cache_write_tokens"])),
             cacheReadTokens: max(0, intVal(raw["cache_read_tokens"])),
-            chargedCents: number(raw["charged_cents"]),
-            totalCents: number(raw["total_cents"]),
+            chargedCents: number(raw["charged_cents"] ?? raw["chargedCents"]),
+            totalCents: number(raw["total_cents"] ?? raw["totalCents"]),
             isHeadless: boolVal(raw["is_headless"]),
             isChargeable: boolVal(raw["is_chargeable"])
         )

@@ -337,6 +337,75 @@ final class UsageParserFixtureTests: XCTestCase {
         }
     }
 
+    func testAccountCompareCases() throws {
+        let data = try XCTUnwrap(try json("account_compare_cases.json") as? [String: Any])
+        XCTAssertEqual(UsageEvents.holdingDays, try XCTUnwrap(num(data["holding_days"])))
+        let nowMs = number64(data["now_ms"])
+        for row in data["channel"] as! [[String: Any]] {
+            XCTAssertEqual(UsageEvents.sanitizeChannel(str(row["input"])), str(row["output"]))
+            XCTAssertEqual(UsageEvents.channelLabel(str(row["input"])), str(row["label"]))
+        }
+        for cse in data["cases"] as! [[String: Any]] {
+            let items = (cse["items"] as! [[String: Any]]).map { raw -> AccountCompareInput in
+                let events = (raw["events"] as! [[String: Any]]).compactMap(UsageEvents.fromDict)
+                let spend = raw["spend"] as! [String: Any]
+                return AccountCompareInput(
+                    accountId: str(raw["account_id"]),
+                    label: str(raw["label"]),
+                    channel: str(raw["channel"]),
+                    membershipType: str(raw["membership_type"]),
+                    accountKind: str(raw["account_kind"]),
+                    tempStartAt: str(raw["temp_start_at"]),
+                    tempValidDays: int(raw["temp_valid_days"]) ?? 0,
+                    tempValidHours: int(raw["temp_valid_hours"]) ?? 0,
+                    billingCycleStart: str(raw["billing_cycle_start"]),
+                    billingCycleEnd: str(raw["billing_cycle_end"]),
+                    events: events,
+                    spend: CnySpendSettings(
+                        monthlyPlanUsd: num(spend["monthly_plan_usd"]) ?? 0,
+                        usdCnyRate: num(spend["usd_cny_rate"]) ?? UsageEvents.defaultUsdCnyRate,
+                        membershipType: str(spend["membership_type"]),
+                        actualCny: num(spend["actual_cny"]) ?? 0
+                    )
+                )
+            }
+            let report = UsageEvents.buildAccountCompareReport(items, nowMs: nowMs)
+            let exp = cse["expected"] as! [String: Any]
+            let wantRows = exp["rows"] as! [[String: Any]]
+            XCTAssertEqual(report.rows.count, wantRows.count, str(cse["name"]))
+            for (got, want) in zip(report.rows, wantRows) {
+                XCTAssertEqual(got.accountId, str(want["account_id"]))
+                XCTAssertEqual(got.channel, str(want["channel"]))
+                XCTAssertEqual(got.windowSource, str(want["window_source"]))
+                XCTAssertEqual(got.windowDays, try XCTUnwrap(num(want["window_days"])), accuracy: 0.001)
+                XCTAssertEqual(got.planCny, try XCTUnwrap(num(want["plan_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.dailyHoldingCny, try XCTUnwrap(num(want["daily_holding_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.windowPlanCny, try XCTUnwrap(num(want["window_plan_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.onDemandCny, try XCTUnwrap(num(want["on_demand_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.totalCny, try XCTUnwrap(num(want["total_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.eventCount, int(want["event_count"]) ?? -1)
+                XCTAssertEqual(got.totalTokens, int(want["total_tokens"]) ?? -1)
+                XCTAssertEqual(got.cnyPerMillion ?? 0, try XCTUnwrap(num(want["cny_per_million"])), accuracy: 0.001)
+                XCTAssertEqual(got.cnyPerRequest ?? 0, try XCTUnwrap(num(want["cny_per_request"])), accuracy: 0.001)
+                for (cat, key) in [(got.firstParty, "first_party"), (got.api, "api"), (got.grokBot, "grok_bot")] {
+                    let expCat = want[key] as! [String: Any]
+                    XCTAssertEqual(cat.count, int(expCat["count"]) ?? -1, key)
+                    XCTAssertEqual(cat.tokens, int(expCat["tokens"]) ?? -1, key)
+                    XCTAssertEqual(cat.cny, try XCTUnwrap(num(expCat["cny"])), accuracy: 0.001, key)
+                }
+            }
+            let wantGroups = exp["groups"] as! [[String: Any]]
+            XCTAssertEqual(report.groups.count, wantGroups.count)
+            for (got, want) in zip(report.groups, wantGroups) {
+                XCTAssertEqual(got.channel, str(want["channel"]))
+                XCTAssertEqual(got.dailyHoldingCny, try XCTUnwrap(num(want["daily_holding_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.totalCny, try XCTUnwrap(num(want["total_cny"])), accuracy: 0.001)
+                XCTAssertEqual(got.eventCount, int(want["event_count"]) ?? -1)
+                XCTAssertEqual(got.totalTokens, int(want["total_tokens"]) ?? -1)
+            }
+        }
+    }
+
     func testUsageChartCases() throws {
         let root = try XCTUnwrap(try json("usage_chart_cases.json") as? [String: Any])
         XCTAssertEqual(UsageEvents.hourlyChartWindowHours, int(root["hourly_window_hours"]) ?? -1)
@@ -487,11 +556,13 @@ final class UsageParserFixtureTests: XCTestCase {
         var cfg = AppConfig.default
         _ = try cfg.upsertAccount(token: token, label: "工作", activate: true)
         XCTAssertTrue(cfg.setActualCny("user_01SAVE", 79))
+        XCTAssertTrue(cfg.setChannel("user_01SAVE", "自费"))
         ConfigStore.save(cfg, to: dir)
         let loaded = ConfigStore.load(from: dir)
         XCTAssertEqual(loaded.accounts.count, 1)
         XCTAssertEqual(loaded.accounts[0].label, "工作")
         XCTAssertEqual(loaded.accounts[0].actualCny, 79, accuracy: 0.001)
+        XCTAssertEqual(loaded.accounts[0].channel, "self_pay")
         XCTAssertEqual(loaded.actualCny, 79, accuracy: 0.001)
         XCTAssertEqual(loaded.activeAccountId, "user_01SAVE")
         XCTAssertEqual(loaded.spendSettings().actualCny, 79, accuracy: 0.001)

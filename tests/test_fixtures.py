@@ -295,6 +295,79 @@ class GoldenFixtureTests(unittest.TestCase):
         nonzero = [b for b in series.buckets if b.tokens or b.cents or b.count]
         self.assertEqual(self._chart_buckets(nonzero), exp["nonzero"])
 
+    def test_account_compare_fixtures_match_python(self) -> None:
+        from usage_report import (
+            HOLDING_DAYS,
+            AccountCompareInput,
+            CnySpendSettings,
+            build_account_compare_report,
+            channel_label,
+            sanitize_account_channel,
+            usage_event_from_dict,
+        )
+
+        data = json.loads((ROOT / "fixtures" / "account_compare_cases.json").read_text(encoding="utf-8"))
+        self.assertEqual(HOLDING_DAYS, data["holding_days"])
+        for row in data["channel"]:
+            self.assertEqual(sanitize_account_channel(row["input"]), row["output"])
+            self.assertEqual(channel_label(row["input"]), row["label"])
+        for cse in data["cases"]:
+            with self.subTest(cse["name"]):
+                items = []
+                for raw in cse["items"]:
+                    events = [e for e in (usage_event_from_dict(row) for row in raw["events"]) if e is not None]
+                    spend = raw["spend"]
+                    items.append(
+                        AccountCompareInput(
+                            account_id=raw["account_id"],
+                            label=raw.get("label", ""),
+                            channel=raw.get("channel", ""),
+                            membership_type=raw.get("membership_type", ""),
+                            account_kind=raw.get("account_kind", "long_term"),
+                            temp_start_at=raw.get("temp_start_at", ""),
+                            temp_valid_days=raw.get("temp_valid_days", 0),
+                            temp_valid_hours=raw.get("temp_valid_hours", 0),
+                            billing_cycle_start=raw.get("billing_cycle_start", ""),
+                            billing_cycle_end=raw.get("billing_cycle_end", ""),
+                            events=events,
+                            spend=CnySpendSettings(
+                                monthly_plan_usd=spend["monthly_plan_usd"],
+                                usd_cny_rate=spend["usd_cny_rate"],
+                                membership_type=spend.get("membership_type", ""),
+                                actual_cny=spend.get("actual_cny", 0),
+                            ),
+                        )
+                    )
+                report = build_account_compare_report(items, now_ms=data["now_ms"])
+                exp = cse["expected"]
+                self.assertEqual(len(report.rows), len(exp["rows"]))
+                for got, want in zip(report.rows, exp["rows"]):
+                    self.assertEqual(got.account_id, want["account_id"])
+                    self.assertEqual(got.channel, want["channel"])
+                    self.assertEqual(got.window_source, want["window_source"])
+                    self.assertAlmostEqual(got.window_days, want["window_days"], places=3)
+                    self.assertAlmostEqual(got.plan_cny, want["plan_cny"], places=3)
+                    self.assertAlmostEqual(got.daily_holding_cny, want["daily_holding_cny"], places=3)
+                    self.assertAlmostEqual(got.window_plan_cny, want["window_plan_cny"], places=3)
+                    self.assertAlmostEqual(got.on_demand_cny, want["on_demand_cny"], places=3)
+                    self.assertAlmostEqual(got.total_cny, want["total_cny"], places=3)
+                    self.assertEqual(got.event_count, want["event_count"])
+                    self.assertEqual(got.total_tokens, want["total_tokens"])
+                    self.assertAlmostEqual(got.cny_per_million or 0, want["cny_per_million"], places=3)
+                    self.assertAlmostEqual(got.cny_per_request or 0, want["cny_per_request"], places=3)
+                    for attr in ("first_party", "api", "grok_bot"):
+                        cat, exp_cat = getattr(got, attr), want[attr]
+                        self.assertEqual(cat.count, exp_cat["count"], attr)
+                        self.assertEqual(cat.tokens, exp_cat["tokens"], attr)
+                        self.assertAlmostEqual(cat.cny, exp_cat["cny"], places=3, msg=attr)
+                self.assertEqual(len(report.groups), len(exp["groups"]))
+                for got, want in zip(report.groups, exp["groups"]):
+                    self.assertEqual(got.channel, want["channel"])
+                    self.assertAlmostEqual(got.daily_holding_cny, want["daily_holding_cny"], places=3)
+                    self.assertAlmostEqual(got.total_cny, want["total_cny"], places=3)
+                    self.assertEqual(got.event_count, want["event_count"])
+                    self.assertEqual(got.total_tokens, want["total_tokens"])
+
     @staticmethod
     def _chart_buckets(buckets) -> list[dict]:
         return [

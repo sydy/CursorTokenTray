@@ -27,6 +27,9 @@ public sealed class Account
     public bool TokenDecryptFailed { get; set; }
     public string StoredToken { get; set; } = "";
     public double ActualCny { get; set; }
+    public string Channel { get; set; } = "";
+    public string BillingCycleStart { get; set; } = "";
+    public string BillingCycleEnd { get; set; } = "";
 
     public string DisplayLabel
     {
@@ -107,6 +110,20 @@ public sealed class AppConfig
         }
         else acc.ActualCny = clamped;
         SyncLegacyFields();
+        return true;
+    }
+
+    public bool SetChannel(string id, string channel)
+    {
+        var acc = Accounts.FirstOrDefault(a => a.Id == id);
+        if (acc is null) return false;
+        var sanitized = UsageEvents.SanitizeChannel(channel);
+        if (acc.Channel != sanitized)
+        {
+            acc.Channel = sanitized;
+            AccountSync.TouchAccount(acc);
+        }
+        else acc.Channel = sanitized;
         return true;
     }
 
@@ -207,7 +224,7 @@ public sealed class AppConfig
         return skip;
     }
 
-    public void ApplySnapshot(string accountId, string? membershipType = null, double? remaining = null, string? error = null, string? updatedAt = null)
+    public void ApplySnapshot(string accountId, string? membershipType = null, double? remaining = null, string? error = null, string? updatedAt = null, string? billingCycleStart = null, string? billingCycleEnd = null)
     {
         var acc = Accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc is null) return;
@@ -216,6 +233,8 @@ public sealed class AppConfig
         if (error is not null) acc.LastError = error;
         else if (remaining is not null) acc.LastError = "";
         if (updatedAt is not null) acc.UpdatedAt = updatedAt;
+        if (billingCycleStart is not null) acc.BillingCycleStart = billingCycleStart.Trim();
+        if (billingCycleEnd is not null) acc.BillingCycleEnd = billingCycleEnd.Trim();
     }
 
     public void SyncLegacyFields()
@@ -593,6 +612,13 @@ public static class ConfigStore
         acc.LowQuotaNotified = Bool(raw, "low_quota_notified", false);
         if (raw.TryGetProperty("actual_cny", out _) || raw.TryGetProperty("actualCny", out _))
             acc.ActualCny = UsageEvents.ClampActualCny(DoubleVal(raw, "actual_cny", DoubleVal(raw, "actualCny", 0)));
+        acc.Channel = UsageEvents.SanitizeChannel(Str(raw, "channel"));
+        var cycleStart = Str(raw, "billing_cycle_start");
+        if (cycleStart.Length == 0) cycleStart = Str(raw, "billingCycleStart");
+        acc.BillingCycleStart = cycleStart.Trim();
+        var cycleEnd = Str(raw, "billing_cycle_end");
+        if (cycleEnd.Length == 0) cycleEnd = Str(raw, "billingCycleEnd");
+        acc.BillingCycleEnd = cycleEnd.Trim();
         return acc;
     }
 
@@ -648,6 +674,9 @@ public static class ConfigStore
             ["exhaustion_notified"] = a.ExhaustionNotified,
             ["low_quota_notified"] = a.LowQuotaNotified,
             ["actual_cny"] = a.ActualCny,
+            ["channel"] = a.Channel,
+            ["billing_cycle_start"] = a.BillingCycleStart,
+            ["billing_cycle_end"] = a.BillingCycleEnd,
         }).ToList(),
         active_account_id = cfg.ActiveAccountId,
         refresh_interval_minutes = cfg.RefreshIntervalMinutes,

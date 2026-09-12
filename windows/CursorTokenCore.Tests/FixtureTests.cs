@@ -310,6 +310,92 @@ public class FixtureTests
     }
 
     [Fact]
+    public void AccountCompareCases()
+    {
+        var data = Load("account_compare_cases.json");
+        Assert.Equal(UsageEvents.HoldingDays, data.GetProperty("holding_days").GetDouble());
+        var nowMs = data.GetProperty("now_ms").GetInt64();
+        foreach (var row in data.GetProperty("channel").EnumerateArray())
+        {
+            Assert.Equal(row.GetProperty("output").GetString(), UsageEvents.SanitizeChannel(row.GetProperty("input").GetString()));
+            Assert.Equal(row.GetProperty("label").GetString(), UsageEvents.ChannelLabel(row.GetProperty("input").GetString()));
+        }
+        foreach (var cse in data.GetProperty("cases").EnumerateArray())
+        {
+            var items = cse.GetProperty("items").EnumerateArray().Select(raw =>
+            {
+                var events = raw.GetProperty("events").EnumerateArray()
+                    .Select(row => UsageEvents.FromDict(JsonBag.Parse(row.GetRawText()))!)
+                    .ToList();
+                var spend = raw.GetProperty("spend");
+                return new AccountCompareInput
+                {
+                    AccountId = raw.GetProperty("account_id").GetString() ?? "",
+                    Label = NullStr(raw, "label") ?? "",
+                    Channel = NullStr(raw, "channel") ?? "",
+                    MembershipType = NullStr(raw, "membership_type") ?? "",
+                    AccountKind = NullStr(raw, "account_kind") ?? "long_term",
+                    TempStartAt = NullStr(raw, "temp_start_at") ?? "",
+                    TempValidDays = raw.TryGetProperty("temp_valid_days", out var days) ? days.GetInt32() : 0,
+                    TempValidHours = raw.TryGetProperty("temp_valid_hours", out var hours) ? hours.GetInt32() : 0,
+                    BillingCycleStart = NullStr(raw, "billing_cycle_start") ?? "",
+                    BillingCycleEnd = NullStr(raw, "billing_cycle_end") ?? "",
+                    Events = events,
+                    Spend = new CnySpendSettings(
+                        spend.GetProperty("monthly_plan_usd").GetDouble(),
+                        spend.GetProperty("usd_cny_rate").GetDouble(),
+                        NullStr(spend, "membership_type") ?? "",
+                        spend.TryGetProperty("actual_cny", out var actual) ? actual.GetDouble() : 0),
+                };
+            }).ToList();
+            var report = UsageEvents.BuildAccountCompareReport(items, nowMs);
+            var exp = cse.GetProperty("expected");
+            var wantRows = exp.GetProperty("rows").EnumerateArray().ToList();
+            Assert.Equal(wantRows.Count, report.Rows.Count);
+            for (var i = 0; i < wantRows.Count; i++)
+            {
+                var got = report.Rows[i];
+                var want = wantRows[i];
+                Assert.Equal(want.GetProperty("account_id").GetString(), got.AccountId);
+                Assert.Equal(want.GetProperty("channel").GetString(), got.Channel);
+                Assert.Equal(want.GetProperty("window_source").GetString(), got.WindowSource);
+                Assert.Equal(want.GetProperty("window_days").GetDouble(), got.WindowDays, 3);
+                Assert.Equal(want.GetProperty("plan_cny").GetDouble(), got.PlanCny, 3);
+                Assert.Equal(want.GetProperty("daily_holding_cny").GetDouble(), got.DailyHoldingCny, 3);
+                Assert.Equal(want.GetProperty("window_plan_cny").GetDouble(), got.WindowPlanCny, 3);
+                Assert.Equal(want.GetProperty("on_demand_cny").GetDouble(), got.OnDemandCny, 3);
+                Assert.Equal(want.GetProperty("total_cny").GetDouble(), got.TotalCny, 3);
+                Assert.Equal(want.GetProperty("event_count").GetInt32(), got.EventCount);
+                Assert.Equal(want.GetProperty("total_tokens").GetInt64(), got.TotalTokens);
+                Assert.Equal(want.GetProperty("cny_per_million").GetDouble(), got.CnyPerMillion ?? 0, 3);
+                Assert.Equal(want.GetProperty("cny_per_request").GetDouble(), got.CnyPerRequest ?? 0, 3);
+                AssertCat(want.GetProperty("first_party"), got.FirstParty);
+                AssertCat(want.GetProperty("api"), got.Api);
+                AssertCat(want.GetProperty("grok_bot"), got.GrokBot);
+            }
+            var wantGroups = exp.GetProperty("groups").EnumerateArray().ToList();
+            Assert.Equal(wantGroups.Count, report.Groups.Count);
+            for (var i = 0; i < wantGroups.Count; i++)
+            {
+                var got = report.Groups[i];
+                var want = wantGroups[i];
+                Assert.Equal(want.GetProperty("channel").GetString(), got.Channel);
+                Assert.Equal(want.GetProperty("daily_holding_cny").GetDouble(), got.DailyHoldingCny, 3);
+                Assert.Equal(want.GetProperty("total_cny").GetDouble(), got.TotalCny, 3);
+                Assert.Equal(want.GetProperty("event_count").GetInt32(), got.EventCount);
+                Assert.Equal(want.GetProperty("total_tokens").GetInt64(), got.TotalTokens);
+            }
+        }
+    }
+
+    static void AssertCat(JsonElement want, AccountCompareCategory got)
+    {
+        Assert.Equal(want.GetProperty("count").GetInt32(), got.Count);
+        Assert.Equal(want.GetProperty("tokens").GetInt64(), got.Tokens);
+        Assert.Equal(want.GetProperty("cny").GetDouble(), got.Cny, 3);
+    }
+
+    [Fact]
     public void UsageChartCases()
     {
         var root = Load("usage_chart_cases.json");
@@ -434,11 +520,13 @@ public class FixtureTests
             var cfg = new AppConfig();
             cfg.UpsertAccount(token, label: "工作", activate: true);
             Assert.True(cfg.SetActualCny("user_01SAVE", 79));
+            Assert.True(cfg.SetChannel("user_01SAVE", "自费"));
             ConfigStore.Save(cfg, dir);
             var loaded = ConfigStore.Load(dir);
             Assert.Single(loaded.Accounts);
             Assert.Equal("工作", loaded.Accounts[0].Label);
             Assert.Equal(79, loaded.Accounts[0].ActualCny, 3);
+            Assert.Equal("self_pay", loaded.Accounts[0].Channel);
             Assert.Equal(79, loaded.ActualCny, 3);
             Assert.Equal("user_01SAVE", loaded.ActiveAccountId);
             Assert.Equal(79, loaded.SpendSettings().ActualCny, 3);

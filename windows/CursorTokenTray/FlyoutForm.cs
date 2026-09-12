@@ -7,7 +7,7 @@ namespace CursorTokenTray;
 
 sealed class FlyoutForm : Form
 {
-    readonly Action _dismissBalloon, _refresh, _web, _settings, _copy, _report;
+    readonly Action _dismissBalloon, _refresh, _web, _settings, _copy, _report, _compare;
     readonly System.Windows.Forms.Timer _activateTimer = new() { Interval = 220 };
     readonly System.Windows.Forms.Timer _holdTimer = new() { Interval = 180 };
     readonly System.Windows.Forms.Timer _hideTimer = new() { Interval = 160 };
@@ -23,7 +23,7 @@ sealed class FlyoutForm : Form
 
     protected override bool ShowWithoutActivation => true;
 
-    public FlyoutForm(Action dismissBalloon, Action refresh, Action web, Action settings, Action copy, Action report)
+    public FlyoutForm(Action dismissBalloon, Action refresh, Action web, Action settings, Action copy, Action report, Action compare)
     {
         _dismissBalloon = dismissBalloon;
         _refresh = refresh;
@@ -31,6 +31,7 @@ sealed class FlyoutForm : Form
         _settings = settings;
         _copy = copy;
         _report = report;
+        _compare = compare;
         AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -94,6 +95,7 @@ sealed class FlyoutForm : Form
                 case "copy": _copy(); break;
                 case "refresh": _refresh(); break;
                 case "report": _report(); break;
+                case "compare": _compare(); break;
                 case "settings": _settings(); break;
                 case "web": _web(); break;
             }
@@ -430,6 +432,7 @@ sealed class FlyoutForm : Form
             ("copy", "\uE8C8", "复制"),
             ("refresh", "\uE72C", "刷新"),
             ("report", "\uE9D9", "报表"),
+            ("compare", "\uE9F9", "对比"),
             ("settings", "\uE713", "设置"),
         };
         using var font = UiFont(8f);

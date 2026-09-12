@@ -1,0 +1,137 @@
+{
+  "now_ms": 1789516800000,
+  "holding_days": 30,
+  "channel": [
+    { "input": "自费", "output": "self_pay", "label": "自费" },
+    { "input": "third_party", "output": "third_party", "label": "第三方" },
+    { "input": "", "output": "", "label": "未标" }
+  ],
+  "cases": [
+    {
+      "name": "cycle_self_pay_and_temp_third_party",
+      "items": [
+        {
+          "account_id": "user_01A",
+          "label": "年费Pro",
+          "channel": "self_pay",
+          "membership_type": "pro",
+          "account_kind": "long_term",
+          "billing_cycle_start": "2026-09-01T00:00:00.000Z",
+          "billing_cycle_end": "2026-10-01T00:00:00.000Z",
+          "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "pro", "actual_cny": 150 },
+          "events": [
+            {
+              "id": "fp",
+              "timestamp": "2026-09-08T12:00:00.000Z",
+              "model": "composer-1.5",
+              "kind": "included",
+              "tokens": 1000000,
+              "chargedCents": 50
+            },
+            {
+              "id": "gb",
+              "timestamp": "2026-09-08T13:00:00.000Z",
+              "model": "grok-bot-1",
+              "kind": "included",
+              "tokens": 1000000,
+              "chargedCents": 50
+            },
+            {
+              "id": "api",
+              "timestamp": "2026-09-08T14:00:00.000Z",
+              "model": "gpt-5",
+              "kind": "on_demand",
+              "tokens": 100000,
+              "chargedCents": 100
+            },
+            {
+              "id": "old",
+              "timestamp": "2026-08-20T12:00:00.000Z",
+              "model": "composer-1.5",
+              "kind": "included",
+              "tokens": 999999,
+              "chargedCents": 80
+            }
+          ]
+        },
+        {
+          "account_id": "user_01B",
+          "label": "企业周卡",
+          "channel": "third_party",
+          "membership_type": "enterprise",
+          "account_kind": "temporary",
+          "temp_start_at": "2026-09-10T00:00:00.000Z",
+          "temp_valid_days": 7,
+          "temp_valid_hours": 0,
+          "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "enterprise", "actual_cny": 300 },
+          "events": [
+            {
+              "id": "ent",
+              "timestamp": "2026-09-12T00:00:00.000Z",
+              "model": "composer-1.5",
+              "kind": "included",
+              "tokens": 1000000,
+              "chargedCents": 100
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "rows": [
+          {
+            "account_id": "user_01A",
+            "channel": "self_pay",
+            "window_source": "cycle",
+            "window_days": 15,
+            "plan_cny": 150,
+            "daily_holding_cny": 5,
+            "window_plan_cny": 75,
+            "on_demand_cny": 7.5,
+            "total_cny": 82.5,
+            "event_count": 3,
+            "total_tokens": 2100000,
+            "cny_per_million": 39.285714,
+            "cny_per_request": 27.5,
+            "first_party": { "count": 1, "tokens": 1000000, "cny": 37.5 },
+            "api": { "count": 1, "tokens": 100000, "cny": 7.5 },
+            "grok_bot": { "count": 1, "tokens": 1000000, "cny": 37.5 }
+          },
+          {
+            "account_id": "user_01B",
+            "channel": "third_party",
+            "window_source": "validity",
+            "window_days": 6,
+            "plan_cny": 300,
+            "daily_holding_cny": 10,
+            "window_plan_cny": 60,
+            "on_demand_cny": 0,
+            "total_cny": 60,
+            "event_count": 1,
+            "total_tokens": 1000000,
+            "cny_per_million": 60,
+            "cny_per_request": 60,
+            "first_party": { "count": 1, "tokens": 1000000, "cny": 60 },
+            "api": { "count": 0, "tokens": 0, "cny": 0 },
+            "grok_bot": { "count": 0, "tokens": 0, "cny": 0 }
+          }
+        ],
+        "groups": [
+          {
+            "channel": "self_pay",
+            "daily_holding_cny": 5,
+            "total_cny": 82.5,
+            "event_count": 3,
+            "total_tokens": 2100000
+          },
+          {
+            "channel": "third_party",
+            "daily_holding_cny": 10,
+            "total_cny": 60,
+            "event_count": 1,
+            "total_tokens": 1000000
+          }
+        ]
+      }
+    }
+  ]
+}

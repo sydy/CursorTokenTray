@@ -153,6 +153,12 @@ def _snapshot_actual_cny(account: dict[str, Any]) -> float:
     return clamp_actual_cny(account.get("actual_cny", account.get("actualCny")))
 
 
+def _snapshot_channel(account: dict[str, Any]) -> str:
+    from usage_report import sanitize_account_channel
+
+    return sanitize_account_channel(account.get("channel"))
+
+
 def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(account.get("id") or "").strip(),
@@ -164,6 +170,7 @@ def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
         "temp_valid_days": clamp_temp_valid_days(account.get("temp_valid_days")),
         "temp_valid_hours": clamp_temp_valid_hours(account.get("temp_valid_hours")),
         "actual_cny": _snapshot_actual_cny(account),
+        "channel": _snapshot_channel(account),
         "sync_updated_at": str(account.get("sync_updated_at") or "").strip(),
     }
 
@@ -197,6 +204,7 @@ def snapshot_identity(snap: dict[str, Any]) -> tuple:
             int(a.get("temp_valid_days") or 0),
             int(a.get("temp_valid_hours") or 0),
             _snapshot_actual_cny(a),
+            _snapshot_channel(a),
             a["sync_updated_at"],
         )
         for a in sorted(snap.get("accounts") or [], key=lambda x: x.get("id") or "")
@@ -269,6 +277,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
             a.get("temp_valid_days"),
             a.get("temp_valid_hours"),
             a.get("actual_cny"),
+            a.get("channel"),
             a.get("sync_updated_at"),
         )
         for a in list_accounts(cfg)
@@ -317,6 +326,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
             a.get("temp_valid_days"),
             a.get("temp_valid_hours"),
             a.get("actual_cny"),
+            a.get("channel"),
             a.get("sync_updated_at"),
         )
         for a in list_accounts(cfg)
@@ -332,6 +342,7 @@ def _apply_identity(account: dict[str, Any], ident: dict[str, Any]) -> None:
     account["temp_valid_days"] = clamp_temp_valid_days(ident.get("temp_valid_days"))
     account["temp_valid_hours"] = clamp_temp_valid_hours(ident.get("temp_valid_hours"))
     account["actual_cny"] = _snapshot_actual_cny(ident)
+    account["channel"] = _snapshot_channel(ident)
     account["sync_updated_at"] = ident["sync_updated_at"]
 
 

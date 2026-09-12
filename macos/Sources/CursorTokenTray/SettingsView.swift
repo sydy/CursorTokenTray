@@ -10,6 +10,7 @@ struct SettingsRootView: View {
     @State private var intervalText = "10"
     @State private var planUsdText = "0"
     @State private var actualCnyText = "0"
+    @State private var channel = ""
     @State private var cnyRateText = "7.5"
     @State private var thresholdText = "50,20,5"
     @State private var syncPath = ""
@@ -38,6 +39,7 @@ struct SettingsRootView: View {
                 : UsageEvents.defaultMonthlyPlanUsd(membership)
             planUsdText = formatDecimal(plan)
             actualCnyText = formatDecimal(store.config.activeAccount?.actualCny ?? 0)
+            channel = store.config.activeAccount?.channel ?? ""
             cnyRateText = formatDecimal(store.config.usdCnyRate)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
             syncPath = store.config.syncPath
@@ -54,6 +56,7 @@ struct SettingsRootView: View {
         }
         .onChange(of: store.config.activeAccountId) { _ in
             actualCnyText = formatDecimal(store.config.activeAccount?.actualCny ?? 0)
+            channel = store.config.activeAccount?.channel ?? ""
         }
     }
 
@@ -93,12 +96,18 @@ struct SettingsRootView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            Picker("渠道", selection: $channel) {
+                Text("未标").tag("")
+                Text("自费").tag(UsageEvents.channelSelfPay)
+                Text("第三方").tag(UsageEvents.channelThirdParty)
+            }
+            .disabled(store.config.activeAccount == nil)
             HStack {
                 Text("实际成本（人民币）")
                 TextField("0", text: $actualCnyText).frame(width: 72)
             }
             .disabled(store.config.activeAccount == nil)
-            Text("仅当前账号。企业 / 团队额度不是真实支出；填了则按套餐内费用分摊，优先于月费。按需仍按费用×汇率。")
+            Text("仅当前账号，填折合月费。短期号请买价÷天数×30。企业 / 团队额度不是真实支出；填了则按套餐内费用分摊，优先于月费。按需仍按费用×汇率。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text("添加账号（粘贴 Token，请勿分享；已保存的不会显示）").font(.headline).padding(.top, 8)
@@ -224,9 +233,10 @@ struct SettingsRootView: View {
         Binding(
             get: { store.config.activeAccountId },
             set: { newId in
-                persistActualCny()
+                persistAccountFields()
                 store.switchAccount(newId)
                 actualCnyText = formatDecimal(store.config.activeAccount?.actualCny ?? 0)
+                channel = store.config.activeAccount?.channel ?? ""
             }
         )
     }
@@ -398,6 +408,7 @@ struct SettingsRootView: View {
         }
         if let actual = parseDecimal(actualCnyText), let acc = cfg.activeAccount {
             _ = cfg.setActualCny(acc.id, actual)
+            _ = cfg.setChannel(acc.id, channel)
         }
         if let rate = parseDecimal(cnyRateText) {
             cfg.usdCnyRate = UsageEvents.clampUsdCnyRate(rate)
@@ -415,10 +426,13 @@ struct SettingsRootView: View {
         if close { SettingsWindowController.shared.close() }
     }
 
-    func persistActualCny() {
-        guard let acc = store.config.activeAccount, let actual = parseDecimal(actualCnyText) else { return }
+    func persistAccountFields() {
+        guard let acc = store.config.activeAccount else { return }
         var cfg = store.config
-        _ = cfg.setActualCny(acc.id, actual)
+        if let actual = parseDecimal(actualCnyText) {
+            _ = cfg.setActualCny(acc.id, actual)
+        }
+        _ = cfg.setChannel(acc.id, channel)
         store.applyConfig(cfg, refresh: false)
     }
 

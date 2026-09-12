@@ -77,6 +77,17 @@ final class AppStore: ObservableObject {
         ReportWindowController.shared.show(app: self)
     }
 
+    func openCompare() {
+        FlyoutWindowController.shared.close()
+        CompareWindowController.shared.show(app: self)
+    }
+
+    func persistCompareCycle(accountId: String, membership: String?, start: String?, end: String?) {
+        config = ConfigStore.update(from: settingsDirectory) { live in
+            live.applySnapshot(to: accountId, membershipType: membership, billingCycleStart: start, billingCycleEnd: end)
+        }
+    }
+
     func applyConfig(_ cfg: AppConfig, refresh: Bool) {
         let prevToken = config.sessionToken
         let prevActive = config.activeAccountId
@@ -248,7 +259,15 @@ final class AppStore: ObservableObject {
                 if let snap = o.snap {
                     var adjusted = snap
                     AccountValidity.applyEndOverride(&adjusted, account: live.accounts[idx])
-                    live.applySnapshot(to: o.id, membershipType: adjusted.membershipType, remaining: adjusted.remainingPercent, error: "", updatedAt: o.stamp)
+                    live.applySnapshot(
+                        to: o.id,
+                        membershipType: adjusted.membershipType,
+                        remaining: adjusted.remainingPercent,
+                        error: "",
+                        updatedAt: o.stamp,
+                        billingCycleStart: adjusted.billingCycleStart,
+                        billingCycleEnd: adjusted.billingCycleEnd
+                    )
                     live.accounts[idx].authErrorNotified = false
                     var account = live.accounts[idx]
                     let found = AlertLogic.evaluate(config: live, account: &account, snapshot: adjusted)

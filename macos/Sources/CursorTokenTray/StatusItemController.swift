@@ -147,6 +147,7 @@ final class StatusItemController: NSObject {
         web.target = self
         menu.addItem(web)
         menu.addItem(withTitle: "用量报表…", action: #selector(openReport), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "账号对比…", action: #selector(openCompare), keyEquivalent: "").target = self
         let switcher = NSMenuItem(title: "切换账号", action: nil, keyEquivalent: "")
         let sub = NSMenu()
         let accounts = store.config.accounts
@@ -183,6 +184,7 @@ final class StatusItemController: NSObject {
     @objc private func refresh() { store.requestRefresh() }
     @objc private func openWeb() { store.openDashboard() }
     @objc private func openReport() { store.openReport() }
+    @objc private func openCompare() { store.openCompare() }
     @objc private func importToken() { store.openSettings(focusToken: true, startImport: true) }
     @objc private func loginCursor() {
         Task { @MainActor in
@@ -211,6 +213,7 @@ final class StatusItemController: NSObject {
         FlyoutWindowController.shared.close()
         SettingsWindowController.shared.close()
         ReportWindowController.shared.close()
+        CompareWindowController.shared.close()
         store.stop()
         NSApp.terminate(nil)
     }

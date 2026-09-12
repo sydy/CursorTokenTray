@@ -78,6 +78,84 @@ public readonly record struct CnySpendSettings(double MonthlyPlanUsd, double Usd
     public static CnySpendSettings Default => new(0, UsageEvents.DefaultUsdCnyRate, "");
 }
 
+public sealed class AccountCompareCategory
+{
+    public string Category { get; init; } = "";
+    public int Count { get; init; }
+    public long Tokens { get; init; }
+    public double Cny { get; init; }
+    public double? CnyPerMillion => UsageEvents.UnitCny(Cny, Tokens > 0 ? Tokens / 1_000_000.0 : 0);
+    public double? CnyPerRequest => UsageEvents.UnitCny(Cny, Count);
+}
+
+public sealed class AccountCompareInput
+{
+    public string AccountId { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string Channel { get; set; } = "";
+    public string MembershipType { get; set; } = "";
+    public string AccountKind { get; set; } = "long_term";
+    public string TempStartAt { get; set; } = "";
+    public int TempValidDays { get; set; }
+    public int TempValidHours { get; set; }
+    public string BillingCycleStart { get; set; } = "";
+    public string BillingCycleEnd { get; set; } = "";
+    public double? LastRemaining { get; set; }
+    public List<UsageEvent> Events { get; set; } = [];
+    public CnySpendSettings? Spend { get; set; }
+}
+
+public sealed class AccountCompareRow
+{
+    public string AccountId { get; init; } = "";
+    public string Label { get; init; } = "";
+    public string Channel { get; init; } = "";
+    public string MembershipType { get; init; } = "";
+    public string WindowSource { get; init; } = "";
+    public long WindowStartMs { get; init; }
+    public long WindowEndMs { get; init; }
+    public double WindowDays { get; init; }
+    public double PlanCny { get; init; }
+    public double DailyHoldingCny { get; init; }
+    public double WindowPlanCny { get; init; }
+    public double OnDemandCny { get; init; }
+    public double TotalCny { get; init; }
+    public int EventCount { get; init; }
+    public long TotalTokens { get; init; }
+    public AccountCompareCategory FirstParty { get; init; } = new() { Category = UsageEvents.CategoryFirstParty };
+    public AccountCompareCategory Api { get; init; } = new() { Category = UsageEvents.CategoryApi };
+    public AccountCompareCategory GrokBot { get; init; } = new() { Category = UsageEvents.CategoryGrokBot };
+    public double? LastRemaining { get; init; }
+    public bool UsesActualCny { get; init; }
+    public string ChannelLabel => UsageEvents.ChannelLabel(Channel);
+    public string WindowLabel => UsageEvents.WindowLabel(WindowSource);
+    public double? CnyPerMillion => UsageEvents.UnitCny(TotalCny, TotalTokens > 0 ? TotalTokens / 1_000_000.0 : 0);
+    public double? CnyPerRequest => UsageEvents.UnitCny(TotalCny, EventCount);
+}
+
+public sealed class AccountCompareGroup
+{
+    public string Channel { get; init; } = "";
+    public List<AccountCompareRow> Rows { get; init; } = [];
+    public double DailyHoldingCny { get; init; }
+    public double TotalCny { get; init; }
+    public int EventCount { get; init; }
+    public long TotalTokens { get; init; }
+    public AccountCompareCategory FirstParty { get; init; } = new() { Category = UsageEvents.CategoryFirstParty };
+    public AccountCompareCategory Api { get; init; } = new() { Category = UsageEvents.CategoryApi };
+    public AccountCompareCategory GrokBot { get; init; } = new() { Category = UsageEvents.CategoryGrokBot };
+    public string ChannelLabel => UsageEvents.ChannelLabel(Channel);
+    public double? CnyPerMillion => UsageEvents.UnitCny(TotalCny, TotalTokens > 0 ? TotalTokens / 1_000_000.0 : 0);
+    public double? CnyPerRequest => UsageEvents.UnitCny(TotalCny, EventCount);
+}
+
+public sealed class AccountCompareReport
+{
+    public List<AccountCompareRow> Rows { get; init; } = [];
+    public List<AccountCompareGroup> Groups { get; init; } = [];
+    public double HoldingDays { get; init; } = UsageEvents.HoldingDays;
+}
+
 public sealed record UsageEventsSyncResult(List<UsageEvent> Events, int Fetched, int TotalAvailable, bool Truncated);
 
 public static class UsageEvents
@@ -89,6 +167,13 @@ public static class UsageEvents
     public const string CategoryFirstParty = "first_party";
     public const string CategoryApi = "api";
     public const string CategoryGrokBot = "grok_bot";
+    public const string ChannelSelfPay = "self_pay";
+    public const string ChannelThirdParty = "third_party";
+    public const double HoldingDays = 30;
+    public const string WindowCycle = "cycle";
+    public const string WindowValidity = "validity";
+    public const string WindowFallback = "fallback";
+    static readonly string[] ChannelOrder = [ChannelSelfPay, ChannelThirdParty, ""];
     public const string TzLabel = "北京时间";
     public const string CsvHeader = "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent";
     public const double DefaultUsdCnyRate = 7.50;
@@ -199,6 +284,250 @@ public static class UsageEvents
     {
         var key = (kind ?? "").Trim().ToLowerInvariant();
         return key is not KindOnDemand and not KindFree;
+    }
+
+    public static string SanitizeChannel(string? raw)
+    {
+        var key = (raw ?? "").Trim().ToLowerInvariant().Replace("-", "_").Replace(" ", "");
+        if (key is "self_pay" or "self" or "selfpay" or "自费") return ChannelSelfPay;
+        if (key is "third_party" or "third" or "thirdparty" or "第三方") return ChannelThirdParty;
+        return "";
+    }
+
+    public static string ChannelLabel(string? channel) => SanitizeChannel(channel) switch
+    {
+        ChannelSelfPay => "自费",
+        ChannelThirdParty => "第三方",
+        _ => "未标",
+    };
+
+    public static string WindowLabel(string? source) => (source ?? "").Trim().ToLowerInvariant() switch
+    {
+        WindowCycle => "本周期",
+        WindowValidity => "有效期",
+        _ => "近30天",
+    };
+
+    public static double? UnitCny(double amount, double denom)
+    {
+        if (denom <= 1e-12) return null;
+        return Math.Max(0, amount) / denom;
+    }
+
+    public static string FormatCnyUnit(double? amount, string suffix) =>
+        amount is null ? "—" : FormatCny(amount) + suffix;
+
+    public static (long startMs, long endMs, string source) ResolveCompareWindow(
+        string accountKind = "",
+        string tempStartAt = "",
+        int tempValidDays = 0,
+        int tempValidHours = 0,
+        string billingCycleStart = "",
+        string billingCycleEnd = "",
+        long? nowMs = null)
+    {
+        var now = nowMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var kind = (accountKind ?? "").Trim().ToLowerInvariant().Replace("-", "_");
+        if (kind is "temporary" or "temp" or "short")
+        {
+            var start = UsageParser.IsoToMs(tempStartAt);
+            if (start is not null)
+            {
+                var end = TempEndMs(tempStartAt, tempValidDays, tempValidHours) ?? now;
+                return (start.Value, Math.Min(end, now), WindowValidity);
+            }
+        }
+        var cycleStart = UsageParser.IsoToMs(billingCycleStart);
+        if (cycleStart is not null)
+        {
+            var end = UsageParser.IsoToMs(billingCycleEnd) ?? now;
+            return (cycleStart.Value, Math.Min(end, now), WindowCycle);
+        }
+        return (now - 30 * MsDay, now, WindowFallback);
+    }
+
+    static long? TempEndMs(string startAt, int days, int hours)
+    {
+        var iso = AccountValidity.ComputeEndIso(startAt, days, hours);
+        return UsageParser.IsoToMs(iso);
+    }
+
+    public static double CompareWindowDays(long startMs, long endMs)
+    {
+        var span = Math.Max(0, endMs - startMs);
+        return Math.Max(span / (double)MsDay, 1.0 / 24.0);
+    }
+
+    public static AccountCompareInput CompareInputFromAccount(Account account, IEnumerable<UsageEvent> events, double monthlyPlanUsd, double usdCnyRate) =>
+        new()
+        {
+            AccountId = account.Id,
+            Label = account.Label,
+            Channel = account.Channel,
+            MembershipType = account.MembershipType,
+            AccountKind = account.AccountKind,
+            TempStartAt = account.TempStartAt,
+            TempValidDays = account.TempValidDays,
+            TempValidHours = account.TempValidHours,
+            BillingCycleStart = account.BillingCycleStart,
+            BillingCycleEnd = account.BillingCycleEnd,
+            LastRemaining = account.LastRemaining,
+            Events = events.ToList(),
+            Spend = new CnySpendSettings(monthlyPlanUsd, usdCnyRate, account.MembershipType, account.ActualCny),
+        };
+
+    public static AccountCompareRow BuildAccountCompareRow(AccountCompareInput item, long? nowMs = null)
+    {
+        var (startMs, endMs, source) = ResolveCompareWindow(
+            item.AccountKind, item.TempStartAt, item.TempValidDays, item.TempValidHours,
+            item.BillingCycleStart, item.BillingCycleEnd, nowMs);
+        var windowDays = CompareWindowDays(startMs, endMs);
+        var windowEvents = item.Events.Where(ev => ev.TimestampMs >= startMs && ev.TimestampMs <= endMs).ToList();
+        var spend = item.Spend ?? CnySpendSettings.Default;
+        var resolved = ResolvePlanCny(spend);
+        var dailyHolding = resolved.planCny > 0 ? resolved.planCny / HoldingDays : 0;
+        var windowPlan = dailyHolding * windowDays;
+        var included = windowEvents.Where(ev => IsPlanCovered(ev.Kind)).ToList();
+        var includedCostSum = included.Sum(CostCents);
+        var includedCount = included.Count;
+        var cats = new Dictionary<string, (int count, long tokens, double cny)>(StringComparer.Ordinal)
+        {
+            [CategoryFirstParty] = (0, 0, 0),
+            [CategoryApi] = (0, 0, 0),
+            [CategoryGrokBot] = (0, 0, 0),
+        };
+        var onDemandCny = 0.0;
+        var totalCny = 0.0;
+        var totalTokens = 0L;
+        foreach (var ev in windowEvents)
+        {
+            var amount = AllocateEventCny(ev, includedCostSum, includedCount, windowPlan, resolved.rate);
+            totalCny += amount;
+            totalTokens += ev.Tokens;
+            if (ev.Kind == KindOnDemand) onDemandCny += amount;
+            var bucket = ClassifyCategory(ev.Model);
+            var row = cats.GetValueOrDefault(bucket);
+            cats[bucket] = (row.count + 1, row.tokens + ev.Tokens, row.cny + amount);
+        }
+        AccountCompareCategory Cat(string name)
+        {
+            var row = cats.GetValueOrDefault(name);
+            return new AccountCompareCategory { Category = name, Count = row.count, Tokens = row.tokens, Cny = row.cny };
+        }
+        return new AccountCompareRow
+        {
+            AccountId = item.AccountId,
+            Label = string.IsNullOrWhiteSpace(item.Label) ? item.AccountId : item.Label,
+            Channel = SanitizeChannel(item.Channel),
+            MembershipType = item.MembershipType,
+            WindowSource = source,
+            WindowStartMs = startMs,
+            WindowEndMs = endMs,
+            WindowDays = windowDays,
+            PlanCny = resolved.planCny,
+            DailyHoldingCny = dailyHolding,
+            WindowPlanCny = windowPlan,
+            OnDemandCny = onDemandCny,
+            TotalCny = totalCny,
+            EventCount = windowEvents.Count,
+            TotalTokens = totalTokens,
+            FirstParty = Cat(CategoryFirstParty),
+            Api = Cat(CategoryApi),
+            GrokBot = Cat(CategoryGrokBot),
+            LastRemaining = item.LastRemaining,
+            UsesActualCny = resolved.usesActual,
+        };
+    }
+
+    public static AccountCompareReport BuildAccountCompareReport(IEnumerable<AccountCompareInput> items, long? nowMs = null)
+    {
+        var rows = items.Select(item => BuildAccountCompareRow(item, nowMs)).ToList();
+        var grouped = ChannelOrder.ToDictionary(k => k, _ => new List<AccountCompareRow>(), StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (!grouped.TryGetValue(row.Channel, out var bucket))
+            {
+                bucket = [];
+                grouped[row.Channel] = bucket;
+            }
+            bucket.Add(row);
+        }
+        var groups = new List<AccountCompareGroup>();
+        foreach (var channel in ChannelOrder)
+        {
+            if (!grouped.TryGetValue(channel, out var bucket) || bucket.Count == 0) continue;
+            groups.Add(SumCompareGroup(channel, bucket));
+        }
+        return new AccountCompareReport { Rows = rows, Groups = groups, HoldingDays = HoldingDays };
+    }
+
+    static AccountCompareGroup SumCompareGroup(string channel, List<AccountCompareRow> rows)
+    {
+        static AccountCompareCategory Add(string name, IEnumerable<AccountCompareCategory> parts) =>
+            new()
+            {
+                Category = name,
+                Count = parts.Sum(p => p.Count),
+                Tokens = parts.Sum(p => p.Tokens),
+                Cny = parts.Sum(p => p.Cny),
+            };
+        return new AccountCompareGroup
+        {
+            Channel = channel,
+            Rows = rows,
+            DailyHoldingCny = rows.Sum(r => r.DailyHoldingCny),
+            TotalCny = rows.Sum(r => r.TotalCny),
+            EventCount = rows.Sum(r => r.EventCount),
+            TotalTokens = rows.Sum(r => r.TotalTokens),
+            FirstParty = Add(CategoryFirstParty, rows.Select(r => r.FirstParty)),
+            Api = Add(CategoryApi, rows.Select(r => r.Api)),
+            GrokBot = Add(CategoryGrokBot, rows.Select(r => r.GrokBot)),
+        };
+    }
+
+    public static string AccountCompareToCsv(AccountCompareReport report)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("账号,渠道,套餐,窗口,窗口天数,日均持有,窗口实付,请求,Token,¥/百万Token,¥/次,First-party次数,First-party Token,First-party实付,First-party ¥/百万,First-party ¥/次,API次数,API Token,API实付,API ¥/百万,API ¥/次,Grok Bot次数,Grok Bot Token,Grok Bot实付,Grok Bot ¥/百万,Grok Bot ¥/次");
+        foreach (var row in report.Rows)
+            sb.AppendLine(CompareCsvCells(row.Label, row.ChannelLabel, row.MembershipType, row.WindowLabel, row.WindowDays, row.DailyHoldingCny, row.TotalCny, row.EventCount, row.TotalTokens, row.CnyPerMillion, row.CnyPerRequest, row.FirstParty, row.Api, row.GrokBot));
+        foreach (var group in report.Groups)
+            sb.AppendLine(CompareCsvCells(group.ChannelLabel + "合计", group.ChannelLabel, "", "", 0, group.DailyHoldingCny, group.TotalCny, group.EventCount, group.TotalTokens, group.CnyPerMillion, group.CnyPerRequest, group.FirstParty, group.Api, group.GrokBot));
+        return sb.ToString();
+    }
+
+    static string CompareCsvCells(
+        string name, string channel, string membership, string window, double days,
+        double dailyHolding, double totalCny, int eventCount, long totalTokens,
+        double? perMillion, double? perRequest,
+        AccountCompareCategory firstParty, AccountCompareCategory api, AccountCompareCategory grokBot)
+    {
+        static string[] CatCells(AccountCompareCategory cat) =>
+        [
+            cat.Count.ToString(CultureInfo.InvariantCulture),
+            cat.Tokens.ToString(CultureInfo.InvariantCulture),
+            cat.Cny.ToString("0.0000", CultureInfo.InvariantCulture),
+            cat.CnyPerMillion is { } m ? m.ToString("0.0000", CultureInfo.InvariantCulture) : "",
+            cat.CnyPerRequest is { } r ? r.ToString("0.0000", CultureInfo.InvariantCulture) : "",
+        ];
+        var cols = new List<string>
+        {
+            EscapeCsv(name),
+            EscapeCsv(channel),
+            EscapeCsv(membership),
+            EscapeCsv(window),
+            days > 0 ? days.ToString("0.00", CultureInfo.InvariantCulture) : "",
+            dailyHolding.ToString("0.0000", CultureInfo.InvariantCulture),
+            totalCny.ToString("0.0000", CultureInfo.InvariantCulture),
+            eventCount.ToString(CultureInfo.InvariantCulture),
+            totalTokens.ToString(CultureInfo.InvariantCulture),
+            perMillion is { } pm ? pm.ToString("0.0000", CultureInfo.InvariantCulture) : "",
+            perRequest is { } pr ? pr.ToString("0.0000", CultureInfo.InvariantCulture) : "",
+        };
+        cols.AddRange(CatCells(firstParty));
+        cols.AddRange(CatCells(api));
+        cols.AddRange(CatCells(grokBot));
+        return string.Join(",", cols);
     }
 
     public static string FormatCny(double? yuan)
@@ -594,7 +923,15 @@ public static class UsageEvents
 
     public static UsageEvent? FromDict(JsonBag raw)
     {
-        var ts = raw["timestamp_ms"].AsLong();
+        long? ts = raw["timestamp_ms"].AsLong() ?? raw["timestampMs"].AsLong();
+        if (ts is null)
+        {
+            var stamp = raw["timestamp"].AsString();
+            if (!string.IsNullOrEmpty(stamp) && stamp.Contains('T'))
+                ts = UsageParser.IsoToMs(stamp);
+            else
+                ts = raw["timestamp"].AsLong();
+        }
         if (ts is null) return null;
         return new UsageEvent
         {
@@ -609,8 +946,8 @@ public static class UsageEvents
             OutputTokens = Math.Max(0, raw["output_tokens"].AsInt() ?? 0),
             CacheWriteTokens = Math.Max(0, raw["cache_write_tokens"].AsInt() ?? 0),
             CacheReadTokens = Math.Max(0, raw["cache_read_tokens"].AsInt() ?? 0),
-            ChargedCents = raw["charged_cents"].AsDouble(),
-            TotalCents = raw["total_cents"].AsDouble(),
+            ChargedCents = raw["charged_cents"].AsDouble() ?? raw["chargedCents"].AsDouble(),
+            TotalCents = raw["total_cents"].AsDouble() ?? raw["totalCents"].AsDouble(),
             IsHeadless = raw["is_headless"].AsBool(),
             IsChargeable = raw["is_chargeable"].AsBool(),
         };

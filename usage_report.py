@@ -12,6 +12,8 @@ from cursor_api import (
     _as_dict,
     _as_float,
     _as_int,
+    _iso_to_ms,
+    _parse_iso,
     _sum_token_fields,
     format_usd_cents,
     is_first_party_model,
@@ -42,6 +44,24 @@ CATEGORY_LABELS = {
     CATEGORY_FIRST_PARTY: "First-party",
     CATEGORY_API: "API",
     CATEGORY_GROK_BOT: "Grok Bot",
+}
+
+CHANNEL_SELF_PAY = "self_pay"
+CHANNEL_THIRD_PARTY = "third_party"
+CHANNEL_LABELS = {
+    CHANNEL_SELF_PAY: "自费",
+    CHANNEL_THIRD_PARTY: "第三方",
+    "": "未标",
+}
+CHANNEL_ORDER = (CHANNEL_SELF_PAY, CHANNEL_THIRD_PARTY, "")
+HOLDING_DAYS = 30.0
+WINDOW_CYCLE = "cycle"
+WINDOW_VALIDITY = "validity"
+WINDOW_FALLBACK = "fallback"
+WINDOW_LABELS = {
+    WINDOW_CYCLE: "本周期",
+    WINDOW_VALIDITY: "有效期",
+    WINDOW_FALLBACK: "近30天",
 }
 
 DISPLAY_TZ = timezone(timedelta(hours=8))
@@ -169,6 +189,111 @@ class CnySpendSettings:
     actual_cny: float = 0.0
 
 
+@dataclass(frozen=True)
+class AccountCompareCategory:
+    category: str
+    count: int = 0
+    tokens: int = 0
+    cny: float = 0.0
+
+    @property
+    def cny_per_million(self) -> float | None:
+        return unit_cny(self.cny, self.tokens / 1_000_000.0 if self.tokens else 0.0)
+
+    @property
+    def cny_per_request(self) -> float | None:
+        return unit_cny(self.cny, float(self.count))
+
+
+@dataclass
+class AccountCompareInput:
+    account_id: str
+    label: str = ""
+    channel: str = ""
+    membership_type: str = ""
+    account_kind: str = "long_term"
+    temp_start_at: str = ""
+    temp_valid_days: int = 0
+    temp_valid_hours: int = 0
+    billing_cycle_start: str = ""
+    billing_cycle_end: str = ""
+    last_remaining: float | None = None
+    events: tuple[UsageEvent, ...] | list[UsageEvent] = ()
+    spend: CnySpendSettings | None = None
+
+
+@dataclass
+class AccountCompareRow:
+    account_id: str
+    label: str
+    channel: str
+    membership_type: str
+    window_source: str
+    window_start_ms: int
+    window_end_ms: int
+    window_days: float
+    plan_cny: float
+    daily_holding_cny: float
+    window_plan_cny: float
+    on_demand_cny: float
+    total_cny: float
+    event_count: int
+    total_tokens: int
+    first_party: AccountCompareCategory
+    api: AccountCompareCategory
+    grok_bot: AccountCompareCategory
+    last_remaining: float | None = None
+    uses_actual_cny: bool = False
+
+    @property
+    def channel_label(self) -> str:
+        return channel_label(self.channel)
+
+    @property
+    def window_label(self) -> str:
+        return WINDOW_LABELS.get(self.window_source, WINDOW_LABELS[WINDOW_FALLBACK])
+
+    @property
+    def cny_per_million(self) -> float | None:
+        return unit_cny(self.total_cny, self.total_tokens / 1_000_000.0 if self.total_tokens else 0.0)
+
+    @property
+    def cny_per_request(self) -> float | None:
+        return unit_cny(self.total_cny, float(self.event_count))
+
+
+@dataclass
+class AccountCompareGroup:
+    channel: str
+    rows: tuple[AccountCompareRow, ...]
+    daily_holding_cny: float
+    total_cny: float
+    event_count: int
+    total_tokens: int
+    first_party: AccountCompareCategory
+    api: AccountCompareCategory
+    grok_bot: AccountCompareCategory
+
+    @property
+    def channel_label(self) -> str:
+        return channel_label(self.channel)
+
+    @property
+    def cny_per_million(self) -> float | None:
+        return unit_cny(self.total_cny, self.total_tokens / 1_000_000.0 if self.total_tokens else 0.0)
+
+    @property
+    def cny_per_request(self) -> float | None:
+        return unit_cny(self.total_cny, float(self.event_count))
+
+
+@dataclass
+class AccountCompareReport:
+    rows: tuple[AccountCompareRow, ...]
+    groups: tuple[AccountCompareGroup, ...]
+    holding_days: float = HOLDING_DAYS
+
+
 def classify_usage_kind(
     kind: str | None,
     usage_based_costs: str | None = None,
@@ -207,6 +332,31 @@ def classify_usage_category(model: str | None) -> str:
 
 def category_label(category: str | None) -> str:
     return CATEGORY_LABELS.get((category or "").strip().lower(), CATEGORY_LABELS[CATEGORY_API])
+
+
+def sanitize_account_channel(raw: Any) -> str:
+    key = str(raw or "").strip().lower().replace("-", "_").replace(" ", "")
+    if key in {"self_pay", "self", "selfpay", "自费"}:
+        return CHANNEL_SELF_PAY
+    if key in {"third_party", "third", "thirdparty", "第三方"}:
+        return CHANNEL_THIRD_PARTY
+    return ""
+
+
+def channel_label(channel: str | None) -> str:
+    return CHANNEL_LABELS.get(sanitize_account_channel(channel), CHANNEL_LABELS[""])
+
+
+def unit_cny(amount: float, denom: float) -> float | None:
+    if denom <= 1e-12:
+        return None
+    return max(0.0, float(amount)) / denom
+
+
+def format_cny_unit(amount: float | None, suffix: str) -> str:
+    if amount is None:
+        return "—"
+    return f"{format_cny(amount)}{suffix}"
 
 
 def event_cost_cents(event: UsageEvent) -> float:
@@ -294,6 +444,272 @@ def format_cny(amount: float | None) -> str:
         return "—"
     n = max(0.0, float(amount))
     return f"¥{n:.2f}"
+
+
+def resolve_compare_window(
+    *,
+    account_kind: str = "",
+    temp_start_at: str = "",
+    temp_valid_days: int = 0,
+    temp_valid_hours: int = 0,
+    billing_cycle_start: str = "",
+    billing_cycle_end: str = "",
+    now_ms: int | None = None,
+) -> tuple[int, int, str]:
+    now = int(now_ms if now_ms is not None else datetime.now(timezone.utc).timestamp() * 1000)
+    kind = str(account_kind or "").strip().lower().replace("-", "_")
+    if kind in {"temporary", "temp", "short"}:
+        start = _iso_to_ms(temp_start_at)
+        end = _temp_end_ms(temp_start_at, temp_valid_days, temp_valid_hours)
+        if start is not None:
+            return start, min(end or now, now), WINDOW_VALIDITY
+    start = _iso_to_ms(billing_cycle_start)
+    if start is not None:
+        end = _iso_to_ms(billing_cycle_end) or now
+        return start, min(end, now), WINDOW_CYCLE
+    return now - 30 * _MS_DAY, now, WINDOW_FALLBACK
+
+
+def _temp_end_ms(start_at: str, days: int, hours: int) -> int | None:
+    start = _parse_iso(start_at)
+    if start is None:
+        return None
+    try:
+        d = max(0, min(999, int(days)))
+        h = max(0, min(23, int(hours)))
+    except (TypeError, ValueError):
+        return None
+    if d == 0 and h == 0:
+        return None
+    return int((start + timedelta(days=d, hours=h)).timestamp() * 1000)
+
+
+def compare_window_days(start_ms: int, end_ms: int) -> float:
+    span = max(0, int(end_ms) - int(start_ms))
+    days = span / float(_MS_DAY)
+    return max(days, 1.0 / 24.0)
+
+
+def empty_compare_category(category: str) -> AccountCompareCategory:
+    return AccountCompareCategory(category=category)
+
+
+def build_account_compare_row(item: AccountCompareInput, *, now_ms: int | None = None) -> AccountCompareRow:
+    start_ms, end_ms, source = resolve_compare_window(
+        account_kind=item.account_kind,
+        temp_start_at=item.temp_start_at,
+        temp_valid_days=item.temp_valid_days,
+        temp_valid_hours=item.temp_valid_hours,
+        billing_cycle_start=item.billing_cycle_start,
+        billing_cycle_end=item.billing_cycle_end,
+        now_ms=now_ms,
+    )
+    window_days = compare_window_days(start_ms, end_ms)
+    window_events = [
+        ev for ev in item.events if start_ms <= ev.timestamp_ms <= end_ms
+    ]
+    spend = item.spend or CnySpendSettings()
+    rate = clamp_usd_cny_rate(spend.usd_cny_rate)
+    actual = clamp_actual_cny(spend.actual_cny)
+    monthly = resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type)
+    uses_actual = actual > 0
+    plan_cny = actual if uses_actual else monthly * rate
+    daily_holding = plan_cny / HOLDING_DAYS if plan_cny > 0 else 0.0
+    window_plan = daily_holding * window_days
+    included = [ev for ev in window_events if is_plan_covered_kind(ev.kind)]
+    included_cost_sum = sum(event_cost_cents(ev) for ev in included)
+    included_count = len(included)
+    cats = {
+        CATEGORY_FIRST_PARTY: [0, 0, 0.0],
+        CATEGORY_API: [0, 0, 0.0],
+        CATEGORY_GROK_BOT: [0, 0, 0.0],
+    }
+    on_demand_cny = 0.0
+    total_cny = 0.0
+    total_tokens = 0
+    for ev in window_events:
+        amount = allocate_event_cny(ev, included_cost_sum, included_count, window_plan, rate)
+        total_cny += amount
+        total_tokens += ev.tokens
+        if ev.kind == KIND_ON_DEMAND:
+            on_demand_cny += amount
+        bucket = classify_usage_category(ev.model)
+        row = cats[bucket]
+        row[0] += 1
+        row[1] += ev.tokens
+        row[2] += amount
+    return AccountCompareRow(
+        account_id=item.account_id,
+        label=item.label or item.account_id,
+        channel=sanitize_account_channel(item.channel),
+        membership_type=item.membership_type,
+        window_source=source,
+        window_start_ms=start_ms,
+        window_end_ms=end_ms,
+        window_days=window_days,
+        plan_cny=plan_cny,
+        daily_holding_cny=daily_holding,
+        window_plan_cny=window_plan,
+        on_demand_cny=on_demand_cny,
+        total_cny=total_cny,
+        event_count=len(window_events),
+        total_tokens=total_tokens,
+        first_party=AccountCompareCategory(
+            CATEGORY_FIRST_PARTY, cats[CATEGORY_FIRST_PARTY][0], cats[CATEGORY_FIRST_PARTY][1], cats[CATEGORY_FIRST_PARTY][2]
+        ),
+        api=AccountCompareCategory(CATEGORY_API, cats[CATEGORY_API][0], cats[CATEGORY_API][1], cats[CATEGORY_API][2]),
+        grok_bot=AccountCompareCategory(
+            CATEGORY_GROK_BOT, cats[CATEGORY_GROK_BOT][0], cats[CATEGORY_GROK_BOT][1], cats[CATEGORY_GROK_BOT][2]
+        ),
+        last_remaining=item.last_remaining,
+        uses_actual_cny=uses_actual,
+    )
+
+
+def compare_input_from_account(
+    account: dict[str, Any],
+    events: list[UsageEvent] | tuple[UsageEvent, ...],
+    *,
+    monthly_plan_usd: float = 0.0,
+    usd_cny_rate: float = DEFAULT_USD_CNY_RATE,
+) -> AccountCompareInput:
+    return AccountCompareInput(
+        account_id=str(account.get("id") or ""),
+        label=str(account.get("label") or ""),
+        channel=str(account.get("channel") or ""),
+        membership_type=str(account.get("membership_type") or ""),
+        account_kind=str(account.get("account_kind") or "long_term"),
+        temp_start_at=str(account.get("temp_start_at") or ""),
+        temp_valid_days=int(account.get("temp_valid_days") or 0),
+        temp_valid_hours=int(account.get("temp_valid_hours") or 0),
+        billing_cycle_start=str(account.get("billing_cycle_start") or ""),
+        billing_cycle_end=str(account.get("billing_cycle_end") or ""),
+        last_remaining=account.get("last_remaining"),
+        events=tuple(events),
+        spend=CnySpendSettings(
+            monthly_plan_usd=monthly_plan_usd,
+            usd_cny_rate=usd_cny_rate,
+            membership_type=str(account.get("membership_type") or ""),
+            actual_cny=float(account.get("actual_cny") or 0),
+        ),
+    )
+
+
+def build_account_compare_report(
+    items: list[AccountCompareInput] | tuple[AccountCompareInput, ...],
+    *,
+    now_ms: int | None = None,
+) -> AccountCompareReport:
+    rows = tuple(build_account_compare_row(item, now_ms=now_ms) for item in items)
+    grouped: dict[str, list[AccountCompareRow]] = {key: [] for key in CHANNEL_ORDER}
+    for row in rows:
+        grouped.setdefault(row.channel, []).append(row)
+    groups: list[AccountCompareGroup] = []
+    for channel in CHANNEL_ORDER:
+        bucket = grouped.get(channel) or []
+        if not bucket:
+            continue
+        groups.append(_sum_compare_group(channel, bucket))
+    return AccountCompareReport(rows=rows, groups=tuple(groups))
+
+
+def _sum_compare_group(channel: str, rows: list[AccountCompareRow]) -> AccountCompareGroup:
+    def add_cat(name: str, parts: list[AccountCompareCategory]) -> AccountCompareCategory:
+        return AccountCompareCategory(
+            name,
+            sum(p.count for p in parts),
+            sum(p.tokens for p in parts),
+            sum(p.cny for p in parts),
+        )
+
+    return AccountCompareGroup(
+        channel=channel,
+        rows=tuple(rows),
+        daily_holding_cny=sum(r.daily_holding_cny for r in rows),
+        total_cny=sum(r.total_cny for r in rows),
+        event_count=sum(r.event_count for r in rows),
+        total_tokens=sum(r.total_tokens for r in rows),
+        first_party=add_cat(CATEGORY_FIRST_PARTY, [r.first_party for r in rows]),
+        api=add_cat(CATEGORY_API, [r.api for r in rows]),
+        grok_bot=add_cat(CATEGORY_GROK_BOT, [r.grok_bot for r in rows]),
+    )
+
+
+def account_compare_to_csv(report: AccountCompareReport) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "账号",
+            "渠道",
+            "套餐",
+            "窗口",
+            "窗口天数",
+            "日均持有",
+            "窗口实付",
+            "请求",
+            "Token",
+            "¥/百万Token",
+            "¥/次",
+            "First-party次数",
+            "First-party Token",
+            "First-party实付",
+            "First-party ¥/百万",
+            "First-party ¥/次",
+            "API次数",
+            "API Token",
+            "API实付",
+            "API ¥/百万",
+            "API ¥/次",
+            "Grok Bot次数",
+            "Grok Bot Token",
+            "Grok Bot实付",
+            "Grok Bot ¥/百万",
+            "Grok Bot ¥/次",
+        ]
+    )
+    for row in report.rows:
+        writer.writerow(_compare_csv_cells(row.label, row.channel_label, row.membership_type, row.window_label, row.window_days, row))
+    for group in report.groups:
+        writer.writerow(
+            _compare_csv_cells(
+                f"{group.channel_label}合计",
+                group.channel_label,
+                "",
+                "",
+                0,
+                group,
+            )
+        )
+    return buf.getvalue()
+
+
+def _compare_csv_cells(name: str, channel: str, membership: str, window: str, days: float, row) -> list[Any]:
+    def cat_cells(cat: AccountCompareCategory) -> list[Any]:
+        return [
+            cat.count,
+            cat.tokens,
+            f"{cat.cny:.4f}",
+            "" if cat.cny_per_million is None else f"{cat.cny_per_million:.4f}",
+            "" if cat.cny_per_request is None else f"{cat.cny_per_request:.4f}",
+        ]
+
+    return [
+        name,
+        channel,
+        membership,
+        window,
+        f"{days:.2f}" if days else "",
+        f"{row.daily_holding_cny:.4f}",
+        f"{row.total_cny:.4f}",
+        row.event_count,
+        row.total_tokens,
+        "" if row.cny_per_million is None else f"{row.cny_per_million:.4f}",
+        "" if row.cny_per_request is None else f"{row.cny_per_request:.4f}",
+        *cat_cells(row.first_party),
+        *cat_cells(row.api),
+        *cat_cells(row.grok_bot),
+    ]
 
 
 def format_event_cny(event: UsageEvent, amount: float | None = None) -> str:
@@ -773,6 +1189,8 @@ def usage_event_from_dict(raw: dict[str, Any]) -> UsageEvent | None:
     try:
         ts = _as_int64(raw.get("timestamp_ms"))
         if ts is None:
+            ts = _iso_to_ms(raw.get("timestamp"))
+        if ts is None:
             return None
         return UsageEvent(
             id=str(raw.get("id") or ""),
@@ -786,8 +1204,8 @@ def usage_event_from_dict(raw: dict[str, Any]) -> UsageEvent | None:
             output_tokens=max(0, _as_int(raw.get("output_tokens")) or 0),
             cache_write_tokens=max(0, _as_int(raw.get("cache_write_tokens")) or 0),
             cache_read_tokens=max(0, _as_int(raw.get("cache_read_tokens")) or 0),
-            charged_cents=_as_float(raw.get("charged_cents")),
-            total_cents=_as_float(raw.get("total_cents")),
+            charged_cents=_as_float(raw.get("charged_cents", raw.get("chargedCents"))),
+            total_cents=_as_float(raw.get("total_cents", raw.get("totalCents"))),
             is_headless=bool(raw.get("is_headless")),
             is_chargeable=bool(raw.get("is_chargeable")),
         )
