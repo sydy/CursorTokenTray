@@ -562,7 +562,7 @@ public enum AccountSync {
             let mode = str(rawSettings["tray_display_mode"]).trimmingCharacters(in: .whitespaces).lowercased()
             snap.settings = SyncSettings(
                 refreshIntervalMinutes: intValue(rawSettings["refresh_interval_minutes"]) ?? 10,
-                alertThresholds: AppConfig.parseThresholds(rawSettings["alert_thresholds"]),
+                alertThresholds: ConfigStore.parseThresholds(rawSettings["alert_thresholds"]),
                 notifyEnabled: boolValue(rawSettings["notify_enabled"], default: true),
                 notifyExhaustionRisk: boolValue(rawSettings["notify_exhaustion_risk"], default: true),
                 trayDisplayMode: mode,
