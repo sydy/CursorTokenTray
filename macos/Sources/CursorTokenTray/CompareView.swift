@@ -115,11 +115,11 @@ final class CompareStore: ObservableObject {
     }
 }
 
-private enum CompareLineKind {
+enum CompareLineKind {
     case header, account, category, total
 }
 
-private struct CompareLine: Identifiable {
+struct CompareLine: Identifiable {
     var id: String
     var kind: CompareLineKind
     var name: String
