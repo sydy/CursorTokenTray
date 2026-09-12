@@ -16,7 +16,7 @@ sealed class CompareForm : Form
     readonly Label _status = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 8, 0, 0) };
     readonly Label _hint = new()
     {
-        Text = "窗口按各账号自己的最新周期或有效期。日均持有 = 折合月费÷30。窗口实付把月费按窗口天数折算后再摊到套餐内请求；按需仍按费用×汇率。表内同时给出 First-party / API / Grok Bot 的次数、Token 与单位成本。",
+        Text = "账号一行，First-party / API / Grok Bot 各占一行。日均持有 = 折合月费÷30。",
         AutoSize = true,
         ForeColor = Color.DimGray,
         Margin = new Padding(0, 4, 0, 8),
@@ -52,13 +52,22 @@ sealed class CompareForm : Form
         Text = "账号对比";
         var icon = AppWindow.CreateIcon();
         if (icon is not null) Icon = icon;
-        MinimumSize = new Size(1040, 520);
+        MinimumSize = new Size(900, 480);
         StartPosition = FormStartPosition.CenterScreen;
-        Width = 1180;
+        Width = 1020;
         Height = 640;
+        _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
 
-        foreach (var (name, header, width) in Columns())
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = name, HeaderText = header, Width = width });
+        foreach (var (name, header, fill, align) in Columns())
+        {
+            _grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = name,
+                HeaderText = header,
+                FillWeight = fill,
+                DefaultCellStyle = { Alignment = align },
+            });
+        }
 
         var toolbar = new FlowLayoutPanel
         {
@@ -96,34 +105,16 @@ sealed class CompareForm : Form
         ResumeLayout();
     }
 
-    static (string Name, string Header, int Width)[] Columns() =>
+    static (string Name, string Header, float Fill, DataGridViewContentAlignment Align)[] Columns() =>
     [
-        ("name", "账号", 110),
-        ("channel", "渠道", 72),
-        ("membership", "套餐", 80),
-        ("window", "窗口", 72),
-        ("days", "天数", 56),
-        ("holding", "日均持有", 88),
-        ("paid", "窗口实付", 88),
-        ("requests", "请求", 56),
-        ("tokens", "Token", 80),
-        ("perM", "¥/百万", 80),
-        ("perR", "¥/次", 72),
-        ("fpN", "FP次数", 64),
-        ("fpT", "FP Token", 80),
-        ("fpC", "FP实付", 72),
-        ("fpM", "FP ¥/百万", 80),
-        ("fpR", "FP ¥/次", 72),
-        ("apiN", "API次数", 68),
-        ("apiT", "API Token", 80),
-        ("apiC", "API实付", 72),
-        ("apiM", "API ¥/百万", 80),
-        ("apiR", "API ¥/次", 72),
-        ("gbN", "Grok次数", 72),
-        ("gbT", "Grok Token", 80),
-        ("gbC", "Grok实付", 72),
-        ("gbM", "Grok ¥/百万", 88),
-        ("gbR", "Grok ¥/次", 72),
+        ("name", "账号 / 分类", 22, DataGridViewContentAlignment.MiddleLeft),
+        ("window", "窗口", 14, DataGridViewContentAlignment.MiddleLeft),
+        ("holding", "日均持有", 11, DataGridViewContentAlignment.MiddleRight),
+        ("paid", "实付", 11, DataGridViewContentAlignment.MiddleRight),
+        ("requests", "请求", 9, DataGridViewContentAlignment.MiddleRight),
+        ("tokens", "Token", 11, DataGridViewContentAlignment.MiddleRight),
+        ("perM", "¥/百万", 11, DataGridViewContentAlignment.MiddleRight),
+        ("perR", "¥/次", 11, DataGridViewContentAlignment.MiddleRight),
     ];
 
     void LoadCache()
@@ -209,50 +200,110 @@ sealed class CompareForm : Form
     {
         _grid.Rows.Clear();
         _grid.SuspendLayout();
+        var units = _report.Rows.Where(r => r.CnyPerMillion is not null).Select(r => r.CnyPerMillion!.Value).ToList();
+        var hasBest = units.Count > 0;
+        var best = hasBest ? units.Min() : 0;
+        var accounts = _state().Accounts;
         foreach (var group in _report.Groups)
         {
+            StyleRow(_grid.Rows[_grid.Rows.Add(Line(group.ChannelLabel, "", "", "", "", "", "", ""))], RowKind.Header);
             foreach (var row in group.Rows)
-                _grid.Rows.Add(Cells(row.Label, row.ChannelLabel, UsageParser.FormatMembershipType(row.MembershipType), row.WindowLabel, FormatDays(row.WindowDays), false, row.DailyHoldingCny, row.TotalCny, row.EventCount, row.TotalTokens, row.CnyPerMillion, row.CnyPerRequest, row.FirstParty, row.Api, row.GrokBot));
-            var idx = _grid.Rows.Add(Cells(group.ChannelLabel + "合计", group.ChannelLabel, "", "", "", true, group.DailyHoldingCny, group.TotalCny, group.EventCount, group.TotalTokens, group.CnyPerMillion, group.CnyPerRequest, group.FirstParty, group.Api, group.GrokBot));
-            _grid.Rows[idx].DefaultCellStyle.Font = new Font(_grid.Font, FontStyle.Bold);
+            {
+                var name = AccountName(accounts, row);
+                var memb = UsageParser.FormatMembershipType(row.MembershipType);
+                if (!string.IsNullOrEmpty(memb) && !memb.Equals(name, StringComparison.OrdinalIgnoreCase))
+                    name += "  " + memb;
+                var accIdx = _grid.Rows.Add(Line(
+                    name,
+                    $"{row.WindowLabel} {FormatDays(row.WindowDays)}天",
+                    UsageEvents.FormatCny(row.DailyHoldingCny),
+                    UsageEvents.FormatCny(row.TotalCny),
+                    FormatCount(row.EventCount),
+                    UsageParser.FormatTokenCount(row.TotalTokens),
+                    Unit(row.CnyPerMillion),
+                    Unit(row.CnyPerRequest)));
+                StyleRow(_grid.Rows[accIdx], RowKind.Account);
+                if (hasBest && row.CnyPerMillion is { } perM && Math.Abs(perM - best) < 1e-9)
+                    _grid.Rows[accIdx].Cells["perM"].Style.ForeColor = Color.SeaGreen;
+                AddCategory("First-party", row.FirstParty);
+                AddCategory("API", row.Api);
+                AddCategory("Grok Bot", row.GrokBot);
+            }
+            var sumIdx = _grid.Rows.Add(Line(
+                group.ChannelLabel + "合计",
+                "",
+                UsageEvents.FormatCny(group.DailyHoldingCny),
+                UsageEvents.FormatCny(group.TotalCny),
+                FormatCount(group.EventCount),
+                UsageParser.FormatTokenCount(group.TotalTokens),
+                Unit(group.CnyPerMillion),
+                Unit(group.CnyPerRequest)));
+            StyleRow(_grid.Rows[sumIdx], RowKind.Total);
         }
         _grid.ResumeLayout();
         _exportBtn.Enabled = _report.Rows.Count > 0;
     }
 
-    static object[] Cells(
-        string name, string channel, string membership, string window, string days, bool group,
-        double dailyHolding, double totalCny, int requests, long tokens,
-        double? perMillion, double? perRequest,
-        AccountCompareCategory firstParty, AccountCompareCategory api, AccountCompareCategory grok)
+    void AddCategory(string name, AccountCompareCategory cat)
     {
-        _ = group;
-        return
-        [
-            name, channel, membership, window, days,
-            UsageEvents.FormatCny(dailyHolding),
-            UsageEvents.FormatCny(totalCny),
-            requests.ToString(CultureInfo.InvariantCulture),
-            UsageParser.FormatTokenCount(tokens),
-            UsageEvents.FormatCnyUnit(perMillion, "/百万"),
-            UsageEvents.FormatCnyUnit(perRequest, "/次"),
-            firstParty.Count.ToString(CultureInfo.InvariantCulture),
-            UsageParser.FormatTokenCount(firstParty.Tokens),
-            UsageEvents.FormatCny(firstParty.Cny),
-            UsageEvents.FormatCnyUnit(firstParty.CnyPerMillion, "/百万"),
-            UsageEvents.FormatCnyUnit(firstParty.CnyPerRequest, "/次"),
-            api.Count.ToString(CultureInfo.InvariantCulture),
-            UsageParser.FormatTokenCount(api.Tokens),
-            UsageEvents.FormatCny(api.Cny),
-            UsageEvents.FormatCnyUnit(api.CnyPerMillion, "/百万"),
-            UsageEvents.FormatCnyUnit(api.CnyPerRequest, "/次"),
-            grok.Count.ToString(CultureInfo.InvariantCulture),
-            UsageParser.FormatTokenCount(grok.Tokens),
-            UsageEvents.FormatCny(grok.Cny),
-            UsageEvents.FormatCnyUnit(grok.CnyPerMillion, "/百万"),
-            UsageEvents.FormatCnyUnit(grok.CnyPerRequest, "/次"),
-        ];
+        var tokens = cat.Tokens == 0 && cat.Count == 0 ? "—" : UsageParser.FormatTokenCount(cat.Tokens);
+        var idx = _grid.Rows.Add(Line(name, "", "", UsageEvents.FormatCny(cat.Cny), FormatCount(cat.Count), tokens, Unit(cat.CnyPerMillion), Unit(cat.CnyPerRequest)));
+        StyleRow(_grid.Rows[idx], RowKind.Category);
     }
+
+    enum RowKind { Header, Account, Category, Total }
+
+    void StyleRow(DataGridViewRow row, RowKind kind)
+    {
+        switch (kind)
+        {
+            case RowKind.Header:
+                row.DefaultCellStyle.Font = new Font(_grid.Font, FontStyle.Bold);
+                row.DefaultCellStyle.BackColor = Color.FromArgb(245, 245, 245);
+                break;
+            case RowKind.Account:
+                row.DefaultCellStyle.Font = new Font(_grid.Font, FontStyle.Bold);
+                break;
+            case RowKind.Category:
+                row.DefaultCellStyle.ForeColor = Color.DimGray;
+                row.Cells["name"].Style.Padding = new Padding(18, 0, 0, 0);
+                break;
+            case RowKind.Total:
+                row.DefaultCellStyle.Font = new Font(_grid.Font, FontStyle.Bold);
+                row.DefaultCellStyle.BackColor = Color.FromArgb(248, 248, 248);
+                break;
+        }
+    }
+
+    static object[] Line(string name, string window, string holding, string paid, string requests, string tokens, string perM, string perR) =>
+        [name, window, holding, paid, requests, tokens, perM, perR];
+
+    static string AccountName(IReadOnlyList<Account> accounts, AccountCompareRow row)
+    {
+        var acc = accounts.FirstOrDefault(a => a.Id == row.AccountId);
+        var custom = (acc?.Label ?? "").Trim();
+        if (custom.Length > 0) return custom;
+        custom = (row.Label ?? "").Trim();
+        if (custom.Length > 0 && custom != row.AccountId) return custom;
+        return CompactAccountId(row.AccountId);
+    }
+
+    static string CompactAccountId(string raw)
+    {
+        var aid = (raw ?? "").Trim();
+        if (aid.StartsWith("user_", StringComparison.Ordinal) && aid.Length > 18)
+        {
+            var body = aid[5..];
+            if (body.StartsWith("01", StringComparison.Ordinal)) body = body[2..];
+            return body[..5] + "…" + body[^2..];
+        }
+        if (aid.Length > 14) return aid[..12] + "…";
+        return aid.Length == 0 ? "未命名账号" : aid;
+    }
+
+    static string Unit(double? amount) => UsageEvents.FormatCnyUnit(amount, "");
+
+    static string FormatCount(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
 
     static string FormatDays(double days) =>
         Math.Abs(days - Math.Round(days)) < 0.05
