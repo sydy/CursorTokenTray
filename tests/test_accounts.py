@@ -114,6 +114,54 @@ class AccountStateTests(unittest.TestCase):
         self.assertEqual(list_accounts(cfg), [])
         self.assertEqual(cfg["session_token"], "")
 
+    def test_actual_cny_is_per_account(self) -> None:
+        from accounts import (
+            normalize_account_state,
+            resolved_actual_cny,
+            set_account_actual_cny,
+            set_active_account,
+            upsert_account,
+        )
+
+        cfg: dict = {"accounts": [], "active_account_id": "", "session_token": "", "actual_cny": 0}
+        a, _ = upsert_account(cfg, _token_for("user_01A"), activate=True)
+        b, _ = upsert_account(cfg, _token_for("user_01B"), activate=False)
+        self.assertTrue(set_account_actual_cny(cfg, a["id"], 79))
+        self.assertTrue(set_account_actual_cny(cfg, b["id"], 128))
+        self.assertEqual(a["actual_cny"], 79)
+        self.assertEqual(b["actual_cny"], 128)
+        self.assertTrue(set_active_account(cfg, a["id"]))
+        self.assertEqual(resolved_actual_cny(cfg), 79)
+        self.assertEqual(cfg["actual_cny"], 79)
+        self.assertTrue(set_active_account(cfg, b["id"]))
+        self.assertEqual(resolved_actual_cny(cfg), 128)
+        self.assertEqual(cfg["actual_cny"], 128)
+        self.assertEqual(a["actual_cny"], 79)
+
+        imported = {
+            "actual_cny": 66,
+            "accounts": [
+                {"id": "user_01A", "token": _token_for("user_01A"), "label": "旧号"},
+                {
+                    "id": "user_01C",
+                    "token": _token_for("user_01C"),
+                    "label": "已填",
+                    "actual_cny": 12,
+                },
+            ],
+            "active_account_id": "user_01A",
+            "session_token": "",
+        }
+        normalize_account_state(imported, raw=imported)
+        by_id = {row["id"]: row for row in imported["accounts"]}
+        self.assertEqual(by_id["user_01A"]["actual_cny"], 66)
+        self.assertEqual(by_id["user_01C"]["actual_cny"], 12)
+        self.assertEqual(imported["actual_cny"], 66)
+
+        fresh, created = upsert_account(imported, _token_for("user_01D"), activate=False)
+        self.assertTrue(created)
+        self.assertEqual(fresh["actual_cny"], 0)
+
     def test_config_roundtrip_keeps_accounts(self) -> None:
         import config
         from accounts import list_accounts, upsert_account
@@ -126,12 +174,21 @@ class AccountStateTests(unittest.TestCase):
             try:
                 cfg = dict(config.DEFAULT_CONFIG)
                 upsert_account(cfg, _token_for("user_01SAVE"), label="工作", activate=True)
+                upsert_account(cfg, _token_for("user_01COST"), label="企业", activate=False)
+                from accounts import set_account_actual_cny
+
+                set_account_actual_cny(cfg, "user_01SAVE", 79)
+                set_account_actual_cny(cfg, "user_01COST", 128)
                 config.save_config(cfg)
                 loaded = config.load_config()
                 accounts = list_accounts(loaded)
-                self.assertEqual(len(accounts), 1)
-                self.assertEqual(accounts[0]["label"], "工作")
+                self.assertEqual(len(accounts), 2)
+                by_id = {row["id"]: row for row in accounts}
+                self.assertEqual(by_id["user_01SAVE"]["label"], "工作")
+                self.assertEqual(by_id["user_01SAVE"]["actual_cny"], 79)
+                self.assertEqual(by_id["user_01COST"]["actual_cny"], 128)
                 self.assertEqual(loaded["active_account_id"], "user_01SAVE")
+                self.assertEqual(loaded["actual_cny"], 79)
                 self.assertTrue(loaded["session_token"])
             finally:
                 config.CONFIG_DIR = old_dir

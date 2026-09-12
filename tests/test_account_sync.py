@@ -136,6 +136,22 @@ class ReconcileFileTests(unittest.TestCase):
             self.assertEqual(b["accounts"][0]["label"], "工作")
             self.assertEqual(b["active_account_id"], a["active_account_id"])
 
+    def test_actual_cny_syncs_with_account(self) -> None:
+        from account_sync import apply_snapshot_to_config, snapshot_account, snapshot_from_config
+        from accounts import set_account_actual_cny, upsert_account
+
+        cfg: dict = {"accounts": [], "active_account_id": "", "session_token": "", "deleted_accounts": []}
+        upsert_account(cfg, "user_01COST%3A%3Ajwt.part.sig", label="企业", activate=True)
+        set_account_actual_cny(cfg, cfg["active_account_id"], 88)
+        snap = snapshot_from_config(cfg)
+        self.assertEqual(snap["accounts"][0]["actual_cny"], 88)
+        self.assertEqual(snapshot_account(snap["accounts"][0])["actual_cny"], 88)
+
+        other: dict = {"accounts": [], "active_account_id": "", "session_token": "", "deleted_accounts": []}
+        apply_snapshot_to_config(other, snap)
+        self.assertEqual(other["accounts"][0]["actual_cny"], 88)
+        self.assertEqual(other["actual_cny"], 88)
+
 
 class ConfigRoundtripTests(unittest.TestCase):
     def test_sync_fields_survive_save(self) -> None:

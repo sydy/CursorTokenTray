@@ -348,6 +348,7 @@ class SourceGuardTests(unittest.TestCase):
         for src in (win_settings, mac_settings):
             self.assertIn("实际成本（人民币）", src)
             self.assertIn("额度不是真实支出", src)
+            self.assertIn("仅当前账号", src)
         self.assertIn("全部额度", mac_report)
         self.assertIn("First-party", mac_report)
         self.assertIn("Grok Bot", mac_report)

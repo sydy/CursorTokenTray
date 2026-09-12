@@ -36,6 +36,7 @@ ACCOUNT_KEYS = (
     "auth_error_notified",
     "exhaustion_notified",
     "low_quota_notified",
+    "actual_cny",
 )
 
 
@@ -121,6 +122,7 @@ def empty_account(*, token: str = "", account_id: str = "", label: str = "") -> 
         "auth_error_notified": False,
         "exhaustion_notified": False,
         "low_quota_notified": False,
+        "actual_cny": 0.0,
     }
 
 
@@ -160,6 +162,9 @@ def sanitize_account(raw: Any) -> dict[str, Any] | None:
     acc["auth_error_notified"] = bool(raw.get("auth_error_notified", False))
     acc["exhaustion_notified"] = bool(raw.get("exhaustion_notified", False))
     acc["low_quota_notified"] = bool(raw.get("low_quota_notified", False))
+    from usage_report import clamp_actual_cny
+
+    acc["actual_cny"] = clamp_actual_cny(raw.get("actual_cny", raw.get("actualCny")))
     return acc
 
 
@@ -283,6 +288,41 @@ def upsert_account(
     return existing, created
 
 
+def account_actual_cny(account: dict[str, Any] | None) -> float:
+    from usage_report import clamp_actual_cny
+
+    if not account:
+        return 0.0
+    return clamp_actual_cny(account.get("actual_cny"))
+
+
+def resolved_actual_cny(cfg: dict[str, Any]) -> float:
+    acc = active_account(cfg)
+    if acc is not None:
+        return account_actual_cny(acc)
+    from usage_report import clamp_actual_cny
+
+    return clamp_actual_cny(cfg.get("actual_cny"))
+
+
+def set_account_actual_cny(cfg: dict[str, Any], account_id: str, amount: float | None) -> bool:
+    acc = find_account(cfg, account_id)
+    if acc is None:
+        return False
+    from usage_report import clamp_actual_cny
+
+    new = clamp_actual_cny(amount)
+    if account_actual_cny(acc) != new:
+        from account_sync import touch_account
+
+        acc["actual_cny"] = new
+        touch_account(acc)
+    else:
+        acc["actual_cny"] = new
+    sync_legacy_fields(cfg)
+    return True
+
+
 def set_active_account(cfg: dict[str, Any], account_id: str) -> bool:
     acc = find_account(cfg, account_id)
     if acc is None:
@@ -372,7 +412,7 @@ def existing_token_variants(cfg: dict[str, Any]) -> set[str]:
 
 
 def sync_legacy_fields(cfg: dict[str, Any]) -> None:
-    """session_token 与顶层告警去重字段跟随当前账号，兼容旧读取路径。"""
+    """session_token、顶层告警去重与实际成本跟随当前账号，兼容旧读取路径。"""
     acc = active_account(cfg)
     if acc is None:
         cfg["session_token"] = ""
@@ -389,6 +429,9 @@ def sync_legacy_fields(cfg: dict[str, Any]) -> None:
     cfg["auth_error_notified"] = bool(acc.get("auth_error_notified", False))
     cfg["exhaustion_notified"] = bool(acc.get("exhaustion_notified", False))
     cfg["low_quota_notified"] = bool(acc.get("low_quota_notified", False))
+    from usage_report import clamp_actual_cny
+
+    cfg["actual_cny"] = clamp_actual_cny(acc.get("actual_cny"))
     cfg["accounts"] = list_accounts(cfg)
 
 
@@ -398,12 +441,22 @@ def normalize_account_state(cfg: dict[str, Any], *, raw: dict[str, Any] | None =
     accounts: list[dict[str, Any]] = []
     seen: set[str] = set()
     raw_accounts = source.get("accounts", cfg.get("accounts"))
+    from usage_report import clamp_actual_cny
+
+    legacy_actual = clamp_actual_cny(cfg.get("actual_cny", source.get("actual_cny")))
     if isinstance(raw_accounts, list):
         for item in raw_accounts:
             acc = sanitize_account(item)
             if acc is None or acc["id"] in seen:
                 continue
             seen.add(acc["id"])
+            if (
+                isinstance(item, dict)
+                and "actual_cny" not in item
+                and "actualCny" not in item
+                and legacy_actual > 0
+            ):
+                acc["actual_cny"] = legacy_actual
             accounts.append(acc)
 
     token = _normalize_token(str(cfg.get("session_token") or source.get("session_token") or ""))
@@ -471,6 +524,10 @@ def _copy_legacy_flags(cfg: dict[str, Any], account: dict[str, Any]) -> None:
     account["auth_error_notified"] = bool(cfg.get("auth_error_notified", False))
     account["exhaustion_notified"] = bool(cfg.get("exhaustion_notified", False))
     account["low_quota_notified"] = bool(cfg.get("low_quota_notified", False))
+    from usage_report import clamp_actual_cny
+
+    if clamp_actual_cny(account.get("actual_cny")) <= 0:
+        account["actual_cny"] = clamp_actual_cny(cfg.get("actual_cny"))
 
 
 def _clamp_int(value: Any, lo: int, hi: int) -> int:

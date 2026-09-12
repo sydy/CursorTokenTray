@@ -26,6 +26,7 @@ public sealed class Account
     /// <summary>True when the on-disk <c>enc:v1:</c> blob could not be decrypted. <see cref="Token"/> is empty; <see cref="StoredToken"/> keeps the blob so a save cannot clobber it.</summary>
     public bool TokenDecryptFailed { get; set; }
     public string StoredToken { get; set; } = "";
+    public double ActualCny { get; set; }
 
     public string DisplayLabel
     {
@@ -92,7 +93,22 @@ public sealed class AppConfig
         Accounts.FirstOrDefault(a => a.Id == ActiveAccountId) ?? Accounts.FirstOrDefault();
 
     public CnySpendSettings SpendSettings(string? membership = null) =>
-        new(MonthlyPlanUsd, UsdCnyRate, membership ?? ActiveAccount?.MembershipType ?? "", ActualCny);
+        new(MonthlyPlanUsd, UsdCnyRate, membership ?? ActiveAccount?.MembershipType ?? "", ActiveAccount?.ActualCny ?? ActualCny);
+
+    public bool SetActualCny(string id, double amount)
+    {
+        var acc = Accounts.FirstOrDefault(a => a.Id == id);
+        if (acc is null) return false;
+        var clamped = UsageEvents.ClampActualCny(amount);
+        if (acc.ActualCny != clamped)
+        {
+            acc.ActualCny = clamped;
+            AccountSync.TouchAccount(acc);
+        }
+        else acc.ActualCny = clamped;
+        SyncLegacyFields();
+        return true;
+    }
 
     public (Account acc, bool created) UpsertAccount(string rawToken, string? label = null, string? membershipType = null, double? remaining = null, string? error = null, bool activate = true)
     {
@@ -219,6 +235,7 @@ public sealed class AppConfig
         AuthErrorNotified = acc.AuthErrorNotified;
         ExhaustionNotified = acc.ExhaustionNotified;
         LowQuotaNotified = acc.LowQuotaNotified;
+        ActualCny = UsageEvents.ClampActualCny(acc.ActualCny);
     }
 
     void CopyLegacyFlags(Account account)
@@ -227,6 +244,8 @@ public sealed class AppConfig
         account.AuthErrorNotified = AuthErrorNotified;
         account.ExhaustionNotified = ExhaustionNotified;
         account.LowQuotaNotified = LowQuotaNotified;
+        if (account.ActualCny <= 0 && ActualCny > 0)
+            account.ActualCny = UsageEvents.ClampActualCny(ActualCny);
     }
 }
 
@@ -441,6 +460,7 @@ public static class ConfigStore
             cfg.AlertThresholds = ParseThresholds(raw.TryGetProperty("alert_thresholds", out var at) ? at : default);
         cfg.AlertNotifiedLevels = ParseIntList(raw.TryGetProperty("alert_notified_levels", out var an) ? an : default);
         cfg.Accounts = ParseAccounts(raw);
+        MigrateLegacyActualCny(cfg, raw);
         if (cfg.Accounts.Any(a => a.TokenDecryptFailed)) cfg.DecryptError = true;
         cfg.SyncEnabled = Bool(raw, "sync_enabled", false);
         cfg.SyncPath = Str(raw, "sync_path").Trim();
@@ -507,6 +527,24 @@ public static class ConfigStore
         return cfg;
     }
 
+    static void MigrateLegacyActualCny(AppConfig cfg, JsonElement raw)
+    {
+        var legacy = UsageEvents.ClampActualCny(cfg.ActualCny);
+        if (legacy <= 0) return;
+        if (!raw.TryGetProperty("accounts", out var arr) || arr.ValueKind != JsonValueKind.Array) return;
+        var specified = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.TryGetProperty("actual_cny", out _) || item.TryGetProperty("actualCny", out _))
+                specified.Add(Str(item, "id").Trim());
+        }
+        foreach (var acc in cfg.Accounts)
+        {
+            if (!specified.Contains(acc.Id) && acc.ActualCny <= 0)
+                acc.ActualCny = legacy;
+        }
+    }
+
     static List<Account> ParseAccounts(JsonElement raw)
     {
         if (!raw.TryGetProperty("accounts", out var arr) || arr.ValueKind != JsonValueKind.Array) return [];
@@ -553,6 +591,8 @@ public static class ConfigStore
         acc.AuthErrorNotified = Bool(raw, "auth_error_notified", false);
         acc.ExhaustionNotified = Bool(raw, "exhaustion_notified", false);
         acc.LowQuotaNotified = Bool(raw, "low_quota_notified", false);
+        if (raw.TryGetProperty("actual_cny", out _) || raw.TryGetProperty("actualCny", out _))
+            acc.ActualCny = UsageEvents.ClampActualCny(DoubleVal(raw, "actual_cny", DoubleVal(raw, "actualCny", 0)));
         return acc;
     }
 
@@ -607,6 +647,7 @@ public static class ConfigStore
             ["auth_error_notified"] = a.AuthErrorNotified,
             ["exhaustion_notified"] = a.ExhaustionNotified,
             ["low_quota_notified"] = a.LowQuotaNotified,
+            ["actual_cny"] = a.ActualCny,
         }).ToList(),
         active_account_id = cfg.ActiveAccountId,
         refresh_interval_minutes = cfg.RefreshIntervalMinutes,

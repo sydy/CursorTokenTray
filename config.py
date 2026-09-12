@@ -36,7 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "autostart_enabled": True,
     "tray_display_mode": "ring",  # ring | number | dot
     "monthly_plan_usd": 0,  # 0 = 按套餐预填
-    "actual_cny": 0,  # 0 = 用月费×汇率；企业额度不是真实支出
+    "actual_cny": 0,  # 跟随当前账号；0 = 用月费×汇率。每个账号可独立设置
     "usd_cny_rate": 7.5,
     # 去重状态（跟随当前账号；兼容旧读取路径）
     "low_quota_notified": False,

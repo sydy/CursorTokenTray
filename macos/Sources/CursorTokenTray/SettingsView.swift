@@ -37,7 +37,7 @@ struct SettingsRootView: View {
                 ? store.config.monthlyPlanUsd
                 : UsageEvents.defaultMonthlyPlanUsd(membership)
             planUsdText = formatDecimal(plan)
-            actualCnyText = formatDecimal(store.config.actualCny)
+            actualCnyText = formatDecimal(store.config.activeAccount?.actualCny ?? 0)
             cnyRateText = formatDecimal(store.config.usdCnyRate)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
             syncPath = store.config.syncPath
@@ -51,6 +51,9 @@ struct SettingsRootView: View {
             if startImport {
                 Task { await importFrom(prefer: "cursor-app") }
             }
+        }
+        .onChange(of: store.config.activeAccountId) { _ in
+            actualCnyText = formatDecimal(store.config.activeAccount?.actualCny ?? 0)
         }
     }
 
@@ -90,6 +93,14 @@ struct SettingsRootView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            HStack {
+                Text("实际成本（人民币）")
+                TextField("0", text: $actualCnyText).frame(width: 72)
+            }
+            .disabled(store.config.activeAccount == nil)
+            Text("仅当前账号。企业 / 团队额度不是真实支出；填了则按套餐内费用分摊，优先于月费。按需仍按费用×汇率。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text("添加账号（粘贴 Token，请勿分享；已保存的不会显示）").font(.headline).padding(.top, 8)
             TextEditor(text: $tokenText)
                 .font(.system(.body, design: .monospaced))
@@ -141,14 +152,10 @@ struct SettingsRootView: View {
                 TextField("20", text: $planUsdText).frame(width: 72)
             }
             HStack {
-                Text("实际成本（人民币）")
-                TextField("0", text: $actualCnyText).frame(width: 72)
-            }
-            HStack {
                 Text("美元兑人民币")
                 TextField("7.5", text: $cnyRateText).frame(width: 72)
             }
-            Text("月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。企业 / 团队额度不是真实支出，请填「实际成本（人民币）」按套餐内费用分摊；填了实际成本时优先于月费。按需仍按费用×汇率。")
+            Text("月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。实际成本在「账户」里按账号填写。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
@@ -216,7 +223,11 @@ struct SettingsRootView: View {
     var activeBinding: Binding<String> {
         Binding(
             get: { store.config.activeAccountId },
-            set: { store.switchAccount($0) }
+            set: { newId in
+                persistActualCny()
+                store.switchAccount(newId)
+                actualCnyText = formatDecimal(store.config.activeAccount?.actualCny ?? 0)
+            }
         )
     }
 
@@ -385,8 +396,8 @@ struct SettingsRootView: View {
         if let plan = parseDecimal(planUsdText) {
             cfg.monthlyPlanUsd = UsageEvents.clampMonthlyPlanUsd(plan)
         }
-        if let actual = parseDecimal(actualCnyText) {
-            cfg.actualCny = UsageEvents.clampActualCny(actual)
+        if let actual = parseDecimal(actualCnyText), let acc = cfg.activeAccount {
+            _ = cfg.setActualCny(acc.id, actual)
         }
         if let rate = parseDecimal(cnyRateText) {
             cfg.usdCnyRate = UsageEvents.clampUsdCnyRate(rate)
@@ -402,6 +413,13 @@ struct SettingsRootView: View {
         store.applyConfig(cfg, refresh: true)
         hint = close ? "" : "已应用"
         if close { SettingsWindowController.shared.close() }
+    }
+
+    func persistActualCny() {
+        guard let acc = store.config.activeAccount, let actual = parseDecimal(actualCnyText) else { return }
+        var cfg = store.config
+        _ = cfg.setActualCny(acc.id, actual)
+        store.applyConfig(cfg, refresh: false)
     }
 
     func applySyncFields(_ cfg: inout AppConfig) {

@@ -21,6 +21,7 @@ public sealed class SyncAccount
     public string TempStartAt { get; set; } = "";
     public int TempValidDays { get; set; }
     public int TempValidHours { get; set; }
+    public double ActualCny { get; set; }
     public string SyncUpdatedAt { get; set; } = "";
 }
 
@@ -150,6 +151,7 @@ public static class AccountSync
         TempStartAt = (account.TempStartAt ?? "").Trim(),
         TempValidDays = AccountValidity.ClampDays(account.TempValidDays),
         TempValidHours = AccountValidity.ClampHours(account.TempValidHours),
+        ActualCny = UsageEvents.ClampActualCny(account.ActualCny),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
@@ -163,6 +165,7 @@ public static class AccountSync
         TempStartAt = (account.TempStartAt ?? "").Trim(),
         TempValidDays = AccountValidity.ClampDays(account.TempValidDays),
         TempValidHours = AccountValidity.ClampHours(account.TempValidHours),
+        ActualCny = UsageEvents.ClampActualCny(account.ActualCny),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
@@ -189,7 +192,7 @@ public static class AccountSync
     public static string SnapshotIdentity(SyncSnapshot snap)
     {
         var accounts = snap.Accounts.OrderBy(a => a.Id, StringComparer.Ordinal)
-            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.SyncUpdatedAt}");
+            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.SyncUpdatedAt}");
         var deleted = snap.Deleted.OrderBy(d => d.Id, StringComparer.Ordinal)
             .Select(d => $"{d.Id}\n{d.DeletedAt}");
         return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}";
@@ -243,7 +246,7 @@ public static class AccountSync
     public static bool ApplySnapshotToConfig(AppConfig cfg, SyncSnapshot snap)
     {
         string Before() => string.Join("|", cfg.Accounts.Select(a =>
-            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.SyncUpdatedAt}"));
+            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.SyncUpdatedAt}"));
         var before = Before();
         var existing = cfg.Accounts.ToDictionary(a => a.Id, StringComparer.Ordinal);
         var merged = new List<Account>();
@@ -263,6 +266,7 @@ public static class AccountSync
                     TempStartAt = ident.TempStartAt,
                     TempValidDays = ident.TempValidDays,
                     TempValidHours = ident.TempValidHours,
+                    ActualCny = ident.ActualCny,
                     SyncUpdatedAt = ident.SyncUpdatedAt,
                 });
                 continue;
@@ -274,6 +278,7 @@ public static class AccountSync
             old.TempStartAt = ident.TempStartAt;
             old.TempValidDays = ident.TempValidDays;
             old.TempValidHours = ident.TempValidHours;
+            old.ActualCny = ident.ActualCny;
             old.SyncUpdatedAt = ident.SyncUpdatedAt;
             merged.Add(old);
         }
@@ -311,8 +316,10 @@ public static class AccountSync
                 || a.TempValidDays != 0
                 || a.TempValidHours != 0)
             {
-                extra = $",\"account_kind\":{Q(AccountValidity.SanitizeKind(a.AccountKind))},\"temp_start_at\":{Q(a.TempStartAt ?? "")},\"temp_valid_days\":{a.TempValidDays},\"temp_valid_hours\":{a.TempValidHours}";
+                extra += $",\"account_kind\":{Q(AccountValidity.SanitizeKind(a.AccountKind))},\"temp_start_at\":{Q(a.TempStartAt ?? "")},\"temp_valid_days\":{a.TempValidDays},\"temp_valid_hours\":{a.TempValidHours}";
             }
+            if (a.ActualCny != 0)
+                extra += $",\"actual_cny\":{CanonicalNumber(a.ActualCny)}";
             return $"{{\"id\":{Q(a.Id)},\"label\":{Q(a.Label)},\"membership_type\":{Q(a.MembershipType)},\"sync_updated_at\":{Q(a.SyncUpdatedAt)},\"token\":{Q(a.Token)}{extra}}}";
         }));
         var deleted = string.Join(",", snap.Deleted.Select(d =>
@@ -402,6 +409,7 @@ public static class AccountSync
                     TempStartAt = Str(item, "temp_start_at").Trim(),
                     TempValidDays = AccountValidity.ClampDays(IntVal(item, "temp_valid_days")),
                     TempValidHours = AccountValidity.ClampHours(IntVal(item, "temp_valid_hours")),
+                    ActualCny = UsageEvents.ClampActualCny(DoubleVal(item, "actual_cny")),
                     SyncUpdatedAt = Str(item, "sync_updated_at").Trim(),
                 };
                 if (acc.Id.Length > 0) snap.Accounts.Add(acc);
@@ -426,6 +434,22 @@ public static class AccountSync
         if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)) return n;
         if (v.ValueKind == JsonValueKind.String && int.TryParse(v.GetString(), out n)) return n;
         return null;
+    }
+
+    static double DoubleVal(JsonElement raw, string key)
+    {
+        if (!raw.TryGetProperty(key, out var v)) return 0;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+        if (v.ValueKind == JsonValueKind.String
+            && double.TryParse((v.GetString() ?? "").Replace("，", "."), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d))
+            return d;
+        return 0;
+    }
+
+    static string CanonicalNumber(double value)
+    {
+        var text = value.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+        return string.IsNullOrEmpty(text) ? "0" : text;
     }
 
     public static JsonElement? ReadEnvelope(string path)

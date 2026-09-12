@@ -486,11 +486,52 @@ final class UsageParserFixtureTests: XCTestCase {
         let token = "user_01SAVE%3A%3A\(header).\(p).sig"
         var cfg = AppConfig.default
         _ = try cfg.upsertAccount(token: token, label: "工作", activate: true)
+        XCTAssertTrue(cfg.setActualCny("user_01SAVE", 79))
         ConfigStore.save(cfg, to: dir)
         let loaded = ConfigStore.load(from: dir)
         XCTAssertEqual(loaded.accounts.count, 1)
         XCTAssertEqual(loaded.accounts[0].label, "工作")
+        XCTAssertEqual(loaded.accounts[0].actualCny, 79, accuracy: 0.001)
+        XCTAssertEqual(loaded.actualCny, 79, accuracy: 0.001)
         XCTAssertEqual(loaded.activeAccountId, "user_01SAVE")
+        XCTAssertEqual(loaded.spendSettings().actualCny, 79, accuracy: 0.001)
+    }
+
+    func testPerAccountActualCnyAndLegacyMigration() throws {
+        let header = Data("{\"alg\":\"none\"}".utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        func token(for user: String) throws -> String {
+            let payload = try JSONSerialization.data(withJSONObject: ["sub": "github|\(user)"])
+            let p = payload.base64EncodedString().replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            return "\(user)%3A%3A\(header).\(p).sig"
+        }
+        let tokenA = try token(for: "user_01A")
+        let tokenB = try token(for: "user_01B")
+        var cfg = AppConfig.default
+        _ = try cfg.upsertAccount(token: tokenA, label: "个人", activate: true)
+        _ = try cfg.upsertAccount(token: tokenB, label: "企业", activate: false)
+        XCTAssertTrue(cfg.setActualCny("user_01A", 79))
+        XCTAssertTrue(cfg.setActualCny("user_01B", 128))
+        XCTAssertEqual(cfg.accounts.first { $0.id == "user_01A" }?.actualCny ?? 0, 79, accuracy: 0.001)
+        XCTAssertEqual(cfg.accounts.first { $0.id == "user_01B" }?.actualCny ?? 0, 128, accuracy: 0.001)
+        XCTAssertTrue(cfg.setActiveAccount("user_01B"))
+        XCTAssertEqual(cfg.actualCny, 128, accuracy: 0.001)
+        XCTAssertEqual(cfg.spendSettings().actualCny, 128, accuracy: 0.001)
+
+        let raw: [String: Any] = [
+            "actual_cny": 66,
+            "accounts": [
+                ["id": "user_01A", "token": tokenA, "label": "旧号"],
+                ["id": "user_01C", "token": try token(for: "user_01C"), "label": "已填", "actual_cny": 12],
+            ],
+            "active_account_id": "user_01A",
+        ]
+        let migrated = ConfigStore.normalize(raw)
+        XCTAssertEqual(migrated.accounts.first { $0.id == "user_01A" }?.actualCny ?? 0, 66, accuracy: 0.001)
+        XCTAssertEqual(migrated.accounts.first { $0.id == "user_01C" }?.actualCny ?? 0, 12, accuracy: 0.001)
+        XCTAssertEqual(migrated.actualCny, 66, accuracy: 0.001)
     }
 
     func testAlertMarksAllNewlyCrossedLevels() {

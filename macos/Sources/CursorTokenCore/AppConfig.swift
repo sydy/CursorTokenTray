@@ -77,6 +77,7 @@ public struct Account: Equatable, Sendable, Codable {
     public var lowQuotaNotified: Bool
     public var tokenDecryptFailed: Bool
     public var storedToken: String
+    public var actualCny: Double
 
     public init(
         id: String = "",
@@ -96,7 +97,8 @@ public struct Account: Equatable, Sendable, Codable {
         exhaustionNotified: Bool = false,
         lowQuotaNotified: Bool = false,
         tokenDecryptFailed: Bool = false,
-        storedToken: String = ""
+        storedToken: String = "",
+        actualCny: Double = 0
     ) {
         self.id = id
         self.label = label
@@ -116,6 +118,7 @@ public struct Account: Equatable, Sendable, Codable {
         self.lowQuotaNotified = lowQuotaNotified
         self.tokenDecryptFailed = tokenDecryptFailed
         self.storedToken = storedToken
+        self.actualCny = UsageEvents.clampActualCny(actualCny)
     }
 
     public var displayLabel: String {
@@ -227,8 +230,21 @@ public struct AppConfig: Equatable, Sendable {
             monthlyPlanUsd: monthlyPlanUsd,
             usdCnyRate: usdCnyRate,
             membershipType: membership ?? activeAccount?.membershipType ?? "",
-            actualCny: actualCny
+            actualCny: activeAccount?.actualCny ?? actualCny
         )
+    }
+
+    public mutating func setActualCny(_ accountId: String, _ amount: Double) -> Bool {
+        guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else { return false }
+        let clamped = UsageEvents.clampActualCny(amount)
+        if accounts[idx].actualCny != clamped {
+            accounts[idx].actualCny = clamped
+            AccountSync.touchAccount(&accounts[idx])
+        } else {
+            accounts[idx].actualCny = clamped
+        }
+        syncLegacyFields()
+        return true
     }
 
     public mutating func upsertAccount(
@@ -379,6 +395,7 @@ public struct AppConfig: Equatable, Sendable {
         authErrorNotified = acc.authErrorNotified
         exhaustionNotified = acc.exhaustionNotified
         lowQuotaNotified = acc.lowQuotaNotified
+        actualCny = UsageEvents.clampActualCny(acc.actualCny)
     }
 
     mutating func copyLegacyFlags(into account: inout Account) {
@@ -386,6 +403,9 @@ public struct AppConfig: Equatable, Sendable {
         account.authErrorNotified = authErrorNotified
         account.exhaustionNotified = exhaustionNotified
         account.lowQuotaNotified = lowQuotaNotified
+        if account.actualCny <= 0, actualCny > 0 {
+            account.actualCny = UsageEvents.clampActualCny(actualCny)
+        }
     }
 }
 
@@ -531,6 +551,7 @@ public enum ConfigStore {
         }
         cfg.alertNotifiedLevels = parseIntList(raw["alert_notified_levels"])
         cfg.accounts = parseAccounts(raw["accounts"])
+        migrateLegacyActualCny(&cfg, raw: raw)
         if cfg.accounts.contains(where: \.tokenDecryptFailed) { cfg.decryptError = true }
         if let v = raw["sync_enabled"] as? Bool { cfg.syncEnabled = v }
         if let v = raw["sync_path"] as? String { cfg.syncPath = v.trimmingCharacters(in: .whitespaces) }
@@ -589,6 +610,19 @@ public enum ConfigStore {
         return cfg
     }
 
+    static func migrateLegacyActualCny(_ cfg: inout AppConfig, raw: [String: Any]) {
+        let legacy = UsageEvents.clampActualCny(cfg.actualCny)
+        guard legacy > 0, let rows = raw["accounts"] as? [[String: Any]] else { return }
+        var specified = Set<String>()
+        for row in rows {
+            let id = (row["id"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            if row["actual_cny"] != nil || row["actualCny"] != nil { specified.insert(id) }
+        }
+        for i in cfg.accounts.indices where !specified.contains(cfg.accounts[i].id) && cfg.accounts[i].actualCny <= 0 {
+            cfg.accounts[i].actualCny = legacy
+        }
+    }
+
     static func parseAccounts(_ raw: Any?) -> [Account] {
         guard let rows = raw as? [[String: Any]] else { return [] }
         return rows.compactMap(sanitizeAccount)
@@ -634,6 +668,9 @@ public enum ConfigStore {
         acc.authErrorNotified = boolValue(raw["auth_error_notified"])
         acc.exhaustionNotified = boolValue(raw["exhaustion_notified"])
         acc.lowQuotaNotified = boolValue(raw["low_quota_notified"])
+        if raw["actual_cny"] != nil || raw["actualCny"] != nil {
+            acc.actualCny = UsageEvents.clampActualCny(doubleValue(raw["actual_cny"] ?? raw["actualCny"]) ?? 0)
+        }
         return acc
     }
 
@@ -709,6 +746,7 @@ public enum ConfigStore {
                     "low_quota_notified": acc.lowQuotaNotified,
                 ]
                 if let r = acc.lastRemaining { d["last_remaining"] = r } else { d["last_remaining"] = NSNull() }
+                d["actual_cny"] = acc.actualCny
                 return d
             },
             "active_account_id": cfg.activeAccountId,

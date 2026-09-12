@@ -1,7 +1,7 @@
 """账号多端同步：口令加密文件 + 按账号时间戳合并。
 
 同步文件可放进 iCloud / OneDrive / 坚果云 / U 盘。两端填相同口令即可。
-只同步账号身份（id / label / token / membership / 临时有效期），不覆盖本机告警去重与用量缓存。
+只同步账号身份（id / label / token / membership / 临时有效期 / 实际成本），不覆盖本机告警去重与用量缓存。
 """
 
 from __future__ import annotations
@@ -147,6 +147,12 @@ def touch_account(account: dict[str, Any], stamp: str | None = None) -> None:
     account["sync_updated_at"] = stamp or now_iso()
 
 
+def _snapshot_actual_cny(account: dict[str, Any]) -> float:
+    from usage_report import clamp_actual_cny
+
+    return clamp_actual_cny(account.get("actual_cny", account.get("actualCny")))
+
+
 def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(account.get("id") or "").strip(),
@@ -157,6 +163,7 @@ def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
         "temp_start_at": str(account.get("temp_start_at") or "").strip(),
         "temp_valid_days": clamp_temp_valid_days(account.get("temp_valid_days")),
         "temp_valid_hours": clamp_temp_valid_hours(account.get("temp_valid_hours")),
+        "actual_cny": _snapshot_actual_cny(account),
         "sync_updated_at": str(account.get("sync_updated_at") or "").strip(),
     }
 
@@ -189,6 +196,7 @@ def snapshot_identity(snap: dict[str, Any]) -> tuple:
             a.get("temp_start_at") or "",
             int(a.get("temp_valid_days") or 0),
             int(a.get("temp_valid_hours") or 0),
+            _snapshot_actual_cny(a),
             a["sync_updated_at"],
         )
         for a in sorted(snap.get("accounts") or [], key=lambda x: x.get("id") or "")
@@ -260,6 +268,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
             a.get("temp_start_at"),
             a.get("temp_valid_days"),
             a.get("temp_valid_hours"),
+            a.get("actual_cny"),
             a.get("sync_updated_at"),
         )
         for a in list_accounts(cfg)
@@ -307,6 +316,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
             a.get("temp_start_at"),
             a.get("temp_valid_days"),
             a.get("temp_valid_hours"),
+            a.get("actual_cny"),
             a.get("sync_updated_at"),
         )
         for a in list_accounts(cfg)
@@ -321,6 +331,7 @@ def _apply_identity(account: dict[str, Any], ident: dict[str, Any]) -> None:
     account["temp_start_at"] = str(ident.get("temp_start_at") or "").strip()
     account["temp_valid_days"] = clamp_temp_valid_days(ident.get("temp_valid_days"))
     account["temp_valid_hours"] = clamp_temp_valid_hours(ident.get("temp_valid_hours"))
+    account["actual_cny"] = _snapshot_actual_cny(ident)
     account["sync_updated_at"] = ident["sync_updated_at"]
 
 

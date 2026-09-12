@@ -433,13 +433,56 @@ public class FixtureTests
             var token = $"user_01SAVE%3A%3A{header}.{payload}.sig";
             var cfg = new AppConfig();
             cfg.UpsertAccount(token, label: "工作", activate: true);
+            Assert.True(cfg.SetActualCny("user_01SAVE", 79));
             ConfigStore.Save(cfg, dir);
             var loaded = ConfigStore.Load(dir);
             Assert.Single(loaded.Accounts);
             Assert.Equal("工作", loaded.Accounts[0].Label);
+            Assert.Equal(79, loaded.Accounts[0].ActualCny, 3);
+            Assert.Equal(79, loaded.ActualCny, 3);
             Assert.Equal("user_01SAVE", loaded.ActiveAccountId);
+            Assert.Equal(79, loaded.SpendSettings().ActualCny, 3);
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Fact]
+    public void PerAccountActualCnyAndLegacyMigration()
+    {
+        static string TokenFor(string user)
+        {
+            var header = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\"alg\":\"none\"}"))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var payload = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { sub = "github|" + user }))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            return $"{user}%3A%3A{header}.{payload}.sig";
+        }
+
+        var cfg = new AppConfig();
+        cfg.UpsertAccount(TokenFor("user_01A"), label: "个人", activate: true);
+        cfg.UpsertAccount(TokenFor("user_01B"), label: "企业", activate: false);
+        Assert.True(cfg.SetActualCny("user_01A", 79));
+        Assert.True(cfg.SetActualCny("user_01B", 128));
+        Assert.Equal(79, cfg.Accounts.First(a => a.Id == "user_01A").ActualCny, 3);
+        Assert.Equal(128, cfg.Accounts.First(a => a.Id == "user_01B").ActualCny, 3);
+        Assert.True(cfg.SetActiveAccount("user_01B"));
+        Assert.Equal(128, cfg.ActualCny, 3);
+        Assert.Equal(128, cfg.SpendSettings().ActualCny, 3);
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["actual_cny"] = 66,
+            ["accounts"] = new object[]
+            {
+                new Dictionary<string, object?> { ["id"] = "user_01A", ["token"] = TokenFor("user_01A"), ["label"] = "旧号" },
+                new Dictionary<string, object?> { ["id"] = "user_01C", ["token"] = TokenFor("user_01C"), ["label"] = "已填", ["actual_cny"] = 12 },
+            },
+            ["active_account_id"] = "user_01A",
+        }));
+        var migrated = ConfigStore.Normalize(doc.RootElement);
+        Assert.Equal(66, migrated.Accounts.First(a => a.Id == "user_01A").ActualCny, 3);
+        Assert.Equal(12, migrated.Accounts.First(a => a.Id == "user_01C").ActualCny, 3);
+        Assert.Equal(66, migrated.ActualCny, 3);
     }
 
     [Fact]
