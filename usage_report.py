@@ -16,7 +16,6 @@ from cursor_api import (
     format_usd_cents,
     is_first_party_model,
     is_grok_bot_model,
-    is_team_membership,
 )
 
 FILTERED_USAGE_ENDPOINT = "/api/dashboard/get-filtered-usage-events"
@@ -149,7 +148,8 @@ class UsageReport:
     first_party_count: int = 0
     api_count: int = 0
     grok_bot_count: int = 0
-    uses_enterprise_allowance: bool = False
+    actual_cny: float = 0.0
+    uses_actual_cny: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,6 +166,7 @@ class CnySpendSettings:
     monthly_plan_usd: float = 0.0
     usd_cny_rate: float = DEFAULT_USD_CNY_RATE
     membership_type: str = ""
+    actual_cny: float = 0.0
 
 
 def classify_usage_kind(
@@ -206,14 +207,6 @@ def classify_usage_category(model: str | None) -> str:
 
 def category_label(category: str | None) -> str:
     return CATEGORY_LABELS.get((category or "").strip().lower(), CATEGORY_LABELS[CATEGORY_API])
-
-
-def uses_enterprise_allowance(spend: CnySpendSettings | None) -> bool:
-    if spend is None:
-        return False
-    if clamp_monthly_plan_usd(spend.monthly_plan_usd) > 0:
-        return False
-    return is_team_membership(spend.membership_type)
 
 
 def event_cost_cents(event: UsageEvent) -> float:
@@ -257,6 +250,16 @@ def clamp_monthly_plan_usd(usd: float | None) -> float:
     return min(10_000.0, n)
 
 
+def clamp_actual_cny(amount: float | None) -> float:
+    try:
+        n = float(amount) if amount is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    if n != n or n in (float("inf"), float("-inf")) or n < 0:
+        return 0.0
+    return min(1_000_000.0, n)
+
+
 def default_monthly_plan_usd(membership: str | None) -> float:
     key = (membership or "").strip().lower().replace(" ", "")
     if key.endswith("套餐"):
@@ -274,6 +277,9 @@ def resolve_monthly_plan_usd(monthly_plan_usd: float | None, membership: str | N
 def plan_cny_amount(spend: CnySpendSettings | None) -> float:
     if spend is None:
         return 0.0
+    actual = clamp_actual_cny(spend.actual_cny)
+    if actual > 0:
+        return actual
     rate = clamp_usd_cny_rate(spend.usd_cny_rate)
     return resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type) * rate
 
@@ -302,11 +308,10 @@ def allocate_event_cny(
     included_count: int,
     plan_cny: float,
     rate: float,
-    enterprise_allowance: bool = False,
 ) -> float:
     if event.kind == KIND_FREE:
         return 0.0
-    if event.kind == KIND_ON_DEMAND or enterprise_allowance:
+    if event.kind == KIND_ON_DEMAND:
         return event_cost_cents(event) / 100.0 * rate
     cents = event_cost_cents(event)
     if included_cost_sum > 1e-9:
@@ -319,27 +324,26 @@ def allocate_event_cny(
 def _cny_by_id(
     events: list[UsageEvent] | tuple[UsageEvent, ...],
     spend: CnySpendSettings | None,
-) -> tuple[dict[str, float], float, float, float, float, bool]:
+) -> tuple[dict[str, float], float, float, float, float, float, bool]:
     if spend is None:
-        return {}, 0.0, 0.0, 0.0, 0.0, False
+        return {}, 0.0, 0.0, 0.0, 0.0, 0.0, False
     rate = clamp_usd_cny_rate(spend.usd_cny_rate)
-    enterprise = uses_enterprise_allowance(spend)
-    monthly = 0.0 if enterprise else resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type)
+    monthly = resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type)
+    actual = clamp_actual_cny(spend.actual_cny)
+    uses_actual = actual > 0
+    plan_cny = actual if uses_actual else monthly * rate
     included = [ev for ev in events if is_plan_covered_kind(ev.kind)]
     included_cost_sum = sum(event_cost_cents(ev) for ev in included)
     included_count = len(included)
-    plan_cny = included_cost_sum / 100.0 * rate if enterprise else monthly * rate
     by_id: dict[str, float] = {}
     on_demand_cny = 0.0
     for i, ev in enumerate(events):
-        amount = allocate_event_cny(
-            ev, included_cost_sum, included_count, plan_cny, rate, enterprise
-        )
+        amount = allocate_event_cny(ev, included_cost_sum, included_count, plan_cny, rate)
         key = ev.id or f"#{i}"
         by_id[key] = amount
         if ev.kind == KIND_ON_DEMAND:
             on_demand_cny += amount
-    return by_id, plan_cny, on_demand_cny, monthly, rate, enterprise
+    return by_id, plan_cny, on_demand_cny, monthly, rate, actual, uses_actual
 
 
 def format_event_time(timestamp_ms: int) -> str:
@@ -615,7 +619,7 @@ def build_usage_report(
     model = (filt.model or "").strip()
     owning = (filt.owning_user or "").strip()
     source = list(events)
-    cny_by_id, plan_cny, on_demand_cny, monthly, rate, enterprise = _cny_by_id(source, spend)
+    cny_by_id, plan_cny, on_demand_cny, monthly, rate, actual, uses_actual = _cny_by_id(source, spend)
     selected: list[UsageEvent] = []
     for i, event in enumerate(source):
         if kind and event.kind != kind:
@@ -718,7 +722,8 @@ def build_usage_report(
         first_party_count=first_party,
         api_count=api,
         grok_bot_count=grok_bot,
-        uses_enterprise_allowance=enterprise,
+        actual_cny=actual,
+        uses_actual_cny=uses_actual,
         daily=daily,
         models=models,
         events=tuple(selected),
@@ -737,7 +742,7 @@ def usage_events_to_csv(
 ) -> str:
     cny_by_id: dict[str, float] = {}
     if spend is not None:
-        cny_by_id, _, _, _, _, _ = _cny_by_id(allocation_base if allocation_base is not None else events, spend)
+        cny_by_id, _, _, _, _, _, _ = _cny_by_id(allocation_base if allocation_base is not None else events, spend)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(CSV_HEADER.split(","))

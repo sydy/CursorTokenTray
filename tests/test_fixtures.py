@@ -210,6 +210,7 @@ class GoldenFixtureTests(unittest.TestCase):
                     monthly_plan_usd=spend_raw["monthly_plan_usd"],
                     usd_cny_rate=spend_raw["usd_cny_rate"],
                     membership_type=spend_raw.get("membership_type", ""),
+                    actual_cny=spend_raw.get("actual_cny", 0),
                 ),
             )
             exp = cse["expected"]
@@ -218,8 +219,10 @@ class GoldenFixtureTests(unittest.TestCase):
             self.assertAlmostEqual(report.plan_cny, exp["plan_cny"], places=3)
             self.assertAlmostEqual(report.on_demand_cny, exp["on_demand_cny"], places=3)
             self.assertAlmostEqual(report.total_cny, exp["total_cny"], places=3)
-            if "uses_enterprise_allowance" in exp:
-                self.assertEqual(report.uses_enterprise_allowance, exp["uses_enterprise_allowance"])
+            if "actual_cny" in exp:
+                self.assertAlmostEqual(report.actual_cny, exp["actual_cny"], places=3)
+            if "uses_actual_cny" in exp:
+                self.assertEqual(report.uses_actual_cny, exp["uses_actual_cny"])
             self.assertEqual(len(report.events), len(exp["event_cny"]))
             for got, want in zip(report.events, exp["event_cny"]):
                 self.assertAlmostEqual(got.allocated_cny, want, places=3)

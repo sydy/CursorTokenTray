@@ -286,7 +286,8 @@ final class UsageParserFixtureTests: XCTestCase {
                 spend: CnySpendSettings(
                     monthlyPlanUsd: num(spendRaw["monthly_plan_usd"]) ?? 0,
                     usdCnyRate: num(spendRaw["usd_cny_rate"]) ?? UsageEvents.defaultUsdCnyRate,
-                    membershipType: str(spendRaw["membership_type"])
+                    membershipType: str(spendRaw["membership_type"]),
+                    actualCny: num(spendRaw["actual_cny"]) ?? 0
                 )
             )
             let exp = cse["expected"] as! [String: Any]
@@ -295,8 +296,11 @@ final class UsageParserFixtureTests: XCTestCase {
             XCTAssertEqual(report.planCny, try XCTUnwrap(num(exp["plan_cny"])), accuracy: 0.001)
             XCTAssertEqual(report.onDemandCny, try XCTUnwrap(num(exp["on_demand_cny"])), accuracy: 0.001)
             XCTAssertEqual(report.totalCny, try XCTUnwrap(num(exp["total_cny"])), accuracy: 0.001)
-            if let wantEnterprise = exp["uses_enterprise_allowance"] as? Bool {
-                XCTAssertEqual(report.usesEnterpriseAllowance, wantEnterprise)
+            if let wantActual = num(exp["actual_cny"]) {
+                XCTAssertEqual(report.actualCny, wantActual, accuracy: 0.001)
+            }
+            if let usesActual = exp["uses_actual_cny"] as? Bool {
+                XCTAssertEqual(report.usesActualCny, usesActual)
             }
             let eventCny = (exp["event_cny"] as! [Any]).compactMap { num($0) }
             XCTAssertEqual(report.events.count, eventCny.count)

@@ -61,7 +61,6 @@ public sealed class UsageReport
     public int FirstPartyCount { get; init; }
     public int ApiCount { get; init; }
     public int GrokBotCount { get; init; }
-    public bool UsesEnterpriseAllowance { get; init; }
     public List<DailyUsageRow> Daily { get; init; } = [];
     public List<ModelUsageRow> Models { get; init; } = [];
     public List<UsageEvent> Events { get; init; } = [];
@@ -70,9 +69,11 @@ public sealed class UsageReport
     public double OnDemandCny { get; init; }
     public double UsdCnyRate { get; init; }
     public double MonthlyPlanUsd { get; init; }
+    public double ActualCny { get; init; }
+    public bool UsesActualCny { get; init; }
 }
 
-public readonly record struct CnySpendSettings(double MonthlyPlanUsd, double UsdCnyRate, string MembershipType)
+public readonly record struct CnySpendSettings(double MonthlyPlanUsd, double UsdCnyRate, string MembershipType, double ActualCny = 0)
 {
     public static CnySpendSettings Default => new(0, UsageEvents.DefaultUsdCnyRate, "");
 }
@@ -122,11 +123,18 @@ public static class UsageEvents
         _ => "API",
     };
 
-    public static bool UsesEnterpriseAllowance(CnySpendSettings? spend)
+    public static double ClampActualCny(double amount)
     {
-        if (spend is null) return false;
-        if (ClampMonthlyPlanUsd(spend.Value.MonthlyPlanUsd) > 0) return false;
-        return UsageParser.IsTeamMembership(spend.Value.MembershipType);
+        if (double.IsNaN(amount) || double.IsInfinity(amount) || amount < 0) return 0;
+        return Math.Min(amount, 1_000_000);
+    }
+
+    public static (double planCny, double monthly, double rate, double actual, bool usesActual) ResolvePlanCny(CnySpendSettings spend)
+    {
+        var rate = ClampUsdCnyRate(spend.UsdCnyRate);
+        var monthly = ResolveMonthlyPlanUsd(spend.MonthlyPlanUsd, spend.MembershipType);
+        var actual = ClampActualCny(spend.ActualCny);
+        return actual > 0 ? (actual, monthly, rate, actual, true) : (monthly * rate, monthly, rate, 0, false);
     }
 
     public static string ClassifyKind(string? kind, string? usageBasedCosts = null, bool isChargeable = false)
@@ -206,38 +214,38 @@ public static class UsageEvents
         return FormatCny(amount ?? ev.AllocatedCny);
     }
 
-    public static double AllocateEventCny(UsageEvent ev, double includedCostSum, int includedCount, double planCny, double rate, bool enterpriseAllowance = false)
+    public static double AllocateEventCny(UsageEvent ev, double includedCostSum, int includedCount, double planCny, double rate)
     {
         if (ev.Kind == KindFree) return 0;
-        if (ev.Kind == KindOnDemand || enterpriseAllowance) return CostCents(ev) / 100.0 * rate;
+        if (ev.Kind == KindOnDemand) return CostCents(ev) / 100.0 * rate;
         var cents = CostCents(ev);
         if (includedCostSum > 1e-9) return planCny * (cents / includedCostSum);
         if (includedCount > 0 && planCny > 0) return planCny / includedCount;
         return 0;
     }
 
-    static (Dictionary<string, double> byId, double planCny, double onDemandCny, double monthly, double rate, bool enterprise) CnyById(
+    static (Dictionary<string, double> byId, double planCny, double onDemandCny, double monthly, double rate, double actual, bool usesActual) CnyById(
         IList<UsageEvent> events, CnySpendSettings? spend)
     {
-        if (spend is null) return ([], 0, 0, 0, 0, false);
-        var rate = ClampUsdCnyRate(spend.Value.UsdCnyRate);
-        var enterprise = UsesEnterpriseAllowance(spend);
-        var monthly = enterprise ? 0 : ResolveMonthlyPlanUsd(spend.Value.MonthlyPlanUsd, spend.Value.MembershipType);
+        if (spend is null) return ([], 0, 0, 0, 0, 0, false);
+        var resolved = ResolvePlanCny(spend.Value);
+        var rate = resolved.rate;
+        var monthly = resolved.monthly;
         var included = events.Where(ev => IsPlanCovered(ev.Kind)).ToList();
         var includedCostSum = included.Sum(CostCents);
         var includedCount = included.Count;
-        var planCny = enterprise ? includedCostSum / 100.0 * rate : monthly * rate;
+        var planCny = resolved.planCny;
         var byId = new Dictionary<string, double>(StringComparer.Ordinal);
         var onDemandCny = 0.0;
         for (var i = 0; i < events.Count; i++)
         {
             var ev = events[i];
-            var amount = AllocateEventCny(ev, includedCostSum, includedCount, planCny, rate, enterprise);
+            var amount = AllocateEventCny(ev, includedCostSum, includedCount, planCny, rate);
             var key = ev.Id.Length > 0 ? ev.Id : $"#{i}";
             byId[key] = amount;
             if (ev.Kind == KindOnDemand) onDemandCny += amount;
         }
-        return (byId, planCny, onDemandCny, monthly, rate, enterprise);
+        return (byId, planCny, onDemandCny, monthly, rate, resolved.actual, resolved.usesActual);
     }
 
     public static string FormatTime(long timestampMs)
@@ -469,7 +477,7 @@ public static class UsageEvents
         var model = (filter.Model ?? "").Trim();
         var owning = (filter.OwningUser ?? "").Trim();
         var source = events as IList<UsageEvent> ?? events.ToList();
-        var (cnyById, planCny, onDemandCny, monthly, rate, enterprise) = CnyById(source, spend);
+        var (cnyById, planCny, onDemandCny, monthly, rate, actual, usesActual) = CnyById(source, spend);
         var selected = new List<UsageEvent>();
         for (var i = 0; i < source.Count; i++)
         {
@@ -532,7 +540,8 @@ public static class UsageEvents
             FirstPartyCount = firstParty,
             ApiCount = api,
             GrokBotCount = grokBot,
-            UsesEnterpriseAllowance = enterprise,
+            ActualCny = actual,
+            UsesActualCny = usesActual,
             Daily = dailyMap.OrderBy(kv => kv.Key).Select(kv => new DailyUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.cny)).ToList(),
             Models = modelMap.Select(kv => new ModelUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.headless, kv.Value.cny))
                 .OrderByDescending(m => m.Tokens).ThenByDescending(m => m.Cents).ThenByDescending(m => m.Count).ToList(),

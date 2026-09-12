@@ -389,7 +389,7 @@ sealed class ReportForm : Form
         if (report.PlanCny <= 0 && report.OnDemandCny <= 0) return "";
         var expected = report.PlanCny + report.OnDemandCny;
         var rate = report.UsdCnyRate.ToString("0.00", CultureInfo.InvariantCulture);
-        var planLabel = report.UsesEnterpriseAllowance ? "额度" : "月费";
+        var planLabel = report.UsesActualCny ? "成本" : "月费";
         return $"    预计实付 {UsageEvents.FormatCny(expected)}（{planLabel} {UsageEvents.FormatCny(report.PlanCny)} + 按需 {UsageEvents.FormatCny(report.OnDemandCny)}）· 汇率 {rate}";
     }
 

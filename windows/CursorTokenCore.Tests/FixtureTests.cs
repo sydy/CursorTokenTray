@@ -262,15 +262,18 @@ public class FixtureTests
             }, new CnySpendSettings(
                 spendEl.GetProperty("monthly_plan_usd").GetDouble(),
                 spendEl.GetProperty("usd_cny_rate").GetDouble(),
-                NullStr(spendEl, "membership_type") ?? ""));
+                NullStr(spendEl, "membership_type") ?? "",
+                spendEl.TryGetProperty("actual_cny", out var actualIn) ? actualIn.GetDouble() : 0));
             var exp = cse.GetProperty("expected");
             Assert.Equal(exp.GetProperty("monthly_plan_usd").GetDouble(), report.MonthlyPlanUsd, 3);
             Assert.Equal(exp.GetProperty("usd_cny_rate").GetDouble(), report.UsdCnyRate, 3);
             Assert.Equal(exp.GetProperty("plan_cny").GetDouble(), report.PlanCny, 3);
             Assert.Equal(exp.GetProperty("on_demand_cny").GetDouble(), report.OnDemandCny, 3);
             Assert.Equal(exp.GetProperty("total_cny").GetDouble(), report.TotalCny, 3);
-            if (exp.TryGetProperty("uses_enterprise_allowance", out var enterprise))
-                Assert.Equal(enterprise.GetBoolean(), report.UsesEnterpriseAllowance);
+            if (exp.TryGetProperty("actual_cny", out var actualExp))
+                Assert.Equal(actualExp.GetDouble(), report.ActualCny, 3);
+            if (exp.TryGetProperty("uses_actual_cny", out var usesActual))
+                Assert.Equal(usesActual.GetBoolean(), report.UsesActualCny);
             var eventCny = exp.GetProperty("event_cny").EnumerateArray().Select(x => x.GetDouble()).ToList();
             Assert.Equal(eventCny.Count, report.Events.Count);
             for (var i = 0; i < eventCny.Count; i++)

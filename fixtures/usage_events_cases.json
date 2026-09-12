@@ -702,7 +702,7 @@
         }
       },
       {
-        "name": "enterprise_actual_allowance",
+        "name": "enterprise_quota_is_not_spend",
         "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "enterprise" },
         "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
         "events": [
@@ -749,21 +749,69 @@
         "expected": {
           "monthly_plan_usd": 0.0,
           "usd_cny_rate": 7.5,
-          "plan_cny": 5.925,
+          "plan_cny": 0.0,
           "on_demand_cny": 12.525,
-          "total_cny": 18.45,
-          "uses_enterprise_allowance": true,
-          "event_cny": [2.175, 12.525, 3.75],
+          "total_cny": 12.525,
+          "actual_cny": 0.0,
+          "uses_actual_cny": false,
+          "event_cny": [0.0, 12.525, 0.0],
           "models": [
-            { "name": "cursor-grok-4.6-high-fast", "cny": 2.175 },
+            { "name": "cursor-grok-4.6-high-fast", "cny": 0.0 },
             { "name": "claude-4.5-sonnet", "cny": 12.525 },
-            { "name": "grok-bot-default", "cny": 3.75 }
+            { "name": "grok-bot-default", "cny": 0.0 }
           ]
         }
       },
       {
-        "name": "enterprise_filter_grok_bot",
-        "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "Enterprise" },
+        "name": "enterprise_actual_cny",
+        "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "enterprise", "actual_cny": 79 },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "inc",
+            "timestamp_ms": 3000,
+            "model": "cursor-grok-4.6-high-fast",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 1800,
+            "charged_cents": 29.0,
+            "total_cents": 29.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "bot",
+            "timestamp_ms": 1000,
+            "model": "grok-bot-default",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 400,
+            "charged_cents": 50.0,
+            "total_cents": 50.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 0.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 79.0,
+          "on_demand_cny": 0.0,
+          "total_cny": 79.0,
+          "actual_cny": 79.0,
+          "uses_actual_cny": true,
+          "event_cny": [29.0, 50.0],
+          "models": [
+            { "name": "cursor-grok-4.6-high-fast", "cny": 29.0 },
+            { "name": "grok-bot-default", "cny": 50.0 }
+          ]
+        }
+      },
+      {
+        "name": "enterprise_actual_cny_filter_grok_bot",
+        "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "Enterprise", "actual_cny": 79 },
         "filter": { "kind": "", "category": "grok_bot", "model": "", "headless": null, "owning_user": "" },
         "events": [
           {
@@ -796,13 +844,47 @@
         "expected": {
           "monthly_plan_usd": 0.0,
           "usd_cny_rate": 7.5,
-          "plan_cny": 5.925,
+          "plan_cny": 79.0,
           "on_demand_cny": 0.0,
-          "total_cny": 3.75,
-          "uses_enterprise_allowance": true,
-          "event_cny": [3.75],
+          "total_cny": 50.0,
+          "actual_cny": 79.0,
+          "uses_actual_cny": true,
+          "event_cny": [50.0],
           "models": [
-            { "name": "grok-bot-default", "cny": 3.75 }
+            { "name": "grok-bot-default", "cny": 50.0 }
+          ]
+        }
+      },
+      {
+        "name": "enterprise_actual_cny_overrides_monthly",
+        "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "enterprise", "actual_cny": 80 },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "a",
+            "timestamp_ms": 1000,
+            "model": "auto",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 10,
+            "charged_cents": 50.0,
+            "total_cents": 50.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 16.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 80.0,
+          "on_demand_cny": 0.0,
+          "total_cny": 80.0,
+          "actual_cny": 80.0,
+          "uses_actual_cny": true,
+          "event_cny": [80.0],
+          "models": [
+            { "name": "auto", "cny": 80.0 }
           ]
         }
       },
@@ -831,7 +913,8 @@
           "plan_cny": 120.0,
           "on_demand_cny": 0.0,
           "total_cny": 120.0,
-          "uses_enterprise_allowance": false,
+          "actual_cny": 0.0,
+          "uses_actual_cny": false,
           "event_cny": [120.0],
           "models": [
             { "name": "auto", "cny": 120.0 }

@@ -163,6 +163,7 @@ public struct AppConfig: Equatable, Sendable {
     public var autostartEnabled: Bool
     public var trayDisplayMode: String
     public var monthlyPlanUsd: Double
+    public var actualCny: Double
     public var usdCnyRate: Double
     public var lowQuotaNotified: Bool
     public var authErrorNotified: Bool
@@ -196,6 +197,7 @@ public struct AppConfig: Equatable, Sendable {
         autostartEnabled: true,
         trayDisplayMode: "ring",
         monthlyPlanUsd: 0,
+        actualCny: 0,
         usdCnyRate: UsageEvents.defaultUsdCnyRate,
         lowQuotaNotified: false,
         authErrorNotified: false,
@@ -224,7 +226,8 @@ public struct AppConfig: Equatable, Sendable {
         CnySpendSettings(
             monthlyPlanUsd: monthlyPlanUsd,
             usdCnyRate: usdCnyRate,
-            membershipType: membership ?? activeAccount?.membershipType ?? ""
+            membershipType: membership ?? activeAccount?.membershipType ?? "",
+            actualCny: actualCny
         )
     }
 
@@ -515,6 +518,7 @@ public enum ConfigStore {
         let mode = ((raw["tray_display_mode"] as? String) ?? "ring").trimmingCharacters(in: .whitespaces).lowercased()
         cfg.trayDisplayMode = AppConfig.displayModes.contains(mode) ? mode : "ring"
         if let v = doubleValue(raw["monthly_plan_usd"]) { cfg.monthlyPlanUsd = UsageEvents.clampMonthlyPlanUsd(v) }
+        if let v = doubleValue(raw["actual_cny"]) { cfg.actualCny = UsageEvents.clampActualCny(v) }
         if let v = doubleValue(raw["usd_cny_rate"]) {
             cfg.usdCnyRate = UsageEvents.clampUsdCnyRate(v)
         } else {
@@ -716,6 +720,7 @@ public enum ConfigStore {
             "autostart_enabled": cfg.autostartEnabled,
             "tray_display_mode": cfg.trayDisplayMode,
             "monthly_plan_usd": cfg.monthlyPlanUsd,
+            "actual_cny": cfg.actualCny,
             "usd_cny_rate": cfg.usdCnyRate,
             "low_quota_notified": cfg.lowQuotaNotified,
             "auth_error_notified": cfg.authErrorNotified,

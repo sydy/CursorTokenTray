@@ -16,10 +16,11 @@ sealed class SettingsForm : Form
     readonly TextBox _token = new() { Multiline = true, Height = 64, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
     readonly TextBox _interval = new() { Width = 80 };
     readonly TextBox _planUsd = new() { Width = 80 };
+    readonly TextBox _actualCny = new() { Width = 80 };
     readonly TextBox _cnyRate = new() { Width = 80 };
     readonly Label _spendHint = new()
     {
-        Text = "月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。个人套餐「实付」= 月费按套餐内费用分摊 + 按需×汇率。企业 / 团队未填月费时，按额度实际扣费（费用×汇率）计算。",
+        Text = "月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。企业 / 团队额度不是真实支出，请填「实际成本（人民币）」按套餐内费用分摊；填了实际成本时优先于月费。按需仍按费用×汇率。",
         AutoSize = true,
         ForeColor = Color.DimGray,
         Margin = new Padding(0, 0, 0, 8),
@@ -117,6 +118,7 @@ sealed class SettingsForm : Form
         _root.Controls.Add(_hint);
         _root.Controls.Add(FieldRow("刷新间隔（分钟）", _interval));
         _root.Controls.Add(FieldRow("月费（美元）", _planUsd));
+        _root.Controls.Add(FieldRow("实际成本（人民币）", _actualCny));
         _root.Controls.Add(FieldRow("美元兑人民币", _cnyRate));
         _root.Controls.Add(_spendHint);
         _root.Controls.Add(FieldRow("告警阈值", _thresholds));
@@ -387,6 +389,7 @@ sealed class SettingsForm : Form
             var membership = cfg.ActiveAccount?.MembershipType ?? "";
             var plan = cfg.MonthlyPlanUsd > 0 ? cfg.MonthlyPlanUsd : UsageEvents.DefaultMonthlyPlanUsd(membership);
             _planUsd.Text = plan.ToString("0.##", CultureInfo.InvariantCulture);
+            _actualCny.Text = cfg.ActualCny.ToString("0.##", CultureInfo.InvariantCulture);
             _cnyRate.Text = cfg.UsdCnyRate.ToString("0.##", CultureInfo.InvariantCulture);
             _thresholds.Text = string.Join(",", cfg.AlertThresholds);
             _notify.Checked = cfg.NotifyEnabled;
@@ -582,6 +585,8 @@ sealed class SettingsForm : Form
         if (int.TryParse(_interval.Text, out var n) && n >= 1) _cfg.RefreshIntervalMinutes = n;
         if (TryParseDecimal(_planUsd.Text, out var planUsd))
             _cfg.MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(planUsd);
+        if (TryParseDecimal(_actualCny.Text, out var actualCny))
+            _cfg.ActualCny = UsageEvents.ClampActualCny(actualCny);
         if (TryParseDecimal(_cnyRate.Text, out var rate))
             _cfg.UsdCnyRate = UsageEvents.ClampUsdCnyRate(rate);
         _cfg.AlertThresholds = ConfigStore.ParseThresholds(_thresholds.Text);

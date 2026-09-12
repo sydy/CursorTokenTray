@@ -142,7 +142,6 @@ public struct UsageReport: Equatable, Sendable {
     public var firstPartyCount: Int = 0
     public var apiCount: Int = 0
     public var grokBotCount: Int = 0
-    public var usesEnterpriseAllowance: Bool = false
     public var daily: [DailyUsageRow]
     public var models: [ModelUsageRow]
     public var events: [UsageEvent]
@@ -151,17 +150,21 @@ public struct UsageReport: Equatable, Sendable {
     public var onDemandCny: Double = 0
     public var usdCnyRate: Double = 0
     public var monthlyPlanUsd: Double = 0
+    public var actualCny: Double = 0
+    public var usesActualCny: Bool = false
 }
 
 public struct CnySpendSettings: Equatable, Sendable {
     public var monthlyPlanUsd: Double
     public var usdCnyRate: Double
     public var membershipType: String
+    public var actualCny: Double
 
-    public init(monthlyPlanUsd: Double = 0, usdCnyRate: Double = UsageEvents.defaultUsdCnyRate, membershipType: String = "") {
+    public init(monthlyPlanUsd: Double = 0, usdCnyRate: Double = UsageEvents.defaultUsdCnyRate, membershipType: String = "", actualCny: Double = 0) {
         self.monthlyPlanUsd = monthlyPlanUsd
         self.usdCnyRate = usdCnyRate
         self.membershipType = membershipType
+        self.actualCny = actualCny
     }
 }
 
@@ -210,10 +213,17 @@ public enum UsageEvents {
         }
     }
 
-    public static func usesEnterpriseAllowance(_ spend: CnySpendSettings?) -> Bool {
-        guard let spend else { return false }
-        if clampMonthlyPlanUsd(spend.monthlyPlanUsd) > 0 { return false }
-        return UsageParser.isTeamMembership(spend.membershipType)
+    public static func clampActualCny(_ amount: Double) -> Double {
+        if amount.isNaN || amount.isInfinite || amount < 0 { return 0 }
+        return min(1_000_000, amount)
+    }
+
+    public static func resolvePlanCny(_ spend: CnySpendSettings) -> (planCny: Double, monthly: Double, rate: Double, actual: Double, usesActual: Bool) {
+        let rate = clampUsdCnyRate(spend.usdCnyRate)
+        let monthly = resolveMonthlyPlanUsd(spend.monthlyPlanUsd, membership: spend.membershipType)
+        let actual = clampActualCny(spend.actualCny)
+        if actual > 0 { return (actual, monthly, rate, actual, true) }
+        return (monthly * rate, monthly, rate, 0, false)
     }
 
     public static func classifyKind(_ kind: String?, usageBasedCosts: String? = nil, isChargeable: Bool = false) -> String {
@@ -297,35 +307,31 @@ public enum UsageEvents {
         includedCostSum: Double,
         includedCount: Int,
         planCny: Double,
-        rate: Double,
-        enterpriseAllowance: Bool = false
+        rate: Double
     ) -> Double {
         if ev.kind == kindFree { return 0 }
-        if ev.kind == kindOnDemand || enterpriseAllowance { return costCents(ev) / 100.0 * rate }
+        if ev.kind == kindOnDemand { return costCents(ev) / 100.0 * rate }
         let cents = costCents(ev)
         if includedCostSum > 1e-9 { return planCny * (cents / includedCostSum) }
         if includedCount > 0 && planCny > 0 { return planCny / Double(includedCount) }
         return 0
     }
 
-    static func cnyById(_ events: [UsageEvent], spend: CnySpendSettings?) -> (byId: [String: Double], planCny: Double, onDemandCny: Double, monthly: Double, rate: Double, enterprise: Bool) {
-        guard let spend else { return ([:], 0, 0, 0, 0, false) }
-        let rate = clampUsdCnyRate(spend.usdCnyRate)
-        let enterprise = usesEnterpriseAllowance(spend)
-        let monthly = enterprise ? 0 : resolveMonthlyPlanUsd(spend.monthlyPlanUsd, membership: spend.membershipType)
+    static func cnyById(_ events: [UsageEvent], spend: CnySpendSettings?) -> (byId: [String: Double], planCny: Double, onDemandCny: Double, monthly: Double, rate: Double, actual: Double, usesActual: Bool) {
+        guard let spend else { return ([:], 0, 0, 0, 0, 0, false) }
+        let resolved = resolvePlanCny(spend)
         let included = events.filter { isPlanCovered($0.kind) }
         let includedCostSum = included.reduce(0.0) { $0 + costCents($1) }
         let includedCount = included.count
-        let planCny = enterprise ? includedCostSum / 100.0 * rate : monthly * rate
         var byId: [String: Double] = [:]
         var onDemandCny = 0.0
         for (i, ev) in events.enumerated() {
-            let amount = allocateEventCny(ev, includedCostSum: includedCostSum, includedCount: includedCount, planCny: planCny, rate: rate, enterpriseAllowance: enterprise)
+            let amount = allocateEventCny(ev, includedCostSum: includedCostSum, includedCount: includedCount, planCny: resolved.planCny, rate: resolved.rate)
             let key = ev.id.isEmpty ? "#\(i)" : ev.id
             byId[key] = amount
             if ev.kind == kindOnDemand { onDemandCny += amount }
         }
-        return (byId, planCny, onDemandCny, monthly, rate, enterprise)
+        return (byId, resolved.planCny, onDemandCny, resolved.monthly, resolved.rate, resolved.actual, resolved.usesActual)
     }
 
     public static func formatTime(_ timestampMs: Int64) -> String {
@@ -651,7 +657,6 @@ public enum UsageEvents {
             firstPartyCount: firstParty,
             apiCount: api,
             grokBotCount: grokBot,
-            usesEnterpriseAllowance: allocated.enterprise,
             daily: daily,
             models: models,
             events: selected,
@@ -659,12 +664,14 @@ public enum UsageEvents {
             planCny: allocated.planCny,
             onDemandCny: allocated.onDemandCny,
             usdCnyRate: allocated.rate,
-            monthlyPlanUsd: allocated.monthly
+            monthlyPlanUsd: allocated.monthly,
+            actualCny: allocated.actual,
+            usesActualCny: allocated.usesActual
         )
     }
 
     public static func toCSV(_ events: [UsageEvent], spend: CnySpendSettings? = nil, allocationBase: [UsageEvent]? = nil) -> String {
-        let allocated = spend == nil ? (byId: [String: Double](), planCny: 0.0, onDemandCny: 0.0, monthly: 0.0, rate: 0.0, enterprise: false) : cnyById(allocationBase ?? events, spend: spend)
+        let allocated = spend == nil ? (byId: [String: Double](), planCny: 0.0, onDemandCny: 0.0, monthly: 0.0, rate: 0.0, actual: 0.0, usesActual: false) : cnyById(allocationBase ?? events, spend: spend)
         var lines = ["\u{FEFF}\(csvHeader)"]
         for (i, ev) in events.enumerated() {
             let cnyText: String

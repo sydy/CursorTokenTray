@@ -20,7 +20,7 @@ Windows 系统托盘、macOS 菜单栏小工具：拉取 Cursor 套餐用量，�
 - 个人套餐与企业 / 团队套餐兼用：个人按 included usage 百分比；企业账号走 [用量页](https://cursor.com/dashboard/usage) 的金额计费（已用 / 额度）
 - **Grok Bot 周额度**：飞出层单独一条进度（本周已用 %）。这是 Cursor 账号上的独立周池，不计入左侧圆环的月度剩余；套餐不含 Bot、企业池化额度或接口失败时不画这条。周额度用尽后若开了按需，会落到同一条 On-Demand 金额卡
 - 中文设置窗口（Windows 为 WinForms，macOS 为 SwiftUI；账号列表、Token、刷新间隔、月费与汇率、告警、通知、显示模式、开机自启）
-- **用量报表**：打开窗口时增量拉取 [Usage 页](https://cursor.com/dashboard/usage) 按次明细，本地缓存；总览、按日趋势、按模型排行、明细表与 CSV 导出。默认当前账号，团队管理员可切全员。可按计费类型、额度（First-party / API / Grok Bot）、模型与来源筛选。个人套餐可填写月费与汇率，把套餐月费按「费用」权重摊到每次套餐内调用，并加上按需实扣；企业 / 团队未填月费时按额度实际扣费计人民币实付
+- **用量报表**：打开窗口时增量拉取 [Usage 页](https://cursor.com/dashboard/usage) 按次明细，本地缓存；总览、按日趋势、按模型排行、明细表与 CSV 导出。默认当前账号，团队管理员可切全员。可按计费类型、额度（First-party / API / Grok Bot）、模型与来源筛选。可填写月费与汇率，或直接填「实际成本（人民币）」按套餐内费用分摊并加上按需实扣；企业 / 团队额度只作展示，不是真实支出
 - 默认每 10 分钟刷新（可配置）
 - 开机自启（默认开启；Windows 写当前用户注册表 `Run` 项，macOS 用 `SMAppService` / LaunchAgent）
 

@@ -342,6 +342,12 @@ class SourceGuardTests(unittest.TestCase):
         self.assertIn("Grok Bot", win_report)
         self.assertIn("CategoryFirstParty", win_report)
         self.assertIn("企业额度", win_report)
+        self.assertIn("UsesActualCny", win_report)
+        win_settings = (root / "windows" / "CursorTokenTray" / "UiForms.cs").read_text(encoding="utf-8")
+        mac_settings = (root / "macos" / "Sources" / "CursorTokenTray" / "SettingsView.swift").read_text(encoding="utf-8")
+        for src in (win_settings, mac_settings):
+            self.assertIn("实际成本（人民币）", src)
+            self.assertIn("额度不是真实支出", src)
         self.assertIn("全部额度", mac_report)
         self.assertIn("First-party", mac_report)
         self.assertIn("Grok Bot", mac_report)

@@ -36,6 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "autostart_enabled": True,
     "tray_display_mode": "ring",  # ring | number | dot
     "monthly_plan_usd": 0,  # 0 = 按套餐预填
+    "actual_cny": 0,  # 0 = 用月费×汇率；企业额度不是真实支出
     "usd_cny_rate": 7.5,
     # 去重状态（跟随当前账号；兼容旧读取路径）
     "low_quota_notified": False,
@@ -157,9 +158,10 @@ def _normalize_config(cfg: dict[str, Any], *, raw: dict[str, Any]) -> dict[str, 
     mode = str(cfg.get("tray_display_mode") or "ring").strip().lower()
     cfg["tray_display_mode"] = mode if mode in _VALID_DISPLAY_MODES else "ring"
 
-    from usage_report import clamp_monthly_plan_usd, clamp_usd_cny_rate
+    from usage_report import clamp_actual_cny, clamp_monthly_plan_usd, clamp_usd_cny_rate
 
     cfg["monthly_plan_usd"] = clamp_monthly_plan_usd(cfg.get("monthly_plan_usd"))
+    cfg["actual_cny"] = clamp_actual_cny(cfg.get("actual_cny"))
     cfg["usd_cny_rate"] = clamp_usd_cny_rate(cfg.get("usd_cny_rate"))
 
     if "alert_thresholds" not in raw and "low_quota_threshold" in raw:
