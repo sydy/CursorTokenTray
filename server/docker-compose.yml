@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      DATABASE_PATH: /data/sync.db
+      TRUST_PROXY: "1"
+    volumes:
+      - sync-data:/data
+
+volumes:
+  sync-data:

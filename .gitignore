@@ -18,6 +18,10 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
+server/data/
+server/.venv/
+*.db
+
 macos/.build/
 macos/.swiftpm/
 windows/**/bin/

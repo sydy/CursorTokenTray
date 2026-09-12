@@ -1,7 +1,9 @@
-"""账号多端同步：口令加密文件 + 按账号时间戳合并。
+"""账号多端同步：口令加密信封 + 按账号时间戳合并。
 
-同步文件可放进 iCloud / OneDrive / 坚果云 / U 盘。两端填相同口令即可。
-只同步账号身份（id / label / token / membership / 临时有效期 / 实际成本），不覆盖本机告警去重与用量缓存。
+登录后由 cloud_sync 把信封上传到 https://sync.harker.cn。
+加密密钥由登录密码在本地派生，服务器只存密文。
+同步账号身份和跨设备设置，不覆盖本机告警去重与用量缓存。
+导出 / 导入仍使用同一加密格式作备份。
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from accounts import (
 )
 
 SYNC_FORMAT = "cursortokentray.accounts.v1"
+SYNC_FORMAT_V2 = "cursortokentray.sync.v2"
+SYNC_FORMATS = {SYNC_FORMAT, SYNC_FORMAT_V2}
 SYNC_FILENAME = "CursorTokenTray.accounts.sync"
 SYNC_KDF = "pbkdf2-sha256"
 DEFAULT_ITERATIONS = 210_000
@@ -39,11 +43,14 @@ SYNC_FILE_SUFFIXES = {".sync", ".json"}
 
 SYNC_CONFIG_KEYS = (
     "sync_enabled",
-    "sync_path",
     "sync_secret",
     "sync_device_id",
     "sync_last_at",
     "sync_last_error",
+    "cloud_email",
+    "cloud_access_token",
+    "cloud_refresh_token",
+    "cloud_revision",
     "deleted_accounts",
 )
 
@@ -175,6 +182,42 @@ def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def snapshot_settings(raw: Any) -> dict[str, Any]:
+    from config import _VALID_DISPLAY_MODES, _parse_thresholds
+    from usage_report import clamp_monthly_plan_usd, clamp_usd_cny_rate
+
+    source = raw if isinstance(raw, dict) else {}
+    mode = str(source.get("tray_display_mode") or "ring").strip().lower()
+    if mode not in _VALID_DISPLAY_MODES:
+        mode = "ring"
+    try:
+        interval = max(1, int(source.get("refresh_interval_minutes") or 10))
+    except (TypeError, ValueError):
+        interval = 10
+    return {
+        "refresh_interval_minutes": interval,
+        "alert_thresholds": _parse_thresholds(source.get("alert_thresholds")),
+        "notify_enabled": bool(source.get("notify_enabled", True)),
+        "notify_exhaustion_risk": bool(source.get("notify_exhaustion_risk", True)),
+        "tray_display_mode": mode,
+        "monthly_plan_usd": clamp_monthly_plan_usd(source.get("monthly_plan_usd")),
+        "usd_cny_rate": clamp_usd_cny_rate(source.get("usd_cny_rate")),
+    }
+
+
+def apply_settings(cfg: dict[str, Any], settings: Any) -> None:
+    if not isinstance(settings, dict):
+        return
+    row = snapshot_settings(settings)
+    cfg["refresh_interval_minutes"] = row["refresh_interval_minutes"]
+    cfg["alert_thresholds"] = row["alert_thresholds"]
+    cfg["notify_enabled"] = row["notify_enabled"]
+    cfg["notify_exhaustion_risk"] = row["notify_exhaustion_risk"]
+    cfg["tray_display_mode"] = row["tray_display_mode"]
+    cfg["monthly_plan_usd"] = row["monthly_plan_usd"]
+    cfg["usd_cny_rate"] = row["usd_cny_rate"]
+
+
 def snapshot_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
     accounts = []
     for acc in list_accounts(cfg):
@@ -189,6 +232,7 @@ def snapshot_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "active_account_id": str(cfg.get("active_account_id") or ""),
         "accounts": accounts,
         "deleted": sanitize_deleted(cfg.get("deleted_accounts")),
+        "settings": snapshot_settings(cfg),
     }
 
 
@@ -213,7 +257,9 @@ def snapshot_identity(snap: dict[str, Any]) -> tuple:
         (d["id"], d["deleted_at"])
         for d in sorted(snap.get("deleted") or [], key=lambda x: x.get("id") or "")
     )
-    return (str(snap.get("active_account_id") or ""), accounts, deleted)
+    settings = snap.get("settings")
+    settings_key = tuple(sorted(snapshot_settings(settings).items())) if isinstance(settings, dict) else ()
+    return (str(snap.get("active_account_id") or ""), accounts, deleted, settings_key)
 
 
 def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
@@ -249,8 +295,10 @@ def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, 
 
     if compare_iso(remote.get("updated_at"), local.get("updated_at")) > 0:
         active = str(remote.get("active_account_id") or "")
+        settings = remote.get("settings") if remote.get("settings") is not None else local.get("settings")
     else:
         active = str(local.get("active_account_id") or "")
+        settings = local.get("settings") if local.get("settings") is not None else remote.get("settings")
     if active not in chosen:
         active = next(iter(sorted(chosen)), "")
 
@@ -261,6 +309,7 @@ def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, 
         "active_account_id": active,
         "accounts": [chosen[k] for k in sorted(chosen)],
         "deleted": [{"id": aid, "deleted_at": tombstones[aid]} for aid in sorted(tombstones)],
+        "settings": snapshot_settings(settings) if isinstance(settings, dict) else None,
     }
 
 
@@ -282,6 +331,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
         )
         for a in list_accounts(cfg)
     ]
+    before_settings = snapshot_settings(cfg)
     existing = {str(a.get("id") or ""): a for a in list_accounts(cfg)}
     merged_accounts: list[dict[str, Any]] = []
     for row in snap.get("accounts") or []:
@@ -314,6 +364,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
         cfg["active_account_id"] = str(merged_accounts[0]["id"])
     else:
         cfg["active_account_id"] = ""
+    apply_settings(cfg, snap.get("settings"))
     sync_legacy_fields(cfg)
     after = [
         (
@@ -331,7 +382,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
         )
         for a in list_accounts(cfg)
     ]
-    return before != after
+    return before != after or before_settings != snapshot_settings(cfg)
 
 
 def _apply_identity(account: dict[str, Any], ident: dict[str, Any]) -> None:
@@ -382,8 +433,9 @@ def encrypt_envelope(
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     key = derive_key(passphrase, salt_b, iterations)
     blob = _aes_gcm_encrypt(key, nonce_b, raw)
+    fmt = SYNC_FORMAT_V2 if payload.get("settings") is not None else SYNC_FORMAT
     return {
-        "format": SYNC_FORMAT,
+        "format": fmt,
         "kdf": SYNC_KDF,
         "iterations": iterations,
         "salt": base64.b64encode(salt_b).decode("ascii"),
@@ -393,7 +445,7 @@ def encrypt_envelope(
 
 
 def decrypt_envelope(envelope: dict[str, Any], passphrase: str) -> dict[str, Any]:
-    if str(envelope.get("format") or "") != SYNC_FORMAT:
+    if str(envelope.get("format") or "") not in SYNC_FORMATS:
         raise ValueError("不是 CursorTokenTray 账号同步文件")
     if str(envelope.get("kdf") or "") != SYNC_KDF:
         raise ValueError("不支持的同步文件密钥算法")
@@ -423,6 +475,10 @@ def decrypt_envelope(envelope: dict[str, Any], passphrase: str) -> dict[str, Any
     payload["updated_at"] = str(payload.get("updated_at") or "")
     payload["device_id"] = str(payload.get("device_id") or "")
     payload["version"] = 1
+    if isinstance(payload.get("settings"), dict):
+        payload["settings"] = snapshot_settings(payload["settings"])
+    else:
+        payload["settings"] = None
     return payload
 
 
@@ -450,11 +506,11 @@ def write_envelope(path: str, envelope: dict[str, Any]) -> None:
 
 def sync_ready(cfg: dict[str, Any]) -> str:
     if not cfg.get("sync_enabled"):
-        return "未启用多端同步"
-    if not str(cfg.get("sync_path") or "").strip():
-        return "请选择同步文件夹"
+        return "请先登录云同步"
+    if not str(cfg.get("cloud_access_token") or cfg.get("cloud_refresh_token") or "").strip():
+        return "请先登录云同步"
     if not str(cfg.get("sync_secret") or "").strip():
-        return "请设置同步口令"
+        return "请重新登录以解锁同步密钥"
     return ""
 
 
@@ -464,63 +520,10 @@ def reconcile(
     now: datetime | None = None,
     write: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """拉取远程、合并、必要时写回。返回 (cfg, status)。"""
-    status = {
-        "ok": False,
-        "changed": False,
-        "pushed": False,
-        "message": "",
-        "path": "",
-    }
-    reason = sync_ready(cfg)
-    if reason:
-        status["message"] = reason
-        cfg["sync_last_error"] = reason
-        return cfg, status
+    """拉取云端、合并、必要时写回。返回 (cfg, status)。"""
+    from cloud_sync import reconcile as cloud_reconcile
 
-    path = resolve_sync_path(str(cfg.get("sync_path") or ""))
-    status["path"] = path
-    ensure_device_id(cfg)
-    stamp = now_iso(now)
-    passphrase = str(cfg.get("sync_secret") or "")
-    local = snapshot_from_config(cfg)
-    local["device_id"] = str(cfg.get("sync_device_id") or "")
-    try:
-        envelope = read_envelope(path)
-        remote = decrypt_envelope(envelope, passphrase) if envelope else {
-            "version": 1,
-            "updated_at": "",
-            "device_id": "",
-            "active_account_id": "",
-            "accounts": [],
-            "deleted": [],
-        }
-        merged = merge_snapshots(local, remote)
-        changed = apply_snapshot_to_config(cfg, merged)
-        if snapshot_identity(merged) != snapshot_identity(remote) and write:
-            merged = dict(merged)
-            merged["updated_at"] = stamp
-            merged["device_id"] = str(cfg.get("sync_device_id") or "")
-            write_envelope(path, encrypt_envelope(merged, passphrase))
-            status["pushed"] = True
-        cfg["sync_last_at"] = stamp
-        cfg["sync_last_error"] = ""
-        status["ok"] = True
-        status["changed"] = changed
-        if changed and status["pushed"]:
-            status["message"] = "已合并并对齐同步文件"
-        elif changed:
-            status["message"] = "已从同步文件导入账号"
-        elif status["pushed"]:
-            status["message"] = "已写入同步文件"
-        else:
-            status["message"] = "账号已与同步文件一致"
-        return cfg, status
-    except Exception as exc:
-        message = str(exc) or "同步失败"
-        cfg["sync_last_error"] = message
-        status["message"] = message
-        return cfg, status
+    return cloud_reconcile(cfg, now=now, write=write)
 
 
 def export_to_file(cfg: dict[str, Any], path: str, passphrase: str | None = None) -> str:
@@ -553,11 +556,19 @@ def import_from_file(cfg: dict[str, Any], path: str, passphrase: str | None = No
 
 def normalize_sync_config(cfg: dict[str, Any], *, raw: dict[str, Any] | None = None) -> dict[str, Any]:
     source = raw if isinstance(raw, dict) else cfg
-    cfg["sync_enabled"] = bool(source.get("sync_enabled", cfg.get("sync_enabled", False)))
-    cfg["sync_path"] = str(source.get("sync_path", cfg.get("sync_path", "")) or "").strip()
     cfg["sync_secret"] = str(source.get("sync_secret", cfg.get("sync_secret", "")) or "")
     cfg["sync_device_id"] = str(source.get("sync_device_id", cfg.get("sync_device_id", "")) or "").strip()
     cfg["sync_last_at"] = str(source.get("sync_last_at", cfg.get("sync_last_at", "")) or "").strip()
     cfg["sync_last_error"] = str(source.get("sync_last_error", cfg.get("sync_last_error", "")) or "")
+    cfg["cloud_email"] = str(source.get("cloud_email", cfg.get("cloud_email", "")) or "").strip().lower()
+    cfg["cloud_access_token"] = str(source.get("cloud_access_token", cfg.get("cloud_access_token", "")) or "")
+    cfg["cloud_refresh_token"] = str(source.get("cloud_refresh_token", cfg.get("cloud_refresh_token", "")) or "")
+    try:
+        cfg["cloud_revision"] = max(0, int(source.get("cloud_revision", cfg.get("cloud_revision", 0)) or 0))
+    except (TypeError, ValueError):
+        cfg["cloud_revision"] = 0
+    logged_in = bool(cfg["cloud_access_token"] or cfg["cloud_refresh_token"])
+    cfg["sync_enabled"] = bool(source.get("sync_enabled", cfg.get("sync_enabled", False))) and logged_in
     cfg["deleted_accounts"] = sanitize_deleted(source.get("deleted_accounts", cfg.get("deleted_accounts")))
+    cfg.pop("sync_path", None)
     return cfg

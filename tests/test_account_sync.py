@@ -55,6 +55,11 @@ class MergeFixtureTests(unittest.TestCase):
                 self.assertEqual(labels, exp["labels"])
                 self.assertEqual(tokens, exp["tokens"])
                 self.assertEqual([d["id"] for d in merged["deleted"]], exp["deleted_ids"])
+                if "settings" in exp:
+                    self.assertEqual(merged["settings"]["refresh_interval_minutes"], exp["settings"]["refresh_interval_minutes"])
+                    self.assertEqual(merged["settings"]["tray_display_mode"], exp["settings"]["tray_display_mode"])
+                    self.assertEqual(merged["settings"]["notify_enabled"], exp["settings"]["notify_enabled"])
+                    self.assertEqual(merged["settings"]["monthly_plan_usd"], exp["settings"]["monthly_plan_usd"])
 
 
 class CryptoFixtureTests(unittest.TestCase):
@@ -99,42 +104,40 @@ class CryptoFixtureTests(unittest.TestCase):
             )
 
 
-class ReconcileFileTests(unittest.TestCase):
-    def test_push_then_pull_on_second_config(self) -> None:
-        from account_sync import reconcile
+class ExportImportTests(unittest.TestCase):
+    def test_export_then_import_on_second_config(self) -> None:
+        from account_sync import export_to_file, import_from_file
         from accounts import upsert_account
 
         with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp) / "cloud"
+            dest = Path(tmp) / "CursorTokenTray.accounts.sync"
             a = {
                 "accounts": [],
                 "active_account_id": "",
                 "session_token": "",
-                "sync_enabled": True,
-                "sync_path": str(folder),
                 "sync_secret": "folder-pass-123",
+                "refresh_interval_minutes": 15,
+                "tray_display_mode": "number",
                 "deleted_accounts": [],
             }
             upsert_account(a, "user_01SYNC%3A%3Ajwt.part.sig", label="工作", activate=True)
-            _, status = reconcile(a)
-            self.assertTrue(status["ok"], status["message"])
-            self.assertTrue(status["pushed"])
-            self.assertTrue((folder / "CursorTokenTray.accounts.sync").is_file())
+            export_to_file(a, str(dest))
+            self.assertTrue(dest.is_file())
 
             b = {
                 "accounts": [],
                 "active_account_id": "",
                 "session_token": "",
-                "sync_enabled": True,
-                "sync_path": str(folder),
                 "sync_secret": "folder-pass-123",
+                "refresh_interval_minutes": 10,
+                "tray_display_mode": "ring",
                 "deleted_accounts": [],
             }
-            _, status_b = reconcile(b)
-            self.assertTrue(status_b["ok"], status_b["message"])
-            self.assertTrue(status_b["changed"])
+            import_from_file(b, str(dest))
             self.assertEqual(b["accounts"][0]["label"], "工作")
             self.assertEqual(b["active_account_id"], a["active_account_id"])
+            self.assertEqual(b["refresh_interval_minutes"], 15)
+            self.assertEqual(b["tray_display_mode"], "number")
 
     def test_channel_syncs_with_account(self) -> None:
         from account_sync import apply_snapshot_to_config, snapshot_account, snapshot_from_config
@@ -180,14 +183,17 @@ class ConfigRoundtripTests(unittest.TestCase):
             try:
                 cfg = dict(config.DEFAULT_CONFIG)
                 cfg["sync_enabled"] = True
-                cfg["sync_path"] = "/tmp/cloud"
+                cfg["cloud_email"] = "User@Harker.cn"
+                cfg["cloud_access_token"] = "access"
+                cfg["cloud_refresh_token"] = "refresh"
                 cfg["sync_secret"] = "secret"
                 cfg["deleted_accounts"] = [{"id": "user_gone", "deleted_at": "2026-09-01T00:00:00.000Z"}]
                 config.save_config(cfg)
                 loaded = config.load_config()
                 self.assertTrue(loaded["sync_enabled"])
-                self.assertEqual(loaded["sync_path"], "/tmp/cloud")
+                self.assertEqual(loaded["cloud_email"], "user@harker.cn")
                 self.assertEqual(loaded["sync_secret"], "secret")
+                self.assertNotIn("sync_path", loaded)
                 self.assertEqual(loaded["deleted_accounts"][0]["id"], "user_gone")
             finally:
                 config.CONFIG_DIR = old_dir

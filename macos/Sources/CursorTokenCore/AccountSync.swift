@@ -54,6 +54,34 @@ public struct SyncAccount: Equatable, Sendable {
     }
 }
 
+public struct SyncSettings: Equatable, Sendable {
+    public var refreshIntervalMinutes: Int
+    public var alertThresholds: [Int]
+    public var notifyEnabled: Bool
+    public var notifyExhaustionRisk: Bool
+    public var trayDisplayMode: String
+    public var monthlyPlanUsd: Double
+    public var usdCnyRate: Double
+    public init(
+        refreshIntervalMinutes: Int = 10,
+        alertThresholds: [Int] = [50, 20, 5],
+        notifyEnabled: Bool = true,
+        notifyExhaustionRisk: Bool = true,
+        trayDisplayMode: String = "ring",
+        monthlyPlanUsd: Double = 0,
+        usdCnyRate: Double = UsageEvents.defaultUsdCnyRate
+    ) {
+        self.refreshIntervalMinutes = max(1, refreshIntervalMinutes)
+        self.alertThresholds = alertThresholds.isEmpty ? [50, 20, 5] : alertThresholds
+        self.notifyEnabled = notifyEnabled
+        self.notifyExhaustionRisk = notifyExhaustionRisk
+        let mode = trayDisplayMode.trimmingCharacters(in: .whitespaces).lowercased()
+        self.trayDisplayMode = AppConfig.displayModes.contains(mode) ? mode : "ring"
+        self.monthlyPlanUsd = UsageEvents.clampMonthlyPlanUsd(monthlyPlanUsd)
+        self.usdCnyRate = UsageEvents.clampUsdCnyRate(usdCnyRate)
+    }
+}
+
 public struct SyncSnapshot: Equatable, Sendable {
     public var version: Int
     public var updatedAt: String
@@ -61,13 +89,15 @@ public struct SyncSnapshot: Equatable, Sendable {
     public var activeAccountId: String
     public var accounts: [SyncAccount]
     public var deleted: [DeletedAccount]
+    public var settings: SyncSettings?
     public init(
         version: Int = 1,
         updatedAt: String = "",
         deviceId: String = "",
         activeAccountId: String = "",
         accounts: [SyncAccount] = [],
-        deleted: [DeletedAccount] = []
+        deleted: [DeletedAccount] = [],
+        settings: SyncSettings? = nil
     ) {
         self.version = version
         self.updatedAt = updatedAt
@@ -75,6 +105,7 @@ public struct SyncSnapshot: Equatable, Sendable {
         self.activeAccountId = activeAccountId
         self.accounts = accounts
         self.deleted = deleted
+        self.settings = settings
     }
 }
 
@@ -95,6 +126,7 @@ public struct SyncStatus: Sendable {
 
 public enum AccountSync {
     public static let format = "cursortokentray.accounts.v1"
+    public static let formatV2 = "cursortokentray.sync.v2"
     public static let filename = "CursorTokenTray.accounts.sync"
     public static let kdf = "pbkdf2-sha256"
     public static let defaultIterations = 210_000
@@ -228,6 +260,43 @@ public enum AccountSync {
         )
     }
 
+    public static func snapshotSettings(_ cfg: AppConfig) -> SyncSettings {
+        SyncSettings(
+            refreshIntervalMinutes: max(1, cfg.refreshIntervalMinutes),
+            alertThresholds: cfg.alertThresholds.isEmpty ? [50, 20, 5] : cfg.alertThresholds,
+            notifyEnabled: cfg.notifyEnabled,
+            notifyExhaustionRisk: cfg.notifyExhaustionRisk,
+            trayDisplayMode: cfg.trayDisplayMode,
+            monthlyPlanUsd: cfg.monthlyPlanUsd,
+            usdCnyRate: cfg.usdCnyRate
+        )
+    }
+
+    public static func applySettings(_ cfg: inout AppConfig, _ settings: SyncSettings?) {
+        guard let settings else { return }
+        let row = SyncSettings(
+            refreshIntervalMinutes: settings.refreshIntervalMinutes,
+            alertThresholds: settings.alertThresholds,
+            notifyEnabled: settings.notifyEnabled,
+            notifyExhaustionRisk: settings.notifyExhaustionRisk,
+            trayDisplayMode: settings.trayDisplayMode,
+            monthlyPlanUsd: settings.monthlyPlanUsd,
+            usdCnyRate: settings.usdCnyRate
+        )
+        cfg.refreshIntervalMinutes = row.refreshIntervalMinutes
+        cfg.alertThresholds = row.alertThresholds
+        cfg.notifyEnabled = row.notifyEnabled
+        cfg.notifyExhaustionRisk = row.notifyExhaustionRisk
+        cfg.trayDisplayMode = row.trayDisplayMode
+        cfg.monthlyPlanUsd = row.monthlyPlanUsd
+        cfg.usdCnyRate = row.usdCnyRate
+    }
+
+    public static func settingsIdentity(_ settings: SyncSettings?) -> String {
+        guard let settings else { return "" }
+        return "\(settings.refreshIntervalMinutes)\n\(settings.alertThresholds.map(String.init).joined(separator: ","))\n\(settings.notifyEnabled)\n\(settings.notifyExhaustionRisk)\n\(settings.trayDisplayMode)\n\(settings.monthlyPlanUsd)\n\(settings.usdCnyRate)"
+    }
+
     public static func snapshotFromConfig(_ cfg: AppConfig) -> SyncSnapshot {
         var accounts: [SyncAccount] = []
         for acc in cfg.accounts {
@@ -240,7 +309,8 @@ public enum AccountSync {
             deviceId: cfg.syncDeviceId,
             activeAccountId: cfg.activeAccountId,
             accounts: accounts,
-            deleted: sanitizeDeleted(cfg.deletedAccounts)
+            deleted: sanitizeDeleted(cfg.deletedAccounts),
+            settings: snapshotSettings(cfg)
         )
     }
 
@@ -249,7 +319,7 @@ public enum AccountSync {
             "\($0.id)\n\($0.label)\n\($0.token)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.channel)\n\($0.syncUpdatedAt)"
         }.joined(separator: "|")
         let deleted = snap.deleted.sorted { $0.id < $1.id }.map { "\($0.id)\n\($0.deletedAt)" }.joined(separator: "|")
-        return "\(snap.activeAccountId)\n\(accounts)\n\(deleted)"
+        return "\(snap.activeAccountId)\n\(accounts)\n\(deleted)\n\(settingsIdentity(snap.settings))"
     }
 
     public static func mergeSnapshots(_ local: SyncSnapshot, _ remote: SyncSnapshot) -> SyncSnapshot {
@@ -272,7 +342,9 @@ public enum AccountSync {
             }
         }
         for id in tombstones.keys where chosen[id] != nil { tombstones.removeValue(forKey: id) }
-        var active = compareIso(remote.updatedAt, local.updatedAt) > 0 ? remote.activeAccountId : local.activeAccountId
+        let remoteNewer = compareIso(remote.updatedAt, local.updatedAt) > 0
+        var active = remoteNewer ? remote.activeAccountId : local.activeAccountId
+        let settings = remoteNewer ? (remote.settings ?? local.settings) : (local.settings ?? remote.settings)
         if chosen[active] == nil {
             active = chosen.keys.sorted().first ?? ""
         }
@@ -281,13 +353,15 @@ public enum AccountSync {
             deviceId: local.deviceId.isEmpty ? remote.deviceId : local.deviceId,
             activeAccountId: active,
             accounts: chosen.keys.sorted().compactMap { chosen[$0] },
-            deleted: tombstones.keys.sorted().map { DeletedAccount(id: $0, deletedAt: tombstones[$0]!) }
+            deleted: tombstones.keys.sorted().map { DeletedAccount(id: $0, deletedAt: tombstones[$0]!) },
+            settings: settings
         )
     }
 
     @discardableResult
     public static func applySnapshotToConfig(_ cfg: inout AppConfig, _ snap: SyncSnapshot) -> Bool {
         let before = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.channel)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
+        let beforeSettings = settingsIdentity(snapshotSettings(cfg))
         var existing: [String: Account] = [:]
         for acc in cfg.accounts { existing[acc.id] = acc }
         var merged: [Account] = []
@@ -328,9 +402,10 @@ public enum AccountSync {
         let ids = Set(merged.map(\.id))
         if ids.contains(snap.activeAccountId) { cfg.activeAccountId = snap.activeAccountId }
         else { cfg.activeAccountId = merged.first?.id ?? "" }
+        applySettings(&cfg, snap.settings)
         cfg.syncLegacyFields()
         let after = cfg.accounts.map { "\($0.id)\n\($0.token)\n\($0.label)\n\($0.membershipType)\n\($0.accountKind)\n\($0.tempStartAt)\n\($0.tempValidDays)\n\($0.tempValidHours)\n\($0.actualCny)\n\($0.channel)\n\($0.syncUpdatedAt)" }.joined(separator: "|")
-        return before != after
+        return before != after || beforeSettings != settingsIdentity(snapshotSettings(cfg))
     }
 
     public static func deriveKey(passphrase: String, salt: Data, iterations: Int = defaultIterations) throws -> Data {
@@ -387,7 +462,12 @@ public enum AccountSync {
         let deleted = snap.deleted.map { d in
             "{\"deleted_at\":\(q(d.deletedAt)),\"id\":\(q(d.id))}"
         }.joined(separator: ",")
-        return "{\"accounts\":[\(accounts)],\"active_account_id\":\(q(snap.activeAccountId)),\"deleted\":[\(deleted)],\"device_id\":\(q(snap.deviceId)),\"updated_at\":\(q(snap.updatedAt)),\"version\":\(snap.version)}"
+        var settings = ""
+        if let row = snap.settings {
+            let thresholds = row.alertThresholds.map(String.init).joined(separator: ",")
+            settings = ",\"settings\":{\"alert_thresholds\":[\(thresholds)],\"monthly_plan_usd\":\(canonicalNumber(row.monthlyPlanUsd)),\"notify_enabled\":\(row.notifyEnabled),\"notify_exhaustion_risk\":\(row.notifyExhaustionRisk),\"refresh_interval_minutes\":\(row.refreshIntervalMinutes),\"tray_display_mode\":\(q(row.trayDisplayMode)),\"usd_cny_rate\":\(canonicalNumber(row.usdCnyRate))}"
+        }
+        return "{\"accounts\":[\(accounts)],\"active_account_id\":\(q(snap.activeAccountId)),\"deleted\":[\(deleted)],\"device_id\":\(q(snap.deviceId))\(settings),\"updated_at\":\(q(snap.updatedAt)),\"version\":\(snap.version)}"
     }
 
     public static func encryptEnvelope(
@@ -406,7 +486,7 @@ public enum AccountSync {
         let sealed = try AES.GCM.seal(raw, using: key, nonce: AES.GCM.Nonce(data: nonceB))
         let blob = sealed.ciphertext + sealed.tag
         return [
-            "format": format,
+            "format": payload.settings == nil ? format : formatV2,
             "kdf": kdf,
             "iterations": iterations,
             "salt": saltB.base64EncodedString(),
@@ -419,7 +499,8 @@ public enum AccountSync {
     }
 
     public static func decryptEnvelope(_ envelope: [String: Any], passphrase: String) throws -> SyncSnapshot {
-        if str(envelope["format"]) != format { throw CursorAPIError("不是 CursorTokenTray 账号同步文件") }
+        let fmt = str(envelope["format"])
+        if fmt != format && fmt != formatV2 { throw CursorAPIError("不是 CursorTokenTray 账号同步文件") }
         if str(envelope["kdf"]) != kdf { throw CursorAPIError("不支持的同步文件密钥算法") }
         guard let salt = Data(base64Encoded: str(envelope["salt"])),
               let nonce = Data(base64Encoded: str(envelope["nonce"])),
@@ -477,6 +558,18 @@ public enum AccountSync {
                 DeletedAccount(id: str($0["id"]).trimmingCharacters(in: .whitespaces), deletedAt: str($0["deleted_at"]).trimmingCharacters(in: .whitespaces))
             })
         }
+        if let rawSettings = raw["settings"] as? [String: Any] {
+            let mode = str(rawSettings["tray_display_mode"]).trimmingCharacters(in: .whitespaces).lowercased()
+            snap.settings = SyncSettings(
+                refreshIntervalMinutes: intValue(rawSettings["refresh_interval_minutes"]) ?? 10,
+                alertThresholds: AppConfig.parseThresholds(rawSettings["alert_thresholds"]),
+                notifyEnabled: boolValue(rawSettings["notify_enabled"], default: true),
+                notifyExhaustionRisk: boolValue(rawSettings["notify_exhaustion_risk"], default: true),
+                trayDisplayMode: mode,
+                monthlyPlanUsd: num(rawSettings["monthly_plan_usd"]) ?? 0,
+                usdCnyRate: num(rawSettings["usd_cny_rate"]) ?? UsageEvents.defaultUsdCnyRate
+            )
+        }
         return snap
     }
 
@@ -497,53 +590,13 @@ public enum AccountSync {
     }
 
     public static func syncReady(_ cfg: AppConfig) -> String {
-        if !cfg.syncEnabled { return "未启用多端同步" }
-        if cfg.syncPath.trimmingCharacters(in: .whitespaces).isEmpty { return "请选择同步文件夹" }
-        if cfg.syncSecret.trimmingCharacters(in: .whitespaces).isEmpty { return "请设置同步口令" }
+        if !cfg.syncEnabled || !cfg.cloudLoggedIn { return "请先登录云同步" }
+        if cfg.syncSecret.trimmingCharacters(in: .whitespaces).isEmpty { return "请重新登录以解锁同步密钥" }
         return ""
     }
 
     public static func reconcile(_ cfg: inout AppConfig, now: Date? = nil, write: Bool = true) -> SyncStatus {
-        var status = SyncStatus()
-        let reason = syncReady(cfg)
-        if !reason.isEmpty {
-            status.message = reason
-            cfg.syncLastError = reason
-            return status
-        }
-        let path = resolveSyncPath(cfg.syncPath)
-        status.path = path
-        _ = ensureDeviceId(&cfg)
-        let stamp = nowIso(now)
-        var local = snapshotFromConfig(cfg)
-        local.deviceId = cfg.syncDeviceId
-        do {
-            let envelope = try readEnvelope(path)
-            let remote = envelope == nil ? SyncSnapshot() : try decryptEnvelope(envelope!, passphrase: cfg.syncSecret)
-            let merged = mergeSnapshots(local, remote)
-            let changed = applySnapshotToConfig(&cfg, merged)
-            if write && snapshotIdentity(merged) != snapshotIdentity(remote) {
-                var toWrite = merged
-                toWrite.updatedAt = stamp
-                toWrite.deviceId = cfg.syncDeviceId
-                try writeEnvelope(path, try encryptEnvelope(toWrite, passphrase: cfg.syncSecret))
-                status.pushed = true
-            }
-            cfg.syncLastAt = stamp
-            cfg.syncLastError = ""
-            status.ok = true
-            status.changed = changed
-            if changed && status.pushed { status.message = "已合并并对齐同步文件" }
-            else if changed { status.message = "已从同步文件导入账号" }
-            else if status.pushed { status.message = "已写入同步文件" }
-            else { status.message = "账号已与同步文件一致" }
-            return status
-        } catch {
-            let message = (error as? CursorAPIError)?.message ?? error.localizedDescription
-            cfg.syncLastError = message
-            status.message = message.isEmpty ? "同步失败" : message
-            return status
-        }
+        CloudSync.reconcile(&cfg, now: now, write: write)
     }
 
     public static func exportToFile(_ cfg: inout AppConfig, path: String, passphrase: String? = nil) throws -> String {
@@ -577,6 +630,13 @@ public enum AccountSync {
         if let n = value as? Int { return n }
         if let n = value as? NSNumber { return n.intValue }
         return nil
+    }
+
+    static func boolValue(_ value: Any?, default fallback: Bool) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        if value == nil { return fallback }
+        return fallback
     }
 
     static func num(_ value: Any?) -> Double? {

@@ -184,13 +184,20 @@ public struct AppConfig: Equatable, Sendable {
     public var alertNotifiedLevels: [Int]
     public var exhaustionNotified: Bool
     public var syncEnabled: Bool
-    public var syncPath: String
     public var syncSecret: String
     public var syncDeviceId: String
     public var syncLastAt: String
     public var syncLastError: String
     public var syncSecretDecryptFailed: Bool
     public var storedSyncSecret: String
+    public var cloudEmail: String
+    public var cloudAccessToken: String
+    public var cloudRefreshToken: String
+    public var cloudRevision: Int
+    public var cloudAccessDecryptFailed: Bool
+    public var cloudRefreshDecryptFailed: Bool
+    public var storedCloudAccessToken: String
+    public var storedCloudRefreshToken: String
     public var deletedAccounts: [DeletedAccount]
     /// True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.
     public var loadError: Bool
@@ -218,18 +225,30 @@ public struct AppConfig: Equatable, Sendable {
         alertNotifiedLevels: [],
         exhaustionNotified: false,
         syncEnabled: false,
-        syncPath: "",
         syncSecret: "",
         syncDeviceId: "",
         syncLastAt: "",
         syncLastError: "",
         syncSecretDecryptFailed: false,
         storedSyncSecret: "",
+        cloudEmail: "",
+        cloudAccessToken: "",
+        cloudRefreshToken: "",
+        cloudRevision: 0,
+        cloudAccessDecryptFailed: false,
+        cloudRefreshDecryptFailed: false,
+        storedCloudAccessToken: "",
+        storedCloudRefreshToken: "",
         deletedAccounts: [],
         loadError: false,
         decryptError: false,
         storedSessionToken: ""
     )
+
+    public var cloudLoggedIn: Bool {
+        !cloudAccessToken.trimmingCharacters(in: .whitespaces).isEmpty
+            || !cloudRefreshToken.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     public var activeAccount: Account? {
         if let found = accounts.first(where: { $0.id == activeAccountId }) { return found }
@@ -581,7 +600,6 @@ public enum ConfigStore {
         migrateLegacyActualCny(&cfg, raw: raw)
         if cfg.accounts.contains(where: \.tokenDecryptFailed) { cfg.decryptError = true }
         if let v = raw["sync_enabled"] as? Bool { cfg.syncEnabled = v }
-        if let v = raw["sync_path"] as? String { cfg.syncPath = v.trimmingCharacters(in: .whitespaces) }
         if let v = raw["sync_secret"] as? String {
             let result = TokenProtector.tryUnprotect(v)
             if result.ok {
@@ -595,6 +613,25 @@ public enum ConfigStore {
         if let v = raw["sync_device_id"] as? String { cfg.syncDeviceId = v.trimmingCharacters(in: .whitespaces) }
         if let v = raw["sync_last_at"] as? String { cfg.syncLastAt = v.trimmingCharacters(in: .whitespaces) }
         if let v = raw["sync_last_error"] as? String { cfg.syncLastError = v }
+        if let v = raw["cloud_email"] as? String { cfg.cloudEmail = v.trimmingCharacters(in: .whitespaces).lowercased() }
+        if let v = raw["cloud_access_token"] as? String {
+            let result = TokenProtector.tryUnprotect(v)
+            if result.ok { cfg.cloudAccessToken = result.value }
+            else {
+                cfg.cloudAccessDecryptFailed = true
+                cfg.storedCloudAccessToken = v
+            }
+        }
+        if let v = raw["cloud_refresh_token"] as? String {
+            let result = TokenProtector.tryUnprotect(v)
+            if result.ok { cfg.cloudRefreshToken = result.value }
+            else {
+                cfg.cloudRefreshDecryptFailed = true
+                cfg.storedCloudRefreshToken = v
+            }
+        }
+        if let v = intValue(raw["cloud_revision"]) { cfg.cloudRevision = max(0, v) }
+        if !cfg.cloudLoggedIn { cfg.syncEnabled = false }
         cfg.deletedAccounts = parseDeleted(raw["deleted_accounts"])
         cfg = normalizeAccounts(cfg, raw: raw)
         return cfg
@@ -800,7 +837,6 @@ public enum ConfigStore {
             "alert_notified_levels": cfg.alertNotifiedLevels,
             "exhaustion_notified": cfg.exhaustionNotified,
             "sync_enabled": cfg.syncEnabled,
-            "sync_path": cfg.syncPath,
             "sync_secret": try TokenProtector.diskToken(
                 plaintext: cfg.syncSecret,
                 storedRaw: cfg.storedSyncSecret,
@@ -809,6 +845,18 @@ public enum ConfigStore {
             "sync_device_id": cfg.syncDeviceId,
             "sync_last_at": cfg.syncLastAt,
             "sync_last_error": cfg.syncLastError,
+            "cloud_email": cfg.cloudEmail,
+            "cloud_access_token": try TokenProtector.diskToken(
+                plaintext: cfg.cloudAccessToken,
+                storedRaw: cfg.storedCloudAccessToken,
+                decryptFailed: cfg.cloudAccessDecryptFailed && cfg.cloudAccessToken.isEmpty
+            ),
+            "cloud_refresh_token": try TokenProtector.diskToken(
+                plaintext: cfg.cloudRefreshToken,
+                storedRaw: cfg.storedCloudRefreshToken,
+                decryptFailed: cfg.cloudRefreshDecryptFailed && cfg.cloudRefreshToken.isEmpty
+            ),
+            "cloud_revision": cfg.cloudRevision,
             "deleted_accounts": cfg.deletedAccounts.map { ["id": $0.id, "deleted_at": $0.deletedAt] },
         ]
     }

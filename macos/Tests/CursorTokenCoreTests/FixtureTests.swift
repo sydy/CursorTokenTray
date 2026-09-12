@@ -873,6 +873,13 @@ final class AccountSyncFixtureTests: XCTestCase {
                 XCTAssertEqual(acc.token, str(tokens[acc.id]))
             }
             XCTAssertEqual(merged.deleted.map(\.id), stringArray(exp["deleted_ids"]))
+            if let expSettings = exp["settings"] as? [String: Any] {
+                XCTAssertNotNil(merged.settings)
+                XCTAssertEqual(merged.settings?.refreshIntervalMinutes, int(expSettings["refresh_interval_minutes"]))
+                XCTAssertEqual(merged.settings?.trayDisplayMode, str(expSettings["tray_display_mode"]))
+                XCTAssertEqual(merged.settings?.notifyEnabled, expSettings["notify_enabled"] as? Bool)
+                XCTAssertEqual(merged.settings?.monthlyPlanUsd ?? -1, num(expSettings["monthly_plan_usd"]) ?? -2, accuracy: 0.001)
+            }
         }
         let crypto = root["crypto"] as! [String: Any]
         let payload = AccountSync.parseSnapshot(crypto["plaintext"] as! [String: Any])
