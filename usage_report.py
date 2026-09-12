@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from cursor_api import (
@@ -1229,6 +1231,80 @@ def merge_usage_events(
 
 def prune_usage_events(events: list[UsageEvent], min_timestamp_ms: int) -> list[UsageEvent]:
     return [e for e in events if e.timestamp_ms >= min_timestamp_ms]
+
+
+USAGE_EVENT_KEEP_DAYS = 120
+
+
+def event_to_dict(event: UsageEvent) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "timestamp_ms": event.timestamp_ms,
+        "model": event.model,
+        "kind": event.kind,
+        "user_email": event.user_email,
+        "owning_user": event.owning_user,
+        "tokens": event.tokens,
+        "input_tokens": event.input_tokens,
+        "output_tokens": event.output_tokens,
+        "cache_write_tokens": event.cache_write_tokens,
+        "cache_read_tokens": event.cache_read_tokens,
+        "charged_cents": event.charged_cents,
+        "total_cents": event.total_cents,
+        "is_headless": event.is_headless,
+        "is_chargeable": event.is_chargeable,
+    }
+
+
+def events_cache_path(account_id: str, team_scope: bool = False, directory: Path | None = None) -> Path:
+    from config import CONFIG_DIR
+    from cursor_api import _safe_account_id
+
+    root = directory or CONFIG_DIR
+    aid = _safe_account_id(account_id)
+    name = f"usage_events.{aid}.team.jsonl" if team_scope else f"usage_events.{aid}.jsonl"
+    return root / name
+
+
+def load_cached_events(account_id: str, team_scope: bool = False, directory: Path | None = None) -> list[UsageEvent]:
+    path = events_cache_path(account_id, team_scope, directory)
+    if not path.is_file():
+        return []
+    events: list[UsageEvent] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(raw, dict):
+                continue
+            ev = usage_event_from_dict(raw)
+            if ev is not None:
+                events.append(ev)
+    except OSError:
+        return []
+    return merge_usage_events(events, [])
+
+
+def save_cached_events(
+    events: list[UsageEvent] | tuple[UsageEvent, ...],
+    account_id: str,
+    team_scope: bool = False,
+    directory: Path | None = None,
+) -> None:
+    aid = str(account_id or "").strip()
+    if not aid:
+        return
+    path = events_cache_path(aid, team_scope, directory)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cutoff = int((datetime.now(timezone.utc) - timedelta(days=USAGE_EVENT_KEEP_DAYS)).timestamp() * 1000)
+    pruned = prune_usage_events(list(events), cutoff)
+    lines = [json.dumps(event_to_dict(ev), ensure_ascii=False) for ev in pruned]
+    path.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
 
 
 def user_id_from_payload(payload: dict[str, Any] | None) -> int:

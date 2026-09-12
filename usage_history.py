@@ -172,6 +172,66 @@ def _prune_file(path: Path | None = None) -> None:
         pass
 
 
+def load_points(*, days: int = KEEP_DAYS, account_id: str | None = None, directory: Path | None = None) -> list[dict[str, Any]]:
+    """读取近 N 日历史，返回可同步的原始点。"""
+    aid = str(account_id or "").strip()
+    root = directory or _config_dir()
+    if aid:
+        dest = root / f"usage_history.{_safe_account_id(aid)}.jsonl"
+    else:
+        dest = root / "usage_history.jsonl"
+    cutoff = datetime.now(timezone.utc).timestamp() - max(1, days) * 86400
+    points: list[dict[str, Any]] = []
+    for raw in _iter_raw(dest):
+        try:
+            ts = float(raw.get("ts", 0))
+            remaining = float(raw.get("remaining", 0))
+        except (TypeError, ValueError):
+            continue
+        if ts < cutoff:
+            continue
+        points.append(
+            {
+                "ts": ts,
+                "remaining": round(remaining, 2),
+                "auto": _opt_float(raw.get("auto")),
+                "api": _opt_float(raw.get("api")),
+            }
+        )
+    points.sort(key=lambda p: p["ts"])
+    return points
+
+
+def replace_points(points: list[dict[str, Any]], *, account_id: str, directory: Path | None = None) -> None:
+    aid = str(account_id or "").strip()
+    if not aid:
+        return
+    root = directory or _config_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    dest = root / f"usage_history.{_safe_account_id(aid)}.jsonl"
+    cutoff = datetime.now(timezone.utc).timestamp() - KEEP_DAYS * 86400
+    lines: list[str] = []
+    for raw in points:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            ts = float(raw.get("ts", 0))
+            remaining = round(float(raw.get("remaining", 0)), 2)
+        except (TypeError, ValueError):
+            continue
+        if ts < cutoff:
+            continue
+        row = {
+            "ts": ts,
+            "remaining": remaining,
+            "auto": _opt_float(raw.get("auto")),
+            "api": _opt_float(raw.get("api")),
+            "account_id": aid,
+        }
+        lines.append(json.dumps(row, ensure_ascii=False))
+    dest.write_text(("\n".join(lines) + "\n") if lines else "", encoding="utf-8")
+
+
 def _opt_float(value: Any) -> float | None:
     if value is None or value == "":
         return None

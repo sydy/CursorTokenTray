@@ -31,6 +31,7 @@ ACCOUNT_KEYS = (
     "last_remaining",
     "last_error",
     "updated_at",
+    "usage_updated_at",
     "sync_updated_at",
     "alert_notified_levels",
     "auth_error_notified",
@@ -120,6 +121,7 @@ def empty_account(*, token: str = "", account_id: str = "", label: str = "") -> 
         "last_remaining": None,
         "last_error": "",
         "updated_at": "",
+        "usage_updated_at": "",
         "sync_updated_at": "",
         "alert_notified_levels": [],
         "auth_error_notified": False,
@@ -150,6 +152,7 @@ def sanitize_account(raw: Any) -> dict[str, Any] | None:
     acc["temp_valid_hours"] = clamp_temp_valid_hours(raw.get("temp_valid_hours"))
     acc["last_error"] = str(raw.get("last_error") or "")
     acc["updated_at"] = str(raw.get("updated_at") or "")
+    acc["usage_updated_at"] = str(raw.get("usage_updated_at") or "").strip()
     acc["sync_updated_at"] = str(raw.get("sync_updated_at") or "")
     remaining = raw.get("last_remaining")
     if remaining is None or remaining == "":
@@ -524,6 +527,10 @@ def apply_snapshot_to_account(
 ) -> None:
     if membership_type is not None:
         account["membership_type"] = str(membership_type).strip()
+    prev_remaining = account.get("last_remaining")
+    prev_error = str(account.get("last_error") or "")
+    prev_start = str(account.get("billing_cycle_start") or "")
+    prev_end = str(account.get("billing_cycle_end") or "")
     if remaining is not None:
         account["last_remaining"] = round(float(remaining), 2)
     if billing_cycle_start is not None:
@@ -536,6 +543,22 @@ def apply_snapshot_to_account(
         account["last_error"] = ""
     if updated_at is not None:
         account["updated_at"] = str(updated_at)
+    usage_changed = (
+        remaining is not None
+        or error is not None
+        or billing_cycle_start is not None
+        or billing_cycle_end is not None
+    ) and (
+        account.get("last_remaining") != prev_remaining
+        or str(account.get("last_error") or "") != prev_error
+        or str(account.get("billing_cycle_start") or "") != prev_start
+        or str(account.get("billing_cycle_end") or "") != prev_end
+        or not str(account.get("usage_updated_at") or "").strip()
+    )
+    if usage_changed:
+        from account_sync import now_iso
+
+        account["usage_updated_at"] = now_iso()
 
 
 def _normalize_token(token: str) -> str:

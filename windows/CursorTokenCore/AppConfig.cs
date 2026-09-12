@@ -18,6 +18,7 @@ public sealed class Account
     public double? LastRemaining { get; set; }
     public string LastError { get; set; } = "";
     public string UpdatedAt { get; set; } = "";
+    public string UsageUpdatedAt { get; set; } = "";
     public string SyncUpdatedAt { get; set; } = "";
     public List<int> AlertNotifiedLevels { get; set; } = [];
     public bool AuthErrorNotified { get; set; }
@@ -237,6 +238,10 @@ public sealed class AppConfig
     {
         var acc = Accounts.FirstOrDefault(a => a.Id == accountId);
         if (acc is null) return;
+        var prevRemaining = acc.LastRemaining;
+        var prevError = acc.LastError ?? "";
+        var prevStart = acc.BillingCycleStart ?? "";
+        var prevEnd = acc.BillingCycleEnd ?? "";
         if (membershipType is not null) acc.MembershipType = membershipType.Trim();
         if (remaining is not null) acc.LastRemaining = Numbers.Round2(remaining.Value);
         if (error is not null) acc.LastError = error;
@@ -244,6 +249,14 @@ public sealed class AppConfig
         if (updatedAt is not null) acc.UpdatedAt = updatedAt;
         if (billingCycleStart is not null) acc.BillingCycleStart = billingCycleStart.Trim();
         if (billingCycleEnd is not null) acc.BillingCycleEnd = billingCycleEnd.Trim();
+        var usageTouched = remaining is not null || error is not null || billingCycleStart is not null || billingCycleEnd is not null;
+        if (usageTouched && (
+            acc.LastRemaining != prevRemaining
+            || (acc.LastError ?? "") != prevError
+            || (acc.BillingCycleStart ?? "") != prevStart
+            || (acc.BillingCycleEnd ?? "") != prevEnd
+            || string.IsNullOrWhiteSpace(acc.UsageUpdatedAt)))
+            acc.UsageUpdatedAt = AccountSync.NowIso();
     }
 
     public void SyncLegacyFields()
@@ -627,6 +640,7 @@ public static class ConfigStore
         acc.TempValidHours = AccountValidity.ClampHours(IntVal(raw, "temp_valid_hours"));
         if (!decryptFailed) acc.LastError = Str(raw, "last_error");
         acc.UpdatedAt = Str(raw, "updated_at");
+        acc.UsageUpdatedAt = Str(raw, "usage_updated_at").Trim();
         acc.SyncUpdatedAt = Str(raw, "sync_updated_at");
         if (raw.TryGetProperty("last_remaining", out var lr) && lr.ValueKind is JsonValueKind.Number)
             acc.LastRemaining = Numbers.Round2(lr.GetDouble());
@@ -701,6 +715,7 @@ public static class ConfigStore
             ["last_remaining"] = a.LastRemaining,
             ["last_error"] = a.LastError,
             ["updated_at"] = a.UpdatedAt,
+            ["usage_updated_at"] = a.UsageUpdatedAt,
             ["sync_updated_at"] = a.SyncUpdatedAt,
             ["alert_notified_levels"] = a.AlertNotifiedLevels,
             ["auth_error_notified"] = a.AuthErrorNotified,

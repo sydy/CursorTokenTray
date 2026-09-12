@@ -2,8 +2,8 @@
 
 登录后由 cloud_sync 把信封上传到 https://sync.harker.cn。
 加密密钥由登录密码在本地派生，服务器只存密文。
-同步账号身份和跨设备设置，不覆盖本机告警去重与用量缓存。
-导出 / 导入仍使用同一加密格式作备份。
+同步账号身份、跨设备设置、剩余用量、用量历史和报表缓存。
+不覆盖本机告警去重。导出 / 导入仍使用同一加密格式作备份。
 """
 
 from __future__ import annotations
@@ -166,6 +166,16 @@ def _snapshot_channel(account: dict[str, Any]) -> str:
     return sanitize_account_channel(account.get("channel"))
 
 
+def _snapshot_remaining(account: dict[str, Any]) -> float | None:
+    raw = account.get("last_remaining")
+    if raw is None or raw == "":
+        return None
+    try:
+        return round(float(raw), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(account.get("id") or "").strip(),
@@ -179,7 +189,198 @@ def snapshot_account(account: dict[str, Any]) -> dict[str, Any]:
         "actual_cny": _snapshot_actual_cny(account),
         "channel": _snapshot_channel(account),
         "sync_updated_at": str(account.get("sync_updated_at") or "").strip(),
+        "last_remaining": _snapshot_remaining(account),
+        "last_error": str(account.get("last_error") or ""),
+        "usage_updated_at": str(account.get("usage_updated_at") or "").strip(),
+        "billing_cycle_start": str(account.get("billing_cycle_start") or account.get("billingCycleStart") or "").strip(),
+        "billing_cycle_end": str(account.get("billing_cycle_end") or account.get("billingCycleEnd") or "").strip(),
     }
+
+
+def _has_usage_fields(row: dict[str, Any]) -> bool:
+    return bool(
+        str(row.get("usage_updated_at") or "").strip()
+        or row.get("last_remaining") is not None
+        or str(row.get("billing_cycle_start") or "").strip()
+        or str(row.get("billing_cycle_end") or "").strip()
+        or str(row.get("last_error") or "").strip()
+    )
+
+
+def _combine_accounts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    ident_cmp = compare_iso(left["sync_updated_at"], right["sync_updated_at"])
+    if ident_cmp > 0:
+        ident = left
+    elif ident_cmp < 0:
+        ident = right
+    else:
+        ident = left if left["token"] or not right["token"] else right
+    usage_cmp = compare_iso(left.get("usage_updated_at"), right.get("usage_updated_at"))
+    if usage_cmp > 0:
+        usage = left
+    elif usage_cmp < 0:
+        usage = right
+    elif left.get("last_remaining") is not None or right.get("last_remaining") is None:
+        usage = left
+    else:
+        usage = right
+    out = dict(ident)
+    for key in ("last_remaining", "last_error", "usage_updated_at", "billing_cycle_start", "billing_cycle_end"):
+        out[key] = usage.get(key)
+    return out
+
+
+def snapshot_history_point(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        ts = float(raw.get("ts", 0))
+        remaining = round(float(raw.get("remaining", 0)), 2)
+    except (TypeError, ValueError):
+        return None
+    auto = raw.get("auto")
+    api = raw.get("api")
+    try:
+        auto_v = None if auto is None or auto == "" else round(float(auto), 2)
+    except (TypeError, ValueError):
+        auto_v = None
+    try:
+        api_v = None if api is None or api == "" else round(float(api), 2)
+    except (TypeError, ValueError):
+        api_v = None
+    return {"ts": ts, "remaining": remaining, "auto": auto_v, "api": api_v}
+
+
+def merge_history_points(left: Any, right: Any) -> list[dict[str, Any]]:
+    best: dict[float, dict[str, Any]] = {}
+    for src in list(left or []) + list(right or []):
+        point = snapshot_history_point(src)
+        if point is None:
+            continue
+        key = round(point["ts"], 3)
+        prev = best.get(key)
+        if prev is None or ((point["auto"] is not None or point["api"] is not None) and prev["auto"] is None and prev["api"] is None):
+            best[key] = point
+    return [best[k] for k in sorted(best)]
+
+
+def snapshot_usage_event(raw: Any) -> dict[str, Any] | None:
+    from usage_report import event_to_dict, usage_event_from_dict
+
+    if not isinstance(raw, dict):
+        return None
+    ev = usage_event_from_dict(raw)
+    if ev is None or not ev.id:
+        return None
+    return event_to_dict(ev)
+
+
+def merge_usage_event_dicts(left: Any, right: Any) -> list[dict[str, Any]]:
+    from usage_report import event_to_dict, merge_usage_events, usage_event_from_dict
+
+    events = []
+    for src in list(left or []) + list(right or []):
+        if not isinstance(src, dict):
+            continue
+        ev = usage_event_from_dict(src)
+        if ev is not None:
+            events.append(ev)
+    return [event_to_dict(ev) for ev in merge_usage_events(events, [])]
+
+
+def snapshot_usage_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    aid = str(raw.get("account_id") or "").strip()
+    if not aid:
+        return None
+    history = [p for p in (snapshot_history_point(x) for x in (raw.get("history") or [])) if p]
+    events = [e for e in (snapshot_usage_event(x) for x in (raw.get("events") or [])) if e]
+    team = [e for e in (snapshot_usage_event(x) for x in (raw.get("team_events") or [])) if e]
+    return {"account_id": aid, "history": history, "events": events, "team_events": team}
+
+
+def snapshot_usage_from_files(account_ids: list[str], directory: Any = None) -> list[dict[str, Any]]:
+    from usage_history import KEEP_DAYS, load_points
+    from usage_report import USAGE_EVENT_KEEP_DAYS, event_to_dict, load_cached_events, prune_usage_events
+
+    cutoff = int((datetime.now(timezone.utc).timestamp() - USAGE_EVENT_KEEP_DAYS * 86400) * 1000)
+    rows: list[dict[str, Any]] = []
+    for aid in account_ids:
+        history = load_points(days=KEEP_DAYS, account_id=aid, directory=directory)
+        events = [event_to_dict(e) for e in prune_usage_events(load_cached_events(aid, False, directory), cutoff)]
+        team = [event_to_dict(e) for e in prune_usage_events(load_cached_events(aid, True, directory), cutoff)]
+        if not history and not events and not team:
+            continue
+        rows.append({"account_id": aid, "history": history, "events": events, "team_events": team})
+    return rows
+
+
+def merge_usage(local: Any, remote: Any, keep_ids: set[str]) -> list[dict[str, Any]] | None:
+    if local is None and remote is None:
+        return None
+    rows: dict[str, dict[str, Any]] = {}
+    for src in list(local or []) + list(remote or []):
+        row = snapshot_usage_row(src)
+        if row is None:
+            continue
+        aid = row["account_id"]
+        if keep_ids and aid not in keep_ids:
+            continue
+        prev = rows.get(aid)
+        if prev is None:
+            rows[aid] = row
+            continue
+        rows[aid] = {
+            "account_id": aid,
+            "history": merge_history_points(prev["history"], row["history"]),
+            "events": merge_usage_event_dicts(prev["events"], row["events"]),
+            "team_events": merge_usage_event_dicts(prev["team_events"], row["team_events"]),
+        }
+    return [rows[k] for k in sorted(rows)]
+
+
+def apply_usage_to_files(usage: Any, keep_ids: set[str], directory: Any = None) -> bool:
+    if usage is None:
+        return False
+    from usage_history import replace_points
+    from usage_report import save_cached_events, usage_event_from_dict
+
+    changed = False
+    for src in usage:
+        row = snapshot_usage_row(src)
+        if row is None or row["account_id"] not in keep_ids:
+            continue
+        replace_points(row["history"], account_id=row["account_id"], directory=directory)
+        save_cached_events(
+            [e for e in (usage_event_from_dict(x) for x in row["events"]) if e],
+            row["account_id"],
+            False,
+            directory,
+        )
+        save_cached_events(
+            [e for e in (usage_event_from_dict(x) for x in row["team_events"]) if e],
+            row["account_id"],
+            True,
+            directory,
+        )
+        changed = True
+    return changed
+
+
+def usage_identity(usage: Any) -> tuple:
+    if not isinstance(usage, list):
+        return ()
+    rows = []
+    for src in usage:
+        row = snapshot_usage_row(src)
+        if row is None:
+            continue
+        hist = tuple((round(p["ts"], 3), p["remaining"], p["auto"], p["api"]) for p in row["history"])
+        events = tuple(sorted(e["id"] for e in row["events"]))
+        team = tuple(sorted(e["id"] for e in row["team_events"]))
+        rows.append((row["account_id"], hist, events, team))
+    return tuple(rows)
 
 
 def snapshot_settings(raw: Any) -> dict[str, Any]:
@@ -225,6 +426,7 @@ def snapshot_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
         if not row["id"] or not row["token"]:
             continue
         accounts.append(row)
+    ids = [row["id"] for row in accounts]
     return {
         "version": 1,
         "updated_at": str(cfg.get("sync_last_at") or ""),
@@ -233,6 +435,7 @@ def snapshot_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "accounts": accounts,
         "deleted": sanitize_deleted(cfg.get("deleted_accounts")),
         "settings": snapshot_settings(cfg),
+        "usage": snapshot_usage_from_files(ids),
     }
 
 
@@ -250,6 +453,11 @@ def snapshot_identity(snap: dict[str, Any]) -> tuple:
             _snapshot_actual_cny(a),
             _snapshot_channel(a),
             a["sync_updated_at"],
+            a.get("last_remaining"),
+            a.get("last_error") or "",
+            a.get("usage_updated_at") or "",
+            a.get("billing_cycle_start") or "",
+            a.get("billing_cycle_end") or "",
         )
         for a in sorted(snap.get("accounts") or [], key=lambda x: x.get("id") or "")
     )
@@ -259,7 +467,7 @@ def snapshot_identity(snap: dict[str, Any]) -> tuple:
     )
     settings = snap.get("settings")
     settings_key = tuple(sorted(snapshot_settings(settings).items())) if isinstance(settings, dict) else ()
-    return (str(snap.get("active_account_id") or ""), accounts, deleted, settings_key)
+    return (str(snap.get("active_account_id") or ""), accounts, deleted, settings_key, usage_identity(snap.get("usage")))
 
 
 def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
@@ -283,11 +491,7 @@ def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, 
         if prev is None:
             chosen[acc["id"]] = acc
             continue
-        cmp = compare_iso(acc["sync_updated_at"], prev["sync_updated_at"])
-        if cmp > 0:
-            chosen[acc["id"]] = acc
-        elif cmp == 0 and not prev["token"] and acc["token"]:
-            chosen[acc["id"]] = acc
+        chosen[acc["id"]] = _combine_accounts(prev, acc)
 
     for aid in list(tombstones):
         if aid in chosen:
@@ -310,11 +514,12 @@ def merge_snapshots(local: dict[str, Any], remote: dict[str, Any]) -> dict[str, 
         "accounts": [chosen[k] for k in sorted(chosen)],
         "deleted": [{"id": aid, "deleted_at": tombstones[aid]} for aid in sorted(tombstones)],
         "settings": snapshot_settings(settings) if isinstance(settings, dict) else None,
+        "usage": merge_usage(local.get("usage"), remote.get("usage"), set(chosen)),
     }
 
 
 def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
-    """把合并结果写回配置。保留本机用量缓存与告警去重。返回是否改了账号列表。"""
+    """把合并结果写回配置。保留本机告警去重。返回是否改了账号、设置或用量。"""
     before = [
         (
             a.get("id"),
@@ -328,6 +533,10 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
             a.get("actual_cny"),
             a.get("channel"),
             a.get("sync_updated_at"),
+            a.get("last_remaining"),
+            a.get("usage_updated_at"),
+            a.get("billing_cycle_start"),
+            a.get("billing_cycle_end"),
         )
         for a in list_accounts(cfg)
     ]
@@ -365,6 +574,7 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
     else:
         cfg["active_account_id"] = ""
     apply_settings(cfg, snap.get("settings"))
+    usage_changed = apply_usage_to_files(snap.get("usage"), ids)
     sync_legacy_fields(cfg)
     after = [
         (
@@ -379,10 +589,14 @@ def apply_snapshot_to_config(cfg: dict[str, Any], snap: dict[str, Any]) -> bool:
             a.get("actual_cny"),
             a.get("channel"),
             a.get("sync_updated_at"),
+            a.get("last_remaining"),
+            a.get("usage_updated_at"),
+            a.get("billing_cycle_start"),
+            a.get("billing_cycle_end"),
         )
         for a in list_accounts(cfg)
     ]
-    return before != after or before_settings != snapshot_settings(cfg)
+    return before != after or before_settings != snapshot_settings(cfg) or usage_changed
 
 
 def _apply_identity(account: dict[str, Any], ident: dict[str, Any]) -> None:
@@ -395,6 +609,15 @@ def _apply_identity(account: dict[str, Any], ident: dict[str, Any]) -> None:
     account["actual_cny"] = _snapshot_actual_cny(ident)
     account["channel"] = _snapshot_channel(ident)
     account["sync_updated_at"] = ident["sync_updated_at"]
+    if _has_usage_fields(ident):
+        account["last_remaining"] = ident.get("last_remaining")
+        account["last_error"] = str(ident.get("last_error") or "")
+        account["usage_updated_at"] = str(ident.get("usage_updated_at") or "").strip()
+        account["billing_cycle_start"] = str(ident.get("billing_cycle_start") or "").strip()
+        account["billing_cycle_end"] = str(ident.get("billing_cycle_end") or "").strip()
+        stamp = parse_iso(account["usage_updated_at"])
+        if stamp is not None:
+            account["updated_at"] = stamp.astimezone().strftime("%H:%M:%S")
 
 
 def derive_key(passphrase: str, salt: bytes, iterations: int = DEFAULT_ITERATIONS) -> bytes:
@@ -433,7 +656,7 @@ def encrypt_envelope(
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     key = derive_key(passphrase, salt_b, iterations)
     blob = _aes_gcm_encrypt(key, nonce_b, raw)
-    fmt = SYNC_FORMAT_V2 if payload.get("settings") is not None else SYNC_FORMAT
+    fmt = SYNC_FORMAT_V2 if payload.get("settings") is not None or payload.get("usage") else SYNC_FORMAT
     return {
         "format": fmt,
         "kdf": SYNC_KDF,
@@ -479,6 +702,10 @@ def decrypt_envelope(envelope: dict[str, Any], passphrase: str) -> dict[str, Any
         payload["settings"] = snapshot_settings(payload["settings"])
     else:
         payload["settings"] = None
+    if isinstance(payload.get("usage"), list):
+        payload["usage"] = merge_usage(payload.get("usage"), [], {a["id"] for a in payload["accounts"]})
+    else:
+        payload["usage"] = None
     return payload
 
 

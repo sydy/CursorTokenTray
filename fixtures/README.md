@@ -8,7 +8,7 @@ Golden JSON fixtures shared by Python, Swift (`macos/`), and C# (`windows/`).
 - `format_cases.json` — membership, USD, token count, status pill / plan caption
 - `aggregated_usage_cases.json` — model token aggregation
 - `usage_events_cases.json` — filtered usage events parse, kind labels, report aggregation, RMB allocation
-- `account_sync_cases.json` — encrypted account-sync merge, settings last-write-wins, path resolve, AES-GCM vector
+- `account_sync_cases.json` — encrypted account-sync merge, settings last-write-wins, usage remaining / history / events, path resolve, AES-GCM vector
 
 Python tests in `tests/test_fixtures.py` lock these to the reference parser.
 Swift and C# unit tests load the same files so both native ports stay aligned.

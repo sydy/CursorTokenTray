@@ -226,6 +226,7 @@ sealed class TrayContext : ApplicationContext
             {
                 await TryReconcileAsync(save: true);
                 await RefreshAll();
+                await TryReconcileAsync(save: true);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { CrashLog.Write(ex); }

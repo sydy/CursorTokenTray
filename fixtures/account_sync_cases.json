@@ -421,6 +421,215 @@
           "usd_cny_rate": 7.2
         }
       }
+    },
+    {
+      "name": "newer_remote_remaining_wins",
+      "local": {
+        "updated_at": "2026-09-01T00:00:00.000Z",
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "个人",
+            "token": "tok-a",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z",
+            "last_remaining": 80,
+            "usage_updated_at": "2026-09-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": []
+      },
+      "remote": {
+        "updated_at": "2026-09-10T00:00:00.000Z",
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "个人",
+            "token": "tok-a",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z",
+            "last_remaining": 12.5,
+            "usage_updated_at": "2026-09-10T08:00:00.000Z",
+            "billing_cycle_end": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": []
+      },
+      "expected": {
+        "active_account_id": "user_01A",
+        "ids": ["user_01A"],
+        "labels": { "user_01A": "个人" },
+        "tokens": { "user_01A": "tok-a" },
+        "deleted_ids": [],
+        "remaining": { "user_01A": 12.5 },
+        "billing_cycle_end": { "user_01A": "2026-10-01T00:00:00.000Z" }
+      }
+    },
+    {
+      "name": "usage_history_and_events_union",
+      "local": {
+        "updated_at": "2026-09-01T00:00:00.000Z",
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "个人",
+            "token": "tok-a",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": [],
+        "usage": [
+          {
+            "account_id": "user_01A",
+            "history": [
+              { "ts": 1700000000, "remaining": 80, "auto": 10, "api": null }
+            ],
+            "events": [
+              {
+                "id": "ev-a",
+                "timestamp_ms": 1000,
+                "model": "opus",
+                "kind": "included",
+                "user_email": "",
+                "owning_user": "",
+                "tokens": 10,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_read_tokens": 0,
+                "charged_cents": null,
+                "total_cents": null,
+                "is_headless": false,
+                "is_chargeable": false
+              }
+            ],
+            "team_events": []
+          }
+        ]
+      },
+      "remote": {
+        "updated_at": "2026-09-02T00:00:00.000Z",
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "个人",
+            "token": "tok-a",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": [],
+        "usage": [
+          {
+            "account_id": "user_01A",
+            "history": [
+              { "ts": 1700001000, "remaining": 70, "auto": null, "api": 5 }
+            ],
+            "events": [
+              {
+                "id": "ev-b",
+                "timestamp_ms": 2000,
+                "model": "sonnet",
+                "kind": "included",
+                "user_email": "",
+                "owning_user": "",
+                "tokens": 20,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_read_tokens": 0,
+                "charged_cents": null,
+                "total_cents": null,
+                "is_headless": false,
+                "is_chargeable": false
+              }
+            ],
+            "team_events": [
+              {
+                "id": "ev-t",
+                "timestamp_ms": 3000,
+                "model": "opus",
+                "kind": "included",
+                "user_email": "a@x.com",
+                "owning_user": "1",
+                "tokens": 8,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_read_tokens": 0,
+                "charged_cents": null,
+                "total_cents": null,
+                "is_headless": false,
+                "is_chargeable": false
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "active_account_id": "user_01A",
+        "ids": ["user_01A"],
+        "labels": { "user_01A": "个人" },
+        "tokens": { "user_01A": "tok-a" },
+        "deleted_ids": [],
+        "usage_history_ts": { "user_01A": [1700000000, 1700001000] },
+        "usage_event_ids": { "user_01A": ["ev-a", "ev-b"] },
+        "usage_team_event_ids": { "user_01A": ["ev-t"] }
+      }
+    },
+    {
+      "name": "apply_remote_usage",
+      "apply": true,
+      "config": {
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "旧名",
+            "token": "tok-old",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z",
+            "last_remaining": 42.5,
+            "last_error": "",
+            "updated_at": "12:00:00",
+            "alert_notified_levels": [50],
+            "auth_error_notified": true,
+            "exhaustion_notified": false,
+            "low_quota_notified": true
+          }
+        ],
+        "active_account_id": "user_01A",
+        "deleted_accounts": []
+      },
+      "snapshot": {
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "新名",
+            "token": "tok-new",
+            "membership_type": "ultra",
+            "sync_updated_at": "2026-09-08T00:00:00.000Z",
+            "last_remaining": 15,
+            "usage_updated_at": "2026-09-11T00:00:00.000Z",
+            "billing_cycle_end": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": []
+      },
+      "expected": {
+        "label": "新名",
+        "token": "tok-new",
+        "membership_type": "ultra",
+        "last_remaining": 15,
+        "alert_notified_levels": [50],
+        "auth_error_notified": true,
+        "low_quota_notified": true
+      }
     }
   ],
   "crypto": {

@@ -24,6 +24,19 @@ public sealed class SyncAccount
     public double ActualCny { get; set; }
     public string Channel { get; set; } = "";
     public string SyncUpdatedAt { get; set; } = "";
+    public double? LastRemaining { get; set; }
+    public string LastError { get; set; } = "";
+    public string UsageUpdatedAt { get; set; } = "";
+    public string BillingCycleStart { get; set; } = "";
+    public string BillingCycleEnd { get; set; } = "";
+}
+
+public sealed class SyncUsage
+{
+    public string AccountId { get; set; } = "";
+    public List<HistoryPoint> History { get; set; } = [];
+    public List<UsageEvent> Events { get; set; } = [];
+    public List<UsageEvent> TeamEvents { get; set; } = [];
 }
 
 public sealed class SyncSettings
@@ -46,6 +59,7 @@ public sealed class SyncSnapshot
     public List<SyncAccount> Accounts { get; set; } = [];
     public List<DeletedAccount> Deleted { get; set; } = [];
     public SyncSettings? Settings { get; set; }
+    public List<SyncUsage>? Usage { get; set; }
 }
 
 public sealed class SyncStatus
@@ -168,6 +182,11 @@ public static class AccountSync
         ActualCny = UsageEvents.ClampActualCny(account.ActualCny),
         Channel = UsageEvents.SanitizeChannel(account.Channel),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
+        LastRemaining = account.LastRemaining,
+        LastError = account.LastError ?? "",
+        UsageUpdatedAt = (account.UsageUpdatedAt ?? "").Trim(),
+        BillingCycleStart = (account.BillingCycleStart ?? "").Trim(),
+        BillingCycleEnd = (account.BillingCycleEnd ?? "").Trim(),
     };
 
     public static SyncAccount SnapshotAccount(SyncAccount account) => new()
@@ -183,7 +202,126 @@ public static class AccountSync
         ActualCny = UsageEvents.ClampActualCny(account.ActualCny),
         Channel = UsageEvents.SanitizeChannel(account.Channel),
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
+        LastRemaining = account.LastRemaining,
+        LastError = account.LastError ?? "",
+        UsageUpdatedAt = (account.UsageUpdatedAt ?? "").Trim(),
+        BillingCycleStart = (account.BillingCycleStart ?? "").Trim(),
+        BillingCycleEnd = (account.BillingCycleEnd ?? "").Trim(),
     };
+
+    static bool HasUsageFields(SyncAccount row) =>
+        !string.IsNullOrWhiteSpace(row.UsageUpdatedAt)
+        || row.LastRemaining is not null
+        || !string.IsNullOrWhiteSpace(row.BillingCycleStart)
+        || !string.IsNullOrWhiteSpace(row.BillingCycleEnd)
+        || !string.IsNullOrWhiteSpace(row.LastError);
+
+    static SyncAccount CombineAccounts(SyncAccount left, SyncAccount right)
+    {
+        var identCmp = CompareIso(left.SyncUpdatedAt, right.SyncUpdatedAt);
+        var ident = identCmp > 0 ? left : identCmp < 0 ? right : (left.Token.Length > 0 || right.Token.Length == 0 ? left : right);
+        var usageCmp = CompareIso(left.UsageUpdatedAt, right.UsageUpdatedAt);
+        SyncAccount usage;
+        if (usageCmp > 0) usage = left;
+        else if (usageCmp < 0) usage = right;
+        else usage = left.LastRemaining is not null || right.LastRemaining is null ? left : right;
+        var merged = SnapshotAccount(ident);
+        merged.LastRemaining = usage.LastRemaining;
+        merged.LastError = usage.LastError;
+        merged.UsageUpdatedAt = usage.UsageUpdatedAt;
+        merged.BillingCycleStart = usage.BillingCycleStart;
+        merged.BillingCycleEnd = usage.BillingCycleEnd;
+        return merged;
+    }
+
+    static List<HistoryPoint> MergeHistory(IEnumerable<HistoryPoint>? left, IEnumerable<HistoryPoint>? right)
+    {
+        var best = new Dictionary<long, HistoryPoint>();
+        foreach (var src in (left ?? []).Concat(right ?? []))
+        {
+            var key = (long)Math.Round(src.Ts * 1000);
+            if (!best.TryGetValue(key, out var prev)
+                || ((src.Auto is not null || src.Api is not null) && prev.Auto is null && prev.Api is null))
+                best[key] = src;
+        }
+        return best.OrderBy(kv => kv.Key).Select(kv => kv.Value).ToList();
+    }
+
+    static SyncUsage SnapshotUsage(SyncUsage raw) => new()
+    {
+        AccountId = (raw.AccountId ?? "").Trim(),
+        History = [.. raw.History],
+        Events = UsageEvents.Merge(raw.Events, []),
+        TeamEvents = UsageEvents.Merge(raw.TeamEvents, []),
+    };
+
+    public static List<SyncUsage>? MergeUsage(IEnumerable<SyncUsage>? local, IEnumerable<SyncUsage>? remote, ISet<string> keepIds)
+    {
+        if (local is null && remote is null) return null;
+        var rows = new Dictionary<string, SyncUsage>(StringComparer.Ordinal);
+        foreach (var src in (local ?? []).Concat(remote ?? []))
+        {
+            var row = SnapshotUsage(src);
+            if (row.AccountId.Length == 0 || (keepIds.Count > 0 && !keepIds.Contains(row.AccountId))) continue;
+            if (!rows.TryGetValue(row.AccountId, out var prev))
+            {
+                rows[row.AccountId] = row;
+                continue;
+            }
+            rows[row.AccountId] = new SyncUsage
+            {
+                AccountId = row.AccountId,
+                History = MergeHistory(prev.History, row.History),
+                Events = UsageEvents.Merge(prev.Events, row.Events),
+                TeamEvents = UsageEvents.Merge(prev.TeamEvents, row.TeamEvents),
+            };
+        }
+        return rows.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value).ToList();
+    }
+
+    static List<SyncUsage> SnapshotUsageFromFiles(IEnumerable<string> accountIds, string? directory = null)
+    {
+        var cutoff = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 120L * 86400 * 1000;
+        var rows = new List<SyncUsage>();
+        foreach (var aid in accountIds)
+        {
+            if (string.IsNullOrWhiteSpace(aid)) continue;
+            var history = UsageHistory.LoadRecent(UsageHistory.KeepDays, aid, directory);
+            var events = UsageEvents.Prune(UsageEvents.Load(aid, false, directory), cutoff);
+            var team = UsageEvents.Prune(UsageEvents.Load(aid, true, directory), cutoff);
+            if (history.Count == 0 && events.Count == 0 && team.Count == 0) continue;
+            rows.Add(new SyncUsage { AccountId = aid, History = history, Events = events, TeamEvents = team });
+        }
+        return rows;
+    }
+
+    static bool ApplyUsageToFiles(IEnumerable<SyncUsage>? usage, ISet<string> keepIds, string? directory = null)
+    {
+        if (usage is null) return false;
+        var changed = false;
+        foreach (var src in usage)
+        {
+            var row = SnapshotUsage(src);
+            if (row.AccountId.Length == 0 || !keepIds.Contains(row.AccountId)) continue;
+            UsageHistory.Replace(row.History, row.AccountId, directory);
+            UsageEvents.Save(row.Events, row.AccountId, false, directory);
+            UsageEvents.Save(row.TeamEvents, row.AccountId, true, directory);
+            changed = true;
+        }
+        return changed;
+    }
+
+    static string UsageIdentity(IEnumerable<SyncUsage>? usage)
+    {
+        if (usage is null) return "";
+        return string.Join("|", usage.OrderBy(u => u.AccountId, StringComparer.Ordinal).Select(u =>
+        {
+            var hist = string.Join(",", u.History.OrderBy(p => p.Ts).Select(p => $"{p.Ts}:{p.Remaining}:{p.Auto}:{p.Api}"));
+            var events = string.Join(",", u.Events.Select(e => e.Id).OrderBy(x => x, StringComparer.Ordinal));
+            var team = string.Join(",", u.TeamEvents.Select(e => e.Id).OrderBy(x => x, StringComparer.Ordinal));
+            return $"{u.AccountId}\n{hist}\n{events}\n{team}";
+        }));
+    }
 
     public static SyncSettings SnapshotSettings(AppConfig cfg) => new()
     {
@@ -245,16 +383,17 @@ public static class AccountSync
             Accounts = accounts,
             Deleted = SanitizeDeleted(cfg.DeletedAccounts),
             Settings = SnapshotSettings(cfg),
+            Usage = SnapshotUsageFromFiles(accounts.Select(a => a.Id)),
         };
     }
 
     public static string SnapshotIdentity(SyncSnapshot snap)
     {
         var accounts = snap.Accounts.OrderBy(a => a.Id, StringComparer.Ordinal)
-            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}");
+            .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}\n{a.LastRemaining}\n{a.LastError}\n{a.UsageUpdatedAt}\n{a.BillingCycleStart}\n{a.BillingCycleEnd}");
         var deleted = snap.Deleted.OrderBy(d => d.Id, StringComparer.Ordinal)
             .Select(d => $"{d.Id}\n{d.DeletedAt}");
-        return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}\n{SettingsIdentity(snap.Settings)}";
+        return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}\n{SettingsIdentity(snap.Settings)}\n{UsageIdentity(snap.Usage)}";
     }
 
     public static SyncSnapshot MergeSnapshots(SyncSnapshot local, SyncSnapshot remote)
@@ -278,9 +417,7 @@ public static class AccountSync
                 chosen[acc.Id] = acc;
                 continue;
             }
-            var cmp = CompareIso(acc.SyncUpdatedAt, prev.SyncUpdatedAt);
-            if (cmp > 0) chosen[acc.Id] = acc;
-            else if (cmp == 0 && prev.Token.Length == 0 && acc.Token.Length > 0) chosen[acc.Id] = acc;
+            chosen[acc.Id] = CombineAccounts(prev, acc);
         }
 
         foreach (var id in tombstones.Keys.ToList())
@@ -304,13 +441,14 @@ public static class AccountSync
             Deleted = tombstones.OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .Select(kv => new DeletedAccount { Id = kv.Key, DeletedAt = kv.Value }).ToList(),
             Settings = settings is null ? null : SnapshotSettings(settings),
+            Usage = MergeUsage(local.Usage, remote.Usage, chosen.Keys.ToHashSet(StringComparer.Ordinal)),
         };
     }
 
     public static bool ApplySnapshotToConfig(AppConfig cfg, SyncSnapshot snap)
     {
         string Before() => string.Join("|", cfg.Accounts.Select(a =>
-            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}"));
+            $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}\n{a.LastRemaining}\n{a.UsageUpdatedAt}\n{a.BillingCycleStart}\n{a.BillingCycleEnd}"));
         var before = Before();
         var beforeSettings = SettingsIdentity(SnapshotSettings(cfg));
         var existing = cfg.Accounts.ToDictionary(a => a.Id, StringComparer.Ordinal);
@@ -321,7 +459,7 @@ public static class AccountSync
             if (ident.Id.Length == 0 || ident.Token.Length == 0) continue;
             if (!existing.TryGetValue(ident.Id, out var old))
             {
-                merged.Add(new Account
+                var created = new Account
                 {
                     Id = ident.Id,
                     Token = ident.Token,
@@ -334,7 +472,9 @@ public static class AccountSync
                     ActualCny = ident.ActualCny,
                     Channel = ident.Channel,
                     SyncUpdatedAt = ident.SyncUpdatedAt,
-                });
+                };
+                ApplyUsageFields(created, ident);
+                merged.Add(created);
                 continue;
             }
             old.Token = ident.Token;
@@ -347,6 +487,7 @@ public static class AccountSync
             old.ActualCny = ident.ActualCny;
             old.Channel = ident.Channel;
             old.SyncUpdatedAt = ident.SyncUpdatedAt;
+            ApplyUsageFields(old, ident);
             merged.Add(old);
         }
         cfg.Accounts = merged;
@@ -355,8 +496,22 @@ public static class AccountSync
         if (ids.Contains(snap.ActiveAccountId)) cfg.ActiveAccountId = snap.ActiveAccountId;
         else cfg.ActiveAccountId = merged.Count > 0 ? merged[0].Id : "";
         ApplySettings(cfg, snap.Settings);
+        var usageChanged = ApplyUsageToFiles(snap.Usage, ids);
         cfg.SyncLegacyFields();
-        return before != Before() || beforeSettings != SettingsIdentity(SnapshotSettings(cfg));
+        return before != Before() || beforeSettings != SettingsIdentity(SnapshotSettings(cfg)) || usageChanged;
+    }
+
+    static void ApplyUsageFields(Account account, SyncAccount ident)
+    {
+        if (!HasUsageFields(ident)) return;
+        account.LastRemaining = ident.LastRemaining;
+        account.LastError = ident.LastError ?? "";
+        account.UsageUpdatedAt = ident.UsageUpdatedAt ?? "";
+        account.BillingCycleStart = ident.BillingCycleStart ?? "";
+        account.BillingCycleEnd = ident.BillingCycleEnd ?? "";
+        var stamp = ParseIso(account.UsageUpdatedAt);
+        if (stamp is not null)
+            account.UpdatedAt = stamp.Value.ToLocalTime().ToString("HH:mm:ss");
     }
 
     public static byte[] DeriveKey(string passphrase, byte[] salt, int iterations = DefaultIterations)
@@ -390,6 +545,16 @@ public static class AccountSync
                 extra += $",\"actual_cny\":{CanonicalNumber(a.ActualCny)}";
             if (!string.IsNullOrEmpty(a.Channel))
                 extra += $",\"channel\":{Q(a.Channel)}";
+            if (a.LastRemaining is { } remaining)
+                extra += $",\"last_remaining\":{CanonicalNumber(remaining)}";
+            if (!string.IsNullOrEmpty(a.LastError))
+                extra += $",\"last_error\":{Q(a.LastError)}";
+            if (!string.IsNullOrEmpty(a.UsageUpdatedAt))
+                extra += $",\"usage_updated_at\":{Q(a.UsageUpdatedAt)}";
+            if (!string.IsNullOrEmpty(a.BillingCycleStart))
+                extra += $",\"billing_cycle_start\":{Q(a.BillingCycleStart)}";
+            if (!string.IsNullOrEmpty(a.BillingCycleEnd))
+                extra += $",\"billing_cycle_end\":{Q(a.BillingCycleEnd)}";
             return $"{{\"id\":{Q(a.Id)},\"label\":{Q(a.Label)},\"membership_type\":{Q(a.MembershipType)},\"sync_updated_at\":{Q(a.SyncUpdatedAt)},\"token\":{Q(a.Token)}{extra}}}";
         }));
         var deleted = string.Join(",", snap.Deleted.Select(d =>
@@ -402,7 +567,39 @@ public static class AccountSync
             var thresholds = string.Join(",", row.AlertThresholds);
             settings = $",\"settings\":{{\"alert_thresholds\":[{thresholds}],\"monthly_plan_usd\":{CanonicalNumber(row.MonthlyPlanUsd)},\"notify_enabled\":{(row.NotifyEnabled ? "true" : "false")},\"notify_exhaustion_risk\":{(row.NotifyExhaustionRisk ? "true" : "false")},\"refresh_interval_minutes\":{row.RefreshIntervalMinutes},\"tray_display_mode\":{Q(row.TrayDisplayMode)},\"usd_cny_rate\":{CanonicalNumber(row.UsdCnyRate)}}}";
         }
-        return $"{{\"accounts\":[{accounts}],\"active_account_id\":{Q(snap.ActiveAccountId)},\"deleted\":[{deleted}],\"device_id\":{Q(snap.DeviceId)}{settings},\"updated_at\":{Q(snap.UpdatedAt)},\"version\":{snap.Version}}}";
+        var usage = "";
+        if (snap.Usage is { Count: > 0 } rows)
+        {
+            var packed = string.Join(",", rows.Select(u =>
+            {
+                var hist = string.Join(",", u.History.Select(p =>
+                {
+                    var auto = p.Auto is { } av ? CanonicalNumber(av) : "null";
+                    var api = p.Api is { } pv ? CanonicalNumber(pv) : "null";
+                    return $"{{\"api\":{api},\"auto\":{auto},\"remaining\":{CanonicalNumber(p.Remaining)},\"ts\":{CanonicalNumber(p.Ts)}}}";
+                }));
+                var evs = string.Join(",", u.Events.Select(CanonicalEvent));
+                var team = string.Join(",", u.TeamEvents.Select(CanonicalEvent));
+                return $"{{\"account_id\":{Q(u.AccountId)},\"events\":[{evs}],\"history\":[{hist}],\"team_events\":[{team}]}}";
+            }));
+            usage = $",\"usage\":[{packed}]";
+        }
+        return $"{{\"accounts\":[{accounts}],\"active_account_id\":{Q(snap.ActiveAccountId)},\"deleted\":[{deleted}],\"device_id\":{Q(snap.DeviceId)}{settings},\"updated_at\":{Q(snap.UpdatedAt)}{usage},\"version\":{snap.Version}}}";
+    }
+
+    static string CanonicalEvent(UsageEvent ev)
+    {
+        static string Q(string value)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(value ?? "", new JsonSerializerOptions
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
+            return Encoding.UTF8.GetString(bytes);
+        }
+        var charged = ev.ChargedCents is { } c ? CanonicalNumber(c) : "null";
+        var total = ev.TotalCents is { } t ? CanonicalNumber(t) : "null";
+        return $"{{\"cache_read_tokens\":{ev.CacheReadTokens},\"cache_write_tokens\":{ev.CacheWriteTokens},\"charged_cents\":{charged},\"id\":{Q(ev.Id)},\"input_tokens\":{ev.InputTokens},\"is_chargeable\":{(ev.IsChargeable ? "true" : "false")},\"is_headless\":{(ev.IsHeadless ? "true" : "false")},\"kind\":{Q(ev.Kind)},\"model\":{Q(ev.Model)},\"output_tokens\":{ev.OutputTokens},\"owning_user\":{Q(ev.OwningUser)},\"timestamp_ms\":{ev.TimestampMs},\"tokens\":{ev.Tokens},\"total_cents\":{total},\"user_email\":{Q(ev.UserEmail)}}}";
     }
 
     public static Dictionary<string, object> EncryptEnvelope(SyncSnapshot payload, string passphrase, byte[]? salt = null, byte[]? nonce = null, int iterations = DefaultIterations)
@@ -421,7 +618,7 @@ public static class AccountSync
         Buffer.BlockCopy(tag, 0, blob, ciphertext.Length, tag.Length);
         return new Dictionary<string, object>
         {
-            ["format"] = payload.Settings is null ? Format : FormatV2,
+            ["format"] = payload.Settings is null && (payload.Usage is null || payload.Usage.Count == 0) ? Format : FormatV2,
             ["kdf"] = Kdf,
             ["iterations"] = iterations,
             ["salt"] = Convert.ToBase64String(saltB),
@@ -490,6 +687,11 @@ public static class AccountSync
                     ActualCny = UsageEvents.ClampActualCny(DoubleVal(item, "actual_cny")),
                     Channel = UsageEvents.SanitizeChannel(Str(item, "channel")),
                     SyncUpdatedAt = Str(item, "sync_updated_at").Trim(),
+                    LastRemaining = item.TryGetProperty("last_remaining", out var lr) && lr.ValueKind == JsonValueKind.Number ? lr.GetDouble() : null,
+                    LastError = Str(item, "last_error"),
+                    UsageUpdatedAt = Str(item, "usage_updated_at").Trim(),
+                    BillingCycleStart = Str(item, "billing_cycle_start").Trim(),
+                    BillingCycleEnd = Str(item, "billing_cycle_end").Trim(),
                 };
                 if (acc.Id.Length > 0) snap.Accounts.Add(acc);
             }
@@ -516,7 +718,53 @@ public static class AccountSync
                 UsdCnyRate = UsageEvents.ClampUsdCnyRate(DoubleVal(set, "usd_cny_rate") == 0 ? UsageEvents.DefaultUsdCnyRate : DoubleVal(set, "usd_cny_rate")),
             });
         }
+        if (raw.TryGetProperty("usage", out var usageEl) && usageEl.ValueKind == JsonValueKind.Array)
+        {
+            var rows = new List<SyncUsage>();
+            foreach (var item in usageEl.EnumerateArray())
+            {
+                var row = new SyncUsage { AccountId = Str(item, "account_id").Trim() };
+                if (row.AccountId.Length == 0) continue;
+                if (item.TryGetProperty("history", out var hist) && hist.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var p in hist.EnumerateArray())
+                    {
+                        if (!p.TryGetProperty("ts", out var ts) || ts.ValueKind != JsonValueKind.Number) continue;
+                        if (!p.TryGetProperty("remaining", out var rem) || rem.ValueKind != JsonValueKind.Number) continue;
+                        row.History.Add(new HistoryPoint(ts.GetDouble(), rem.GetDouble(), NumOpt(p, "auto"), NumOpt(p, "api")));
+                    }
+                }
+                if (item.TryGetProperty("events", out var evs) && evs.ValueKind == JsonValueKind.Array)
+                    row.Events = UsageEvents.Merge(ParseEvents(evs), []);
+                if (item.TryGetProperty("team_events", out var team) && team.ValueKind == JsonValueKind.Array)
+                    row.TeamEvents = UsageEvents.Merge(ParseEvents(team), []);
+                rows.Add(row);
+            }
+            snap.Usage = rows;
+        }
         return snap;
+    }
+
+    static List<UsageEvent> ParseEvents(JsonElement arr)
+    {
+        var events = new List<UsageEvent>();
+        foreach (var item in arr.EnumerateArray())
+        {
+            try
+            {
+                var ev = UsageEvents.FromDict(JsonBag.Parse(item.GetRawText()));
+                if (ev is not null) events.Add(ev);
+            }
+            catch { }
+        }
+        return events;
+    }
+
+    static double? NumOpt(JsonElement raw, string key)
+    {
+        if (!raw.TryGetProperty(key, out var v) || v.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;
+        return null;
     }
 
     static string Str(JsonElement raw, string key) =>

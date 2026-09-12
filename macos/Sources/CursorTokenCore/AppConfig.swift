@@ -72,6 +72,7 @@ public struct Account: Equatable, Sendable, Codable {
     public var lastRemaining: Double?
     public var lastError: String
     public var updatedAt: String
+    public var usageUpdatedAt: String
     public var syncUpdatedAt: String
     public var alertNotifiedLevels: [Int]
     public var authErrorNotified: Bool
@@ -96,6 +97,7 @@ public struct Account: Equatable, Sendable, Codable {
         lastRemaining: Double? = nil,
         lastError: String = "",
         updatedAt: String = "",
+        usageUpdatedAt: String = "",
         syncUpdatedAt: String = "",
         alertNotifiedLevels: [Int] = [],
         authErrorNotified: Bool = false,
@@ -119,6 +121,7 @@ public struct Account: Equatable, Sendable, Codable {
         self.lastRemaining = lastRemaining
         self.lastError = lastError
         self.updatedAt = updatedAt
+        self.usageUpdatedAt = usageUpdatedAt.trimmingCharacters(in: .whitespaces)
         self.syncUpdatedAt = syncUpdatedAt
         self.alertNotifiedLevels = alertNotifiedLevels
         self.authErrorNotified = authErrorNotified
@@ -412,6 +415,10 @@ public struct AppConfig: Equatable, Sendable {
         billingCycleEnd: String? = nil
     ) {
         guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else { return }
+        let prevRemaining = accounts[idx].lastRemaining
+        let prevError = accounts[idx].lastError
+        let prevStart = accounts[idx].billingCycleStart
+        let prevEnd = accounts[idx].billingCycleEnd
         if let membershipType { accounts[idx].membershipType = membershipType.trimmingCharacters(in: .whitespaces) }
         if let remaining { accounts[idx].lastRemaining = round2(remaining) }
         if let error {
@@ -422,6 +429,16 @@ public struct AppConfig: Equatable, Sendable {
         if let updatedAt { accounts[idx].updatedAt = updatedAt }
         if let billingCycleStart { accounts[idx].billingCycleStart = billingCycleStart.trimmingCharacters(in: .whitespaces) }
         if let billingCycleEnd { accounts[idx].billingCycleEnd = billingCycleEnd.trimmingCharacters(in: .whitespaces) }
+        let usageTouched = remaining != nil || error != nil || billingCycleStart != nil || billingCycleEnd != nil
+        if usageTouched && (
+            accounts[idx].lastRemaining != prevRemaining
+            || accounts[idx].lastError != prevError
+            || accounts[idx].billingCycleStart != prevStart
+            || accounts[idx].billingCycleEnd != prevEnd
+            || accounts[idx].usageUpdatedAt.trimmingCharacters(in: .whitespaces).isEmpty
+        ) {
+            accounts[idx].usageUpdatedAt = AccountSync.nowIso()
+        }
     }
 
     public mutating func syncLegacyFields() {
@@ -718,6 +735,7 @@ public enum ConfigStore {
         acc.tempValidHours = AccountValidity.clampHours(raw["temp_valid_hours"] ?? raw["tempValidHours"])
         if !decryptFailed { acc.lastError = raw["last_error"] as? String ?? "" }
         acc.updatedAt = raw["updated_at"] as? String ?? ""
+        acc.usageUpdatedAt = (raw["usage_updated_at"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         acc.syncUpdatedAt = raw["sync_updated_at"] as? String ?? ""
         if let remaining = raw["last_remaining"] {
             if remaining is NSNull {
@@ -808,6 +826,7 @@ public enum ConfigStore {
                     "temp_valid_hours": acc.tempValidHours,
                     "last_error": acc.lastError,
                     "updated_at": acc.updatedAt,
+                    "usage_updated_at": acc.usageUpdatedAt,
                     "sync_updated_at": acc.syncUpdatedAt,
                     "alert_notified_levels": acc.alertNotifiedLevels,
                     "auth_error_notified": acc.authErrorNotified,

@@ -880,6 +880,37 @@ final class AccountSyncFixtureTests: XCTestCase {
                 XCTAssertEqual(merged.settings?.notifyEnabled, expSettings["notify_enabled"] as? Bool)
                 XCTAssertEqual(merged.settings?.monthlyPlanUsd ?? -1, num(expSettings["monthly_plan_usd"]) ?? -2, accuracy: 0.001)
             }
+            if let remaining = exp["remaining"] as? [String: Any] {
+                for acc in merged.accounts {
+                    XCTAssertEqual(acc.lastRemaining ?? -1, num(remaining[acc.id]) ?? -2, accuracy: 0.001, str(cse["name"]))
+                }
+            }
+            if let ends = exp["billing_cycle_end"] as? [String: Any] {
+                for acc in merged.accounts {
+                    XCTAssertEqual(acc.billingCycleEnd, str(ends[acc.id]), str(cse["name"]))
+                }
+            }
+            if let hist = exp["usage_history_ts"] as? [String: Any] {
+                for (aid, raw) in hist {
+                    let want = (raw as? [Any] ?? []).compactMap { num($0) }
+                    let got = merged.usage?.first(where: { $0.accountId == aid })?.history.map(\.ts) ?? []
+                    XCTAssertEqual(got, want, str(cse["name"]))
+                }
+            }
+            if let evs = exp["usage_event_ids"] as? [String: Any] {
+                for (aid, raw) in evs {
+                    let want = ((raw as? [Any]) ?? []).map { str($0) }.sorted()
+                    let got = (merged.usage?.first(where: { $0.accountId == aid })?.events.map(\.id) ?? []).sorted()
+                    XCTAssertEqual(got, want, str(cse["name"]))
+                }
+            }
+            if let team = exp["usage_team_event_ids"] as? [String: Any] {
+                for (aid, raw) in team {
+                    let want = ((raw as? [Any]) ?? []).map { str($0) }.sorted()
+                    let got = (merged.usage?.first(where: { $0.accountId == aid })?.teamEvents.map(\.id) ?? []).sorted()
+                    XCTAssertEqual(got, want, str(cse["name"]))
+                }
+            }
         }
         let crypto = root["crypto"] as! [String: Any]
         let payload = AccountSync.parseSnapshot(crypto["plaintext"] as! [String: Any])

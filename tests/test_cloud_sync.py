@@ -1,4 +1,4 @@
-"""云同步：注册登录后两端合并账号和设置。"""
+"""云同步：注册登录后两端合并账号、设置和用量。"""
 
 from __future__ import annotations
 
@@ -52,6 +52,9 @@ class CloudSyncTests(unittest.TestCase):
             "deleted_accounts": [],
         }
         upsert_account(a, "user_01CLOUD%3A%3Ajwt.part.sig", label="云号", activate=True)
+        from accounts import apply_snapshot_to_account
+
+        apply_snapshot_to_account(a["accounts"][0], remaining=44, billing_cycle_end="2026-10-01T00:00:00.000Z")
         apply_session(a, "a@harker.cn", "password1", tokens)
         _, status = reconcile(a, requester=http)
         self.assertTrue(status["ok"], status["message"])
@@ -70,6 +73,8 @@ class CloudSyncTests(unittest.TestCase):
         self.assertTrue(status_b["ok"], status_b["message"])
         self.assertTrue(status_b["changed"])
         self.assertEqual(b["accounts"][0]["label"], "云号")
+        self.assertEqual(b["accounts"][0]["last_remaining"], 44)
+        self.assertEqual(b["accounts"][0]["billing_cycle_end"], "2026-10-01T00:00:00.000Z")
         self.assertEqual(b["refresh_interval_minutes"], 12)
         self.assertEqual(b["tray_display_mode"], "dot")
 

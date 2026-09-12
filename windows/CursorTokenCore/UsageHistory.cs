@@ -70,6 +70,31 @@ public static class UsageHistory
         File.WriteAllText(path, kept.Count == 0 ? "" : string.Join("\n", kept) + "\n");
     }
 
+    public static void Replace(IEnumerable<HistoryPoint> points, string accountId, string? directory = null)
+    {
+        var aid = (accountId ?? "").Trim();
+        if (aid.Length == 0) return;
+        var dir = AppPaths.ConfigDirectory(directory);
+        Directory.CreateDirectory(dir);
+        var path = AppPaths.HistoryPath(aid, dir);
+        var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - KeepDays * 86400L;
+        var lines = new List<string>();
+        foreach (var p in points.OrderBy(x => x.Ts))
+        {
+            if (p.Ts < cutoff) continue;
+            var obj = new Dictionary<string, object?>
+            {
+                ["ts"] = p.Ts,
+                ["remaining"] = Numbers.Round2(p.Remaining),
+                ["auto"] = p.Auto is null ? null : Numbers.Round2(p.Auto.Value),
+                ["api"] = p.Api is null ? null : Numbers.Round2(p.Api.Value),
+                ["account_id"] = aid,
+            };
+            lines.Add(JsonSerializer.Serialize(obj));
+        }
+        File.WriteAllText(path, lines.Count == 0 ? "" : string.Join("\n", lines) + "\n");
+    }
+
     public static List<HistoryPoint> LoadRecent(int days = 7, string? accountId = null, string? directory = null)
     {
         var dir = AppPaths.ConfigDirectory(directory);

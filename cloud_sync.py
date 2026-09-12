@@ -21,7 +21,7 @@ from account_sync import (
 )
 
 API_BASE = "https://sync.harker.cn"
-TIMEOUT = 20
+TIMEOUT = 60
 
 Requester = Callable[[str, str, dict[str, str] | None, dict[str, Any] | None], tuple[int, Any]]
 
@@ -162,6 +162,7 @@ def empty_snapshot() -> dict[str, Any]:
         "accounts": [],
         "deleted": [],
         "settings": None,
+        "usage": None,
     }
 
 
@@ -236,11 +237,11 @@ def reconcile(
         if changed and status["pushed"]:
             status["message"] = "已合并并对齐云端"
         elif changed:
-            status["message"] = "已从云端导入账号和设置"
+            status["message"] = "已从云端导入账号、设置和用量"
         elif status["pushed"]:
             status["message"] = "已上传到云端"
         else:
-            status["message"] = "账号和设置已与云端一致"
+            status["message"] = "账号、设置和用量已与云端一致"
         return cfg, status
     except CloudSyncError as exc:
         if exc.status == 401:
