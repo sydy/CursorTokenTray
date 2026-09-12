@@ -202,6 +202,7 @@
       ],
       "filter": {
         "kind": "",
+        "category": "",
         "model": "",
         "headless": null,
         "owning_user": ""
@@ -295,6 +296,7 @@
       ],
       "filter": {
         "kind": "included",
+        "category": "",
         "model": "",
         "headless": null,
         "owning_user": ""
@@ -327,6 +329,88 @@
           }
         ]
       }
+    },
+    {
+      "name": "filter_first_party",
+      "events": [
+        {
+          "id": "fp",
+          "timestamp_ms": 3000,
+          "model": "cursor-grok-4.6-high-fast",
+          "kind": "included",
+          "user_email": "a@example.com",
+          "owning_user": "1",
+          "tokens": 1800,
+          "charged_cents": 29.0,
+          "total_cents": 29.0,
+          "is_headless": false,
+          "is_chargeable": false
+        },
+        {
+          "id": "api",
+          "timestamp_ms": 2000,
+          "model": "claude-4.5-sonnet",
+          "kind": "included",
+          "user_email": "a@example.com",
+          "owning_user": "1",
+          "tokens": 900,
+          "charged_cents": 40.0,
+          "total_cents": 40.0,
+          "is_headless": false,
+          "is_chargeable": false
+        },
+        {
+          "id": "bot",
+          "timestamp_ms": 1000,
+          "model": "grok-bot-default",
+          "kind": "included",
+          "user_email": "a@example.com",
+          "owning_user": "1",
+          "tokens": 400,
+          "charged_cents": 12.0,
+          "total_cents": 12.0,
+          "is_headless": true,
+          "is_chargeable": false
+        }
+      ],
+      "filter": {
+        "kind": "",
+        "category": "first_party",
+        "model": "",
+        "headless": null,
+        "owning_user": ""
+      },
+      "expected": {
+        "event_count": 1,
+        "total_tokens": 1800,
+        "total_cents": 29.0,
+        "has_cost": true,
+        "included_count": 1,
+        "free_count": 0,
+        "on_demand_count": 0,
+        "other_count": 0,
+        "headless_count": 0,
+        "first_party_count": 1,
+        "api_count": 0,
+        "grok_bot_count": 0,
+        "daily": [
+          {
+            "date": "1970-01-01",
+            "tokens": 1800,
+            "cents": 29.0,
+            "count": 1
+          }
+        ],
+        "models": [
+          {
+            "name": "cursor-grok-4.6-high-fast",
+            "tokens": 1800,
+            "cents": 29.0,
+            "count": 1,
+            "headless_count": 0
+          }
+        ]
+      }
     }
   ],
   "labels": {
@@ -335,6 +419,22 @@
     "on_demand": "按需",
     "other": "其他"
   },
+  "category_labels": {
+    "first_party": "First-party",
+    "api": "API",
+    "grok_bot": "Grok Bot"
+  },
+  "category": [
+    { "model": "auto", "output": "first_party" },
+    { "model": "default", "output": "first_party" },
+    { "model": "cursor-grok-4.6-high", "output": "first_party" },
+    { "model": "composer-2", "output": "first_party" },
+    { "model": "claude-4.5-sonnet", "output": "api" },
+    { "model": "gemini-3.1-pro", "output": "api" },
+    { "model": "grok-bot-default", "output": "grok_bot" },
+    { "model": "grok-bot-cua", "output": "grok_bot" },
+    { "model": "sand-agent", "output": "grok_bot" }
+  ],
   "cost_format": [
     {
       "kind": "free",
@@ -380,7 +480,7 @@
       {
         "name": "plan_weighted_plus_on_demand",
         "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "pro" },
-        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
         "events": [
           {
             "id": "inc",
@@ -439,7 +539,7 @@
       {
         "name": "filter_keeps_full_denominator",
         "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "pro" },
-        "filter": { "kind": "included", "model": "", "headless": null, "owning_user": "" },
+        "filter": { "kind": "included", "category": "", "model": "", "headless": null, "owning_user": "" },
         "events": [
           {
             "id": "inc",
@@ -483,7 +583,7 @@
       {
         "name": "two_included_weights",
         "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "" },
-        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
         "events": [
           {
             "id": "a",
@@ -528,7 +628,7 @@
       {
         "name": "auto_from_membership",
         "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "Pro" },
-        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
         "events": [
           {
             "id": "a",
@@ -559,7 +659,7 @@
       {
         "name": "zero_cost_equal_split",
         "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "" },
-        "filter": { "kind": "", "model": "", "headless": null, "owning_user": "" },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
         "events": [
           {
             "id": "a",
@@ -598,6 +698,143 @@
           "models": [
             { "name": "one", "cny": 60.0 },
             { "name": "two", "cny": 60.0 }
+          ]
+        }
+      },
+      {
+        "name": "enterprise_actual_allowance",
+        "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "enterprise" },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "inc",
+            "timestamp_ms": 3000,
+            "model": "cursor-grok-4.6-high-fast",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 1800,
+            "charged_cents": 29.0,
+            "total_cents": 29.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "od",
+            "timestamp_ms": 2000,
+            "model": "claude-4.5-sonnet",
+            "kind": "on_demand",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 900,
+            "charged_cents": 167.0,
+            "total_cents": null,
+            "is_headless": false,
+            "is_chargeable": true
+          },
+          {
+            "id": "bot",
+            "timestamp_ms": 1000,
+            "model": "grok-bot-default",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 400,
+            "charged_cents": 50.0,
+            "total_cents": 50.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 0.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 5.925,
+          "on_demand_cny": 12.525,
+          "total_cny": 18.45,
+          "uses_enterprise_allowance": true,
+          "event_cny": [2.175, 12.525, 3.75],
+          "models": [
+            { "name": "cursor-grok-4.6-high-fast", "cny": 2.175 },
+            { "name": "claude-4.5-sonnet", "cny": 12.525 },
+            { "name": "grok-bot-default", "cny": 3.75 }
+          ]
+        }
+      },
+      {
+        "name": "enterprise_filter_grok_bot",
+        "spend": { "monthly_plan_usd": 0, "usd_cny_rate": 7.5, "membership_type": "Enterprise" },
+        "filter": { "kind": "", "category": "grok_bot", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "inc",
+            "timestamp_ms": 3000,
+            "model": "cursor-grok-4.6-high-fast",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 1800,
+            "charged_cents": 29.0,
+            "total_cents": 29.0,
+            "is_headless": false,
+            "is_chargeable": false
+          },
+          {
+            "id": "bot",
+            "timestamp_ms": 1000,
+            "model": "grok-bot-default",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 400,
+            "charged_cents": 50.0,
+            "total_cents": 50.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 0.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 5.925,
+          "on_demand_cny": 0.0,
+          "total_cny": 3.75,
+          "uses_enterprise_allowance": true,
+          "event_cny": [3.75],
+          "models": [
+            { "name": "grok-bot-default", "cny": 3.75 }
+          ]
+        }
+      },
+      {
+        "name": "enterprise_explicit_monthly_keeps_weighted",
+        "spend": { "monthly_plan_usd": 16, "usd_cny_rate": 7.5, "membership_type": "enterprise" },
+        "filter": { "kind": "", "category": "", "model": "", "headless": null, "owning_user": "" },
+        "events": [
+          {
+            "id": "a",
+            "timestamp_ms": 1000,
+            "model": "auto",
+            "kind": "included",
+            "user_email": "",
+            "owning_user": "",
+            "tokens": 10,
+            "charged_cents": 50.0,
+            "total_cents": 50.0,
+            "is_headless": false,
+            "is_chargeable": false
+          }
+        ],
+        "expected": {
+          "monthly_plan_usd": 16.0,
+          "usd_cny_rate": 7.5,
+          "plan_cny": 120.0,
+          "on_demand_cny": 0.0,
+          "total_cny": 120.0,
+          "uses_enterprise_allowance": false,
+          "event_cny": [120.0],
+          "models": [
+            { "name": "auto", "cny": 120.0 }
           ]
         }
       }

@@ -268,6 +268,18 @@ public enum UsageParser {
         return key.hasPrefix("grok-bot-") || key.hasPrefix("sand-")
     }
 
+    public static func isFirstPartyModel(_ name: String?) -> Bool {
+        let key = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if key.isEmpty || isGrokBotModel(key) { return false }
+        return key == "auto" || key == "default" || key.hasPrefix("cursor-") || key.hasPrefix("composer-")
+    }
+
+    public static func usageCategory(_ name: String?) -> String {
+        if isGrokBotModel(name) { return "grok_bot" }
+        if isFirstPartyModel(name) { return "first_party" }
+        return "api"
+    }
+
     public static func applySandUsage(_ snapshot: inout UsageSnapshot, _ payload: JSONValue, now: Date = Date()) {
         guard let parsed = parseSandUsageStatus(payload, now: now) else { return }
         snapshot.grokBotPercentUsed = parsed.percentUsed
@@ -649,11 +661,7 @@ public enum UsageParser {
 
     static func modelTier(_ name: String, _ tier: JSONValue) -> Int {
         if let t = tier.asInt() { return t }
-        let key = name.lowercased()
-        if key == "auto" || key == "default" || key.hasPrefix("cursor-") || key.hasPrefix("composer-") {
-            return cursorModelTier
-        }
-        return 1
+        return isFirstPartyModel(name) ? cursorModelTier : 1
     }
 
     static func allocateUsagePercents(_ models: [ModelTokenUsage], categoryPercent: Double?) -> [ModelTokenUsage] {

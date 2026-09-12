@@ -115,12 +115,14 @@ public struct UsageChartSeries: Equatable, Sendable {
 
 public struct UsageReportFilter: Equatable, Sendable {
     public var kind: String
+    public var category: String
     public var model: String
     public var headless: Bool?
     public var owningUser: String
 
-    public init(kind: String = "", model: String = "", headless: Bool? = nil, owningUser: String = "") {
+    public init(kind: String = "", category: String = "", model: String = "", headless: Bool? = nil, owningUser: String = "") {
         self.kind = kind
+        self.category = category
         self.model = model
         self.headless = headless
         self.owningUser = owningUser
@@ -137,6 +139,10 @@ public struct UsageReport: Equatable, Sendable {
     public var onDemandCount: Int
     public var otherCount: Int
     public var headlessCount: Int
+    public var firstPartyCount: Int = 0
+    public var apiCount: Int = 0
+    public var grokBotCount: Int = 0
+    public var usesEnterpriseAllowance: Bool = false
     public var daily: [DailyUsageRow]
     public var models: [ModelUsageRow]
     public var events: [UsageEvent]
@@ -171,6 +177,9 @@ public enum UsageEvents {
     public static let kindFree = "free"
     public static let kindOnDemand = "on_demand"
     public static let kindOther = "other"
+    public static let categoryFirstParty = "first_party"
+    public static let categoryAPI = "api"
+    public static let categoryGrokBot = "grok_bot"
     public static let tzLabel = "北京时间"
     public static let csvHeader = "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent"
     public static let defaultUsdCnyRate = 7.50
@@ -187,6 +196,24 @@ public enum UsageEvents {
         case kindOnDemand: return "按需"
         default: return "其他"
         }
+    }
+
+    public static func classifyCategory(_ model: String?) -> String {
+        UsageParser.usageCategory(model)
+    }
+
+    public static func categoryLabel(_ category: String?) -> String {
+        switch (category ?? "").trimmingCharacters(in: .whitespaces).lowercased() {
+        case categoryFirstParty: return "First-party"
+        case categoryGrokBot: return "Grok Bot"
+        default: return "API"
+        }
+    }
+
+    public static func usesEnterpriseAllowance(_ spend: CnySpendSettings?) -> Bool {
+        guard let spend else { return false }
+        if clampMonthlyPlanUsd(spend.monthlyPlanUsd) > 0 { return false }
+        return UsageParser.isTeamMembership(spend.membershipType)
     }
 
     public static func classifyKind(_ kind: String?, usageBasedCosts: String? = nil, isChargeable: Bool = false) -> String {
@@ -270,33 +297,35 @@ public enum UsageEvents {
         includedCostSum: Double,
         includedCount: Int,
         planCny: Double,
-        rate: Double
+        rate: Double,
+        enterpriseAllowance: Bool = false
     ) -> Double {
         if ev.kind == kindFree { return 0 }
-        if ev.kind == kindOnDemand { return costCents(ev) / 100.0 * rate }
+        if ev.kind == kindOnDemand || enterpriseAllowance { return costCents(ev) / 100.0 * rate }
         let cents = costCents(ev)
         if includedCostSum > 1e-9 { return planCny * (cents / includedCostSum) }
         if includedCount > 0 && planCny > 0 { return planCny / Double(includedCount) }
         return 0
     }
 
-    static func cnyById(_ events: [UsageEvent], spend: CnySpendSettings?) -> (byId: [String: Double], planCny: Double, onDemandCny: Double, monthly: Double, rate: Double) {
-        guard let spend else { return ([:], 0, 0, 0, 0) }
+    static func cnyById(_ events: [UsageEvent], spend: CnySpendSettings?) -> (byId: [String: Double], planCny: Double, onDemandCny: Double, monthly: Double, rate: Double, enterprise: Bool) {
+        guard let spend else { return ([:], 0, 0, 0, 0, false) }
         let rate = clampUsdCnyRate(spend.usdCnyRate)
-        let monthly = resolveMonthlyPlanUsd(spend.monthlyPlanUsd, membership: spend.membershipType)
-        let planCny = monthly * rate
+        let enterprise = usesEnterpriseAllowance(spend)
+        let monthly = enterprise ? 0 : resolveMonthlyPlanUsd(spend.monthlyPlanUsd, membership: spend.membershipType)
         let included = events.filter { isPlanCovered($0.kind) }
         let includedCostSum = included.reduce(0.0) { $0 + costCents($1) }
         let includedCount = included.count
+        let planCny = enterprise ? includedCostSum / 100.0 * rate : monthly * rate
         var byId: [String: Double] = [:]
         var onDemandCny = 0.0
         for (i, ev) in events.enumerated() {
-            let amount = allocateEventCny(ev, includedCostSum: includedCostSum, includedCount: includedCount, planCny: planCny, rate: rate)
+            let amount = allocateEventCny(ev, includedCostSum: includedCostSum, includedCount: includedCount, planCny: planCny, rate: rate, enterpriseAllowance: enterprise)
             let key = ev.id.isEmpty ? "#\(i)" : ev.id
             byId[key] = amount
             if ev.kind == kindOnDemand { onDemandCny += amount }
         }
-        return (byId, planCny, onDemandCny, monthly, rate)
+        return (byId, planCny, onDemandCny, monthly, rate, enterprise)
     }
 
     public static func formatTime(_ timestampMs: Int64) -> String {
@@ -547,12 +576,14 @@ public enum UsageEvents {
 
     public static func buildReport(_ events: [UsageEvent], filter: UsageReportFilter = UsageReportFilter(), spend: CnySpendSettings? = nil) -> UsageReport {
         let kind = filter.kind.trimmingCharacters(in: .whitespaces).lowercased()
+        let category = filter.category.trimmingCharacters(in: .whitespaces).lowercased()
         let model = filter.model.trimmingCharacters(in: .whitespaces)
         let owning = filter.owningUser.trimmingCharacters(in: .whitespaces)
         let allocated = cnyById(events, spend: spend)
         var selected: [UsageEvent] = []
         for (i, ev) in events.enumerated() {
             if !kind.isEmpty && ev.kind != kind { continue }
+            if !category.isEmpty && classifyCategory(ev.model) != category { continue }
             if !model.isEmpty && ev.model != model { continue }
             if let h = filter.headless, ev.isHeadless != h { continue }
             if !owning.isEmpty && ev.owningUser != owning { continue }
@@ -566,6 +597,7 @@ public enum UsageEvents {
         var dailyMap: [String: (Int, Double, Int, Double)] = [:]
         var modelMap: [String: (Int, Double, Int, Int, Double)] = [:]
         var included = 0, free = 0, onDemand = 0, other = 0, headless = 0
+        var firstParty = 0, api = 0, grokBot = 0
         var totalTokens = 0
         var totalCents = 0.0
         var totalCny = 0.0
@@ -581,6 +613,11 @@ public enum UsageEvents {
             case kindFree: free += 1
             case kindOnDemand: onDemand += 1
             default: other += 1
+            }
+            switch classifyCategory(ev.model) {
+            case categoryGrokBot: grokBot += 1
+            case categoryFirstParty: firstParty += 1
+            default: api += 1
             }
             if ev.isHeadless { headless += 1 }
             let day = eventDate(ev.timestampMs)
@@ -611,6 +648,10 @@ public enum UsageEvents {
             onDemandCount: onDemand,
             otherCount: other,
             headlessCount: headless,
+            firstPartyCount: firstParty,
+            apiCount: api,
+            grokBotCount: grokBot,
+            usesEnterpriseAllowance: allocated.enterprise,
             daily: daily,
             models: models,
             events: selected,
@@ -623,7 +664,7 @@ public enum UsageEvents {
     }
 
     public static func toCSV(_ events: [UsageEvent], spend: CnySpendSettings? = nil, allocationBase: [UsageEvent]? = nil) -> String {
-        let allocated = spend == nil ? (byId: [String: Double](), planCny: 0.0, onDemandCny: 0.0, monthly: 0.0, rate: 0.0) : cnyById(allocationBase ?? events, spend: spend)
+        let allocated = spend == nil ? (byId: [String: Double](), planCny: 0.0, onDemandCny: 0.0, monthly: 0.0, rate: 0.0, enterprise: false) : cnyById(allocationBase ?? events, spend: spend)
         var lines = ["\u{FEFF}\(csvHeader)"]
         for (i, ev) in events.enumerated() {
             let cnyText: String

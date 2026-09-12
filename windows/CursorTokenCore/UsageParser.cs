@@ -128,6 +128,20 @@ public static class UsageParser
         return key.StartsWith("grok-bot-") || key.StartsWith("sand-");
     }
 
+    public static bool IsFirstPartyModel(string? name)
+    {
+        var key = (name ?? "").Trim().ToLowerInvariant();
+        if (key.Length == 0 || IsGrokBotModel(key)) return false;
+        return key is "auto" or "default" || key.StartsWith("cursor-") || key.StartsWith("composer-");
+    }
+
+    public static string UsageCategory(string? name)
+    {
+        if (IsGrokBotModel(name)) return "grok_bot";
+        if (IsFirstPartyModel(name)) return "first_party";
+        return "api";
+    }
+
     public static void ApplySandUsage(UsageSnapshot snapshot, JsonBag payload, DateTimeOffset? now = null)
     {
         var parsed = ParseSandUsageStatus(payload, now);
@@ -431,9 +445,7 @@ public static class UsageParser
     static int ModelTier(string name, JsonBag tier)
     {
         if (tier.AsInt() is { } t) return t;
-        var key = name.ToLowerInvariant();
-        if (key is "auto" or "default" || key.StartsWith("cursor-") || key.StartsWith("composer-")) return CursorModelTier;
-        return 1;
+        return IsFirstPartyModel(name) ? CursorModelTier : 1;
     }
 
     static List<ModelTokenUsage> Allocate(List<ModelTokenUsage> models, double? categoryPercent)

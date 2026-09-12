@@ -14,6 +14,9 @@ from cursor_api import (
     _as_int,
     _sum_token_fields,
     format_usd_cents,
+    is_first_party_model,
+    is_grok_bot_model,
+    is_team_membership,
 )
 
 FILTERED_USAGE_ENDPOINT = "/api/dashboard/get-filtered-usage-events"
@@ -30,6 +33,16 @@ KIND_LABELS = {
     KIND_FREE: "免费",
     KIND_ON_DEMAND: "按需",
     KIND_OTHER: "其他",
+}
+
+CATEGORY_FIRST_PARTY = "first_party"
+CATEGORY_API = "api"
+CATEGORY_GROK_BOT = "grok_bot"
+
+CATEGORY_LABELS = {
+    CATEGORY_FIRST_PARTY: "First-party",
+    CATEGORY_API: "API",
+    CATEGORY_GROK_BOT: "Grok Bot",
 }
 
 DISPLAY_TZ = timezone(timedelta(hours=8))
@@ -133,11 +146,16 @@ class UsageReport:
     on_demand_cny: float = 0.0
     usd_cny_rate: float = 0.0
     monthly_plan_usd: float = 0.0
+    first_party_count: int = 0
+    api_count: int = 0
+    grok_bot_count: int = 0
+    uses_enterprise_allowance: bool = False
 
 
 @dataclass(frozen=True)
 class UsageReportFilter:
     kind: str = ""
+    category: str = ""
     model: str = ""
     headless: bool | None = None
     owning_user: str = ""
@@ -175,6 +193,27 @@ def classify_usage_kind(
 
 def kind_label(kind: str | None) -> str:
     return KIND_LABELS.get((kind or "").strip().lower(), KIND_LABELS[KIND_OTHER])
+
+
+def classify_usage_category(model: str | None) -> str:
+    name = (model or "").strip()
+    if is_grok_bot_model(name):
+        return CATEGORY_GROK_BOT
+    if is_first_party_model(name):
+        return CATEGORY_FIRST_PARTY
+    return CATEGORY_API
+
+
+def category_label(category: str | None) -> str:
+    return CATEGORY_LABELS.get((category or "").strip().lower(), CATEGORY_LABELS[CATEGORY_API])
+
+
+def uses_enterprise_allowance(spend: CnySpendSettings | None) -> bool:
+    if spend is None:
+        return False
+    if clamp_monthly_plan_usd(spend.monthly_plan_usd) > 0:
+        return False
+    return is_team_membership(spend.membership_type)
 
 
 def event_cost_cents(event: UsageEvent) -> float:
@@ -263,10 +302,11 @@ def allocate_event_cny(
     included_count: int,
     plan_cny: float,
     rate: float,
+    enterprise_allowance: bool = False,
 ) -> float:
     if event.kind == KIND_FREE:
         return 0.0
-    if event.kind == KIND_ON_DEMAND:
+    if event.kind == KIND_ON_DEMAND or enterprise_allowance:
         return event_cost_cents(event) / 100.0 * rate
     cents = event_cost_cents(event)
     if included_cost_sum > 1e-9:
@@ -279,24 +319,27 @@ def allocate_event_cny(
 def _cny_by_id(
     events: list[UsageEvent] | tuple[UsageEvent, ...],
     spend: CnySpendSettings | None,
-) -> tuple[dict[str, float], float, float, float, float]:
+) -> tuple[dict[str, float], float, float, float, float, bool]:
     if spend is None:
-        return {}, 0.0, 0.0, 0.0, 0.0
+        return {}, 0.0, 0.0, 0.0, 0.0, False
     rate = clamp_usd_cny_rate(spend.usd_cny_rate)
-    monthly = resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type)
-    plan_cny = monthly * rate
+    enterprise = uses_enterprise_allowance(spend)
+    monthly = 0.0 if enterprise else resolve_monthly_plan_usd(spend.monthly_plan_usd, spend.membership_type)
     included = [ev for ev in events if is_plan_covered_kind(ev.kind)]
     included_cost_sum = sum(event_cost_cents(ev) for ev in included)
     included_count = len(included)
+    plan_cny = included_cost_sum / 100.0 * rate if enterprise else monthly * rate
     by_id: dict[str, float] = {}
     on_demand_cny = 0.0
     for i, ev in enumerate(events):
-        amount = allocate_event_cny(ev, included_cost_sum, included_count, plan_cny, rate)
+        amount = allocate_event_cny(
+            ev, included_cost_sum, included_count, plan_cny, rate, enterprise
+        )
         key = ev.id or f"#{i}"
         by_id[key] = amount
         if ev.kind == KIND_ON_DEMAND:
             on_demand_cny += amount
-    return by_id, plan_cny, on_demand_cny, monthly, rate
+    return by_id, plan_cny, on_demand_cny, monthly, rate, enterprise
 
 
 def format_event_time(timestamp_ms: int) -> str:
@@ -568,13 +611,16 @@ def build_usage_report(
 ) -> UsageReport:
     filt = filt or UsageReportFilter()
     kind = (filt.kind or "").strip().lower()
+    category = (filt.category or "").strip().lower()
     model = (filt.model or "").strip()
     owning = (filt.owning_user or "").strip()
     source = list(events)
-    cny_by_id, plan_cny, on_demand_cny, monthly, rate = _cny_by_id(source, spend)
+    cny_by_id, plan_cny, on_demand_cny, monthly, rate, enterprise = _cny_by_id(source, spend)
     selected: list[UsageEvent] = []
     for i, event in enumerate(source):
         if kind and event.kind != kind:
+            continue
+        if category and classify_usage_category(event.model) != category:
             continue
         if model and event.model != model:
             continue
@@ -589,6 +635,7 @@ def build_usage_report(
     daily_map: dict[str, list[int | float]] = {}
     model_map: dict[str, list[int | float]] = {}
     included = free = on_demand = other = headless = 0
+    first_party = api = grok_bot = 0
     total_tokens = 0
     total_cents = 0.0
     total_cny = 0.0
@@ -608,6 +655,13 @@ def build_usage_report(
             on_demand += 1
         else:
             other += 1
+        bucket = classify_usage_category(event.model)
+        if bucket == CATEGORY_GROK_BOT:
+            grok_bot += 1
+        elif bucket == CATEGORY_FIRST_PARTY:
+            first_party += 1
+        else:
+            api += 1
         if event.is_headless:
             headless += 1
         day = event_date(event.timestamp_ms)
@@ -661,6 +715,10 @@ def build_usage_report(
         on_demand_count=on_demand,
         other_count=other,
         headless_count=headless,
+        first_party_count=first_party,
+        api_count=api,
+        grok_bot_count=grok_bot,
+        uses_enterprise_allowance=enterprise,
         daily=daily,
         models=models,
         events=tuple(selected),
@@ -679,7 +737,7 @@ def usage_events_to_csv(
 ) -> str:
     cny_by_id: dict[str, float] = {}
     if spend is not None:
-        cny_by_id, _, _, _, _ = _cny_by_id(allocation_base if allocation_base is not None else events, spend)
+        cny_by_id, _, _, _, _, _ = _cny_by_id(allocation_base if allocation_base is not None else events, spend)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(CSV_HEADER.split(","))

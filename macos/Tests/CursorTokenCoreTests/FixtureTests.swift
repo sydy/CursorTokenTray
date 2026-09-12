@@ -195,6 +195,13 @@ final class UsageParserFixtureTests: XCTestCase {
         XCTAssertEqual(UsageEvents.kindLabel("included"), str(labels["included"]))
         XCTAssertEqual(UsageEvents.kindLabel("free"), str(labels["free"]))
         XCTAssertEqual(UsageEvents.kindLabel("on_demand"), str(labels["on_demand"]))
+        let categoryLabels = root["category_labels"] as! [String: Any]
+        XCTAssertEqual(UsageEvents.categoryLabel("first_party"), str(categoryLabels["first_party"]))
+        XCTAssertEqual(UsageEvents.categoryLabel("api"), str(categoryLabels["api"]))
+        XCTAssertEqual(UsageEvents.categoryLabel("grok_bot"), str(categoryLabels["grok_bot"]))
+        for row in root["category"] as! [[String: Any]] {
+            XCTAssertEqual(UsageEvents.classifyCategory(str(row["model"])), str(row["output"]))
+        }
         for cse in root["parse"] as! [[String: Any]] {
             let payload = try JSONValue.parse(JSONSerialization.data(withJSONObject: cse["payload"] as Any))
             let parsed = UsageEvents.parsePage(payload)
@@ -219,6 +226,7 @@ final class UsageParserFixtureTests: XCTestCase {
             let filt = cse["filter"] as! [String: Any]
             let report = UsageEvents.buildReport(events, filter: UsageReportFilter(
                 kind: str(filt["kind"]),
+                category: str(filt["category"]),
                 model: str(filt["model"]),
                 headless: filt["headless"] is NSNull ? nil : (filt["headless"] as? Bool),
                 owningUser: str(filt["owning_user"])
@@ -232,6 +240,11 @@ final class UsageParserFixtureTests: XCTestCase {
             XCTAssertEqual(report.freeCount, int(exp["free_count"]) ?? -1)
             XCTAssertEqual(report.onDemandCount, int(exp["on_demand_count"]) ?? -1)
             XCTAssertEqual(report.headlessCount, int(exp["headless_count"]) ?? -1)
+            if exp["first_party_count"] != nil {
+                XCTAssertEqual(report.firstPartyCount, int(exp["first_party_count"]) ?? -1)
+                XCTAssertEqual(report.apiCount, int(exp["api_count"]) ?? -1)
+                XCTAssertEqual(report.grokBotCount, int(exp["grok_bot_count"]) ?? -1)
+            }
             let daily = exp["daily"] as! [[String: Any]]
             XCTAssertEqual(report.daily.count, daily.count)
             for (got, row) in zip(report.daily, daily) {
@@ -265,6 +278,7 @@ final class UsageParserFixtureTests: XCTestCase {
                 events,
                 filter: UsageReportFilter(
                     kind: str(filt["kind"]),
+                    category: str(filt["category"]),
                     model: str(filt["model"]),
                     headless: filt["headless"] is NSNull ? nil : (filt["headless"] as? Bool),
                     owningUser: str(filt["owning_user"])
@@ -281,6 +295,9 @@ final class UsageParserFixtureTests: XCTestCase {
             XCTAssertEqual(report.planCny, try XCTUnwrap(num(exp["plan_cny"])), accuracy: 0.001)
             XCTAssertEqual(report.onDemandCny, try XCTUnwrap(num(exp["on_demand_cny"])), accuracy: 0.001)
             XCTAssertEqual(report.totalCny, try XCTUnwrap(num(exp["total_cny"])), accuracy: 0.001)
+            if let wantEnterprise = exp["uses_enterprise_allowance"] as? Bool {
+                XCTAssertEqual(report.usesEnterpriseAllowance, wantEnterprise)
+            }
             let eventCny = (exp["event_cny"] as! [Any]).compactMap { num($0) }
             XCTAssertEqual(report.events.count, eventCny.count)
             for (got, want) in zip(report.events, eventCny) {

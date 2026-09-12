@@ -639,6 +639,13 @@ def is_grok_bot_model(name: str | None) -> bool:
     return any(key.startswith(prefix) for prefix in _GROK_BOT_MODEL_PREFIXES)
 
 
+def is_first_party_model(name: str | None) -> bool:
+    key = (name or "").strip().lower()
+    if not key or is_grok_bot_model(key):
+        return False
+    return key in {"auto", "default"} or key.startswith("cursor-") or key.startswith("composer-")
+
+
 def apply_sand_usage_status(
     snapshot: UsageSnapshot,
     payload: dict[str, Any],
@@ -953,10 +960,7 @@ def _model_tier(name: str, tier: Any) -> int:
     t = _as_int(tier)
     if t is not None:
         return t
-    key = name.lower()
-    if key in {"auto", "default"} or key.startswith("cursor-") or key.startswith("composer-"):
-        return CURSOR_MODEL_TIER
-    return 1
+    return CURSOR_MODEL_TIER if is_first_party_model(name) else 1
 
 
 def _allocate_usage_percents(

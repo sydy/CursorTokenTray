@@ -19,7 +19,7 @@ sealed class SettingsForm : Form
     readonly TextBox _cnyRate = new() { Width = 80 };
     readonly Label _spendHint = new()
     {
-        Text = "月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。报表「实付」= 月费按套餐内费用分摊 + 按需×汇率。",
+        Text = "月费填 0 则按套餐预填：Pro $20 / Pro+ $60 / Ultra $200。年付请填折合月费。个人套餐「实付」= 月费按套餐内费用分摊 + 按需×汇率。企业 / 团队未填月费时，按额度实际扣费（费用×汇率）计算。",
         AutoSize = true,
         ForeColor = Color.DimGray,
         Margin = new Padding(0, 0, 0, 8),

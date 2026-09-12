@@ -19,6 +19,7 @@ sealed class ReportForm : Form
     readonly Func<ReportState> _state;
     readonly ComboBox _scope = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly ComboBox _kind = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    readonly ComboBox _category = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly ComboBox _model = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly ComboBox _cloud = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly Label _status = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(8, 8, 0, 0) };
@@ -62,6 +63,8 @@ sealed class ReportForm : Form
         _scope.SelectedIndex = 0;
         _kind.Items.AddRange(["全部类型", "套餐内", "免费", "按需"]);
         _kind.SelectedIndex = 0;
+        _category.Items.AddRange(["全部额度", "First-party", "API", "Grok Bot"]);
+        _category.SelectedIndex = 0;
         _cloud.Items.AddRange(["全部来源", "本机", "云端 Agent"]);
         _cloud.SelectedIndex = 0;
         _model.Items.Add("全部模型");
@@ -93,6 +96,7 @@ sealed class ReportForm : Form
         filters.Controls.Add(_scopeLabel);
         filters.Controls.Add(_scope);
         filters.Controls.Add(Tag("类型", _kind));
+        filters.Controls.Add(Tag("额度", _category));
         filters.Controls.Add(Tag("模型", _model));
         filters.Controls.Add(Tag("来源", _cloud));
         filters.Controls.Add(_syncBtn);
@@ -128,6 +132,7 @@ sealed class ReportForm : Form
             _ = SyncAsync(false);
         };
         _kind.SelectedIndexChanged += (_, _) => { if (_ready) Render(); };
+        _category.SelectedIndexChanged += (_, _) => { if (_ready) Render(); };
         _model.SelectedIndexChanged += (_, _) => { if (_ready) Render(); };
         _cloud.SelectedIndexChanged += (_, _) => { if (_ready) Render(); };
         _syncBtn.Click += (_, _) => _ = SyncAsync(true);
@@ -159,6 +164,7 @@ sealed class ReportForm : Form
         var dpi = DeviceDpi;
         _scope.Width = UiLayout.ScalePx(120, dpi);
         _kind.Width = UiLayout.ScalePx(130, dpi);
+        _category.Width = UiLayout.ScalePx(140, dpi);
         _model.Width = UiLayout.ScalePx(280, dpi);
         _cloud.Width = UiLayout.ScalePx(140, dpi);
         _model.DropDownWidth = Math.Max(_model.Width, UiLayout.ScalePx(360, dpi));
@@ -299,9 +305,16 @@ sealed class ReportForm : Form
     UsageReportFilter CurrentFilter()
     {
         var kind = _kind.SelectedIndex switch { 1 => UsageEvents.KindIncluded, 2 => UsageEvents.KindFree, 3 => UsageEvents.KindOnDemand, _ => "" };
+        var category = _category.SelectedIndex switch
+        {
+            1 => UsageEvents.CategoryFirstParty,
+            2 => UsageEvents.CategoryApi,
+            3 => UsageEvents.CategoryGrokBot,
+            _ => "",
+        };
         var model = _model.SelectedIndex > 0 ? _model.SelectedItem?.ToString() ?? "" : "";
         bool? cloud = _cloud.SelectedIndex switch { 1 => false, 2 => true, _ => null };
-        return new UsageReportFilter { Kind = kind, Model = model, Headless = cloud };
+        return new UsageReportFilter { Kind = kind, Category = category, Model = model, Headless = cloud };
     }
 
     void FillModels()
@@ -323,9 +336,10 @@ sealed class ReportForm : Form
     {
         var report = CurrentReport();
         var mix = $"套餐内 {report.IncludedCount} · 免费 {report.FreeCount} · 按需 {report.OnDemandCount}";
+        mix += $"    First-party {report.FirstPartyCount} · API {report.ApiCount} · Grok Bot {report.GrokBotCount}";
         if (report.HeadlessCount > 0) mix += $" · 云端 {report.HeadlessCount}";
         var cost = report.HasCost ? $"    费用 {UsageParser.FormatUsdCents(report.TotalCents)}" : "";
-        _kpi.Text = $"请求 {report.EventCount}    Token {UsageParser.FormatTokenCount(report.TotalTokens)}    {mix}{cost}{SpendKpi(report)}";
+        _kpi.Text = $"请求 {report.EventCount}    Token {UsageParser.FormatTokenCount(report.TotalTokens)}    {mix}{cost}{QuotaKpi()}{SpendKpi(report)}";
         _chart.Bind(report.Events);
         _root.PerformLayout();
 
@@ -363,12 +377,20 @@ sealed class ReportForm : Form
         ApplyGridMetrics(_grid, UiLayout.ScalePx(DesignHeaderH, DeviceDpi), UiLayout.ScalePx(DesignRowH, DeviceDpi), DetailMinWidths, DeviceDpi);
     }
 
+    string QuotaKpi()
+    {
+        var usage = _state().Usage;
+        if (usage is null || !usage.ShowsAmount) return "";
+        return $"    企业额度 {UsageParser.FormatSpendRange(usage.UsedCents, usage.LimitCents)}";
+    }
+
     static string SpendKpi(UsageReport report)
     {
         if (report.PlanCny <= 0 && report.OnDemandCny <= 0) return "";
         var expected = report.PlanCny + report.OnDemandCny;
         var rate = report.UsdCnyRate.ToString("0.00", CultureInfo.InvariantCulture);
-        return $"    预计实付 {UsageEvents.FormatCny(expected)}（月费 {UsageEvents.FormatCny(report.PlanCny)} + 按需 {UsageEvents.FormatCny(report.OnDemandCny)}）· 汇率 {rate}";
+        var planLabel = report.UsesEnterpriseAllowance ? "额度" : "月费";
+        return $"    预计实付 {UsageEvents.FormatCny(expected)}（{planLabel} {UsageEvents.FormatCny(report.PlanCny)} + 按需 {UsageEvents.FormatCny(report.OnDemandCny)}）· 汇率 {rate}";
     }
 
     void ExportCsv()

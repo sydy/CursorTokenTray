@@ -41,6 +41,7 @@ public sealed class UsageChartSeries
 public sealed class UsageReportFilter
 {
     public string Kind { get; set; } = "";
+    public string Category { get; set; } = "";
     public string Model { get; set; } = "";
     public bool? Headless { get; set; }
     public string OwningUser { get; set; } = "";
@@ -57,6 +58,10 @@ public sealed class UsageReport
     public int OnDemandCount { get; init; }
     public int OtherCount { get; init; }
     public int HeadlessCount { get; init; }
+    public int FirstPartyCount { get; init; }
+    public int ApiCount { get; init; }
+    public int GrokBotCount { get; init; }
+    public bool UsesEnterpriseAllowance { get; init; }
     public List<DailyUsageRow> Daily { get; init; } = [];
     public List<ModelUsageRow> Models { get; init; } = [];
     public List<UsageEvent> Events { get; init; } = [];
@@ -80,6 +85,9 @@ public static class UsageEvents
     public const string KindFree = "free";
     public const string KindOnDemand = "on_demand";
     public const string KindOther = "other";
+    public const string CategoryFirstParty = "first_party";
+    public const string CategoryApi = "api";
+    public const string CategoryGrokBot = "grok_bot";
     public const string TzLabel = "北京时间";
     public const string CsvHeader = "日期(北京时间),用户,类型,模型,Token,费用,实付,云端Agent";
     public const double DefaultUsdCnyRate = 7.50;
@@ -104,6 +112,22 @@ public static class UsageEvents
         KindOnDemand => "按需",
         _ => "其他",
     };
+
+    public static string ClassifyCategory(string? model) => UsageParser.UsageCategory(model);
+
+    public static string CategoryLabel(string? category) => (category ?? "").Trim().ToLowerInvariant() switch
+    {
+        CategoryFirstParty => "First-party",
+        CategoryGrokBot => "Grok Bot",
+        _ => "API",
+    };
+
+    public static bool UsesEnterpriseAllowance(CnySpendSettings? spend)
+    {
+        if (spend is null) return false;
+        if (ClampMonthlyPlanUsd(spend.Value.MonthlyPlanUsd) > 0) return false;
+        return UsageParser.IsTeamMembership(spend.Value.MembershipType);
+    }
 
     public static string ClassifyKind(string? kind, string? usageBasedCosts = null, bool isChargeable = false)
     {
@@ -182,37 +206,38 @@ public static class UsageEvents
         return FormatCny(amount ?? ev.AllocatedCny);
     }
 
-    public static double AllocateEventCny(UsageEvent ev, double includedCostSum, int includedCount, double planCny, double rate)
+    public static double AllocateEventCny(UsageEvent ev, double includedCostSum, int includedCount, double planCny, double rate, bool enterpriseAllowance = false)
     {
         if (ev.Kind == KindFree) return 0;
-        if (ev.Kind == KindOnDemand) return CostCents(ev) / 100.0 * rate;
+        if (ev.Kind == KindOnDemand || enterpriseAllowance) return CostCents(ev) / 100.0 * rate;
         var cents = CostCents(ev);
         if (includedCostSum > 1e-9) return planCny * (cents / includedCostSum);
         if (includedCount > 0 && planCny > 0) return planCny / includedCount;
         return 0;
     }
 
-    static (Dictionary<string, double> byId, double planCny, double onDemandCny, double monthly, double rate) CnyById(
+    static (Dictionary<string, double> byId, double planCny, double onDemandCny, double monthly, double rate, bool enterprise) CnyById(
         IList<UsageEvent> events, CnySpendSettings? spend)
     {
-        if (spend is null) return ([], 0, 0, 0, 0);
+        if (spend is null) return ([], 0, 0, 0, 0, false);
         var rate = ClampUsdCnyRate(spend.Value.UsdCnyRate);
-        var monthly = ResolveMonthlyPlanUsd(spend.Value.MonthlyPlanUsd, spend.Value.MembershipType);
-        var planCny = monthly * rate;
+        var enterprise = UsesEnterpriseAllowance(spend);
+        var monthly = enterprise ? 0 : ResolveMonthlyPlanUsd(spend.Value.MonthlyPlanUsd, spend.Value.MembershipType);
         var included = events.Where(ev => IsPlanCovered(ev.Kind)).ToList();
         var includedCostSum = included.Sum(CostCents);
         var includedCount = included.Count;
+        var planCny = enterprise ? includedCostSum / 100.0 * rate : monthly * rate;
         var byId = new Dictionary<string, double>(StringComparer.Ordinal);
         var onDemandCny = 0.0;
         for (var i = 0; i < events.Count; i++)
         {
             var ev = events[i];
-            var amount = AllocateEventCny(ev, includedCostSum, includedCount, planCny, rate);
+            var amount = AllocateEventCny(ev, includedCostSum, includedCount, planCny, rate, enterprise);
             var key = ev.Id.Length > 0 ? ev.Id : $"#{i}";
             byId[key] = amount;
             if (ev.Kind == KindOnDemand) onDemandCny += amount;
         }
-        return (byId, planCny, onDemandCny, monthly, rate);
+        return (byId, planCny, onDemandCny, monthly, rate, enterprise);
     }
 
     public static string FormatTime(long timestampMs)
@@ -440,15 +465,17 @@ public static class UsageEvents
     {
         filter ??= new UsageReportFilter();
         var kind = (filter.Kind ?? "").Trim().ToLowerInvariant();
+        var category = (filter.Category ?? "").Trim().ToLowerInvariant();
         var model = (filter.Model ?? "").Trim();
         var owning = (filter.OwningUser ?? "").Trim();
         var source = events as IList<UsageEvent> ?? events.ToList();
-        var (cnyById, planCny, onDemandCny, monthly, rate) = CnyById(source, spend);
+        var (cnyById, planCny, onDemandCny, monthly, rate, enterprise) = CnyById(source, spend);
         var selected = new List<UsageEvent>();
         for (var i = 0; i < source.Count; i++)
         {
             var ev = source[i];
             if (kind.Length > 0 && ev.Kind != kind) continue;
+            if (category.Length > 0 && ClassifyCategory(ev.Model) != category) continue;
             if (model.Length > 0 && ev.Model != model) continue;
             if (filter.Headless is { } h && ev.IsHeadless != h) continue;
             if (owning.Length > 0 && ev.OwningUser != owning) continue;
@@ -461,6 +488,7 @@ public static class UsageEvents
         var dailyMap = new Dictionary<string, (long tokens, double cents, int count, double cny)>(StringComparer.Ordinal);
         var modelMap = new Dictionary<string, (long tokens, double cents, int count, int headless, double cny)>(StringComparer.Ordinal);
         var included = 0; var free = 0; var onDemand = 0; var other = 0; var headless = 0;
+        var firstParty = 0; var api = 0; var grokBot = 0;
         long totalTokens = 0;
         double totalCents = 0;
         double totalCny = 0;
@@ -476,6 +504,12 @@ public static class UsageEvents
             else if (ev.Kind == KindFree) free++;
             else if (ev.Kind == KindOnDemand) onDemand++;
             else other++;
+            switch (ClassifyCategory(ev.Model))
+            {
+                case CategoryGrokBot: grokBot++; break;
+                case CategoryFirstParty: firstParty++; break;
+                default: api++; break;
+            }
             if (ev.IsHeadless) headless++;
             var day = EventDate(ev.TimestampMs);
             dailyMap.TryGetValue(day, out var d);
@@ -495,6 +529,10 @@ public static class UsageEvents
             OnDemandCount = onDemand,
             OtherCount = other,
             HeadlessCount = headless,
+            FirstPartyCount = firstParty,
+            ApiCount = api,
+            GrokBotCount = grokBot,
+            UsesEnterpriseAllowance = enterprise,
             Daily = dailyMap.OrderBy(kv => kv.Key).Select(kv => new DailyUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.cny)).ToList(),
             Models = modelMap.Select(kv => new ModelUsageRow(kv.Key, kv.Value.tokens, kv.Value.cents, kv.Value.count, kv.Value.headless, kv.Value.cny))
                 .OrderByDescending(m => m.Tokens).ThenByDescending(m => m.Cents).ThenByDescending(m => m.Count).ToList(),

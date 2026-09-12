@@ -175,6 +175,11 @@ public class FixtureTests
         Assert.Equal(root.GetProperty("labels").GetProperty("included").GetString(), UsageEvents.KindLabel("included"));
         Assert.Equal(root.GetProperty("labels").GetProperty("free").GetString(), UsageEvents.KindLabel("free"));
         Assert.Equal(root.GetProperty("labels").GetProperty("on_demand").GetString(), UsageEvents.KindLabel("on_demand"));
+        Assert.Equal(root.GetProperty("category_labels").GetProperty("first_party").GetString(), UsageEvents.CategoryLabel("first_party"));
+        Assert.Equal(root.GetProperty("category_labels").GetProperty("api").GetString(), UsageEvents.CategoryLabel("api"));
+        Assert.Equal(root.GetProperty("category_labels").GetProperty("grok_bot").GetString(), UsageEvents.CategoryLabel("grok_bot"));
+        foreach (var row in root.GetProperty("category").EnumerateArray())
+            Assert.Equal(row.GetProperty("output").GetString(), UsageEvents.ClassifyCategory(row.GetProperty("model").GetString()));
         foreach (var cse in root.GetProperty("parse").EnumerateArray())
         {
             var parsed = UsageEvents.ParsePage(JsonBag.Parse(cse.GetProperty("payload").GetRawText()));
@@ -195,6 +200,7 @@ public class FixtureTests
             var report = UsageEvents.BuildReport(events, new UsageReportFilter
             {
                 Kind = filtEl.GetProperty("kind").GetString() ?? "",
+                Category = NullStr(filtEl, "category") ?? "",
                 Model = filtEl.GetProperty("model").GetString() ?? "",
                 Headless = NullBool(filtEl, "headless"),
                 OwningUser = NullStr(filtEl, "owning_user") ?? "",
@@ -208,6 +214,12 @@ public class FixtureTests
             Assert.Equal(exp.GetProperty("free_count").GetInt32(), report.FreeCount);
             Assert.Equal(exp.GetProperty("on_demand_count").GetInt32(), report.OnDemandCount);
             Assert.Equal(exp.GetProperty("headless_count").GetInt32(), report.HeadlessCount);
+            if (exp.TryGetProperty("first_party_count", out var fp))
+            {
+                Assert.Equal(fp.GetInt32(), report.FirstPartyCount);
+                Assert.Equal(exp.GetProperty("api_count").GetInt32(), report.ApiCount);
+                Assert.Equal(exp.GetProperty("grok_bot_count").GetInt32(), report.GrokBotCount);
+            }
             var daily = exp.GetProperty("daily").EnumerateArray().ToList();
             Assert.Equal(daily.Count, report.Daily.Count);
             for (var i = 0; i < daily.Count; i++)
@@ -243,6 +255,7 @@ public class FixtureTests
             var report = UsageEvents.BuildReport(events, new UsageReportFilter
             {
                 Kind = filtEl.GetProperty("kind").GetString() ?? "",
+                Category = NullStr(filtEl, "category") ?? "",
                 Model = filtEl.GetProperty("model").GetString() ?? "",
                 Headless = NullBool(filtEl, "headless"),
                 OwningUser = NullStr(filtEl, "owning_user") ?? "",
@@ -256,6 +269,8 @@ public class FixtureTests
             Assert.Equal(exp.GetProperty("plan_cny").GetDouble(), report.PlanCny, 3);
             Assert.Equal(exp.GetProperty("on_demand_cny").GetDouble(), report.OnDemandCny, 3);
             Assert.Equal(exp.GetProperty("total_cny").GetDouble(), report.TotalCny, 3);
+            if (exp.TryGetProperty("uses_enterprise_allowance", out var enterprise))
+                Assert.Equal(enterprise.GetBoolean(), report.UsesEnterpriseAllowance);
             var eventCny = exp.GetProperty("event_cny").EnumerateArray().Select(x => x.GetDouble()).ToList();
             Assert.Equal(eventCny.Count, report.Events.Count);
             for (var i = 0; i < eventCny.Count; i++)

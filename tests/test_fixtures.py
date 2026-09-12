@@ -111,11 +111,13 @@ class GoldenFixtureTests(unittest.TestCase):
 
     def test_usage_events_fixtures_match_python(self) -> None:
         from usage_report import (
+            CATEGORY_LABELS,
             CSV_HEADER,
             KIND_LABELS,
             UsageEvent,
             UsageReportFilter,
             build_usage_report,
+            classify_usage_category,
             classify_usage_kind,
             event_date,
             event_hour,
@@ -133,6 +135,9 @@ class GoldenFixtureTests(unittest.TestCase):
                 row["output"],
             )
         self.assertEqual(data["labels"], KIND_LABELS)
+        self.assertEqual(data["category_labels"], CATEGORY_LABELS)
+        for row in data["category"]:
+            self.assertEqual(classify_usage_category(row["model"]), row["output"])
         for cse in data["parse"]:
             events, total = parse_filtered_usage_events(cse["payload"])
             self.assertEqual(total, cse["total_count"])
@@ -155,6 +160,7 @@ class GoldenFixtureTests(unittest.TestCase):
                 events,
                 UsageReportFilter(
                     kind=filt["kind"],
+                    category=filt.get("category", ""),
                     model=filt["model"],
                     headless=filt["headless"],
                     owning_user=filt.get("owning_user", ""),
@@ -169,6 +175,10 @@ class GoldenFixtureTests(unittest.TestCase):
             self.assertEqual(report.free_count, exp["free_count"])
             self.assertEqual(report.on_demand_count, exp["on_demand_count"])
             self.assertEqual(report.headless_count, exp["headless_count"])
+            if "first_party_count" in exp:
+                self.assertEqual(report.first_party_count, exp["first_party_count"])
+                self.assertEqual(report.api_count, exp["api_count"])
+                self.assertEqual(report.grok_bot_count, exp["grok_bot_count"])
             self.assertEqual(
                 [(d.date, d.tokens, d.cents, d.count) for d in report.daily],
                 [(d["date"], d["tokens"], d["cents"], d["count"]) for d in exp["daily"]],
@@ -191,6 +201,7 @@ class GoldenFixtureTests(unittest.TestCase):
                 events,
                 UsageReportFilter(
                     kind=filt["kind"],
+                    category=filt.get("category", ""),
                     model=filt["model"],
                     headless=filt["headless"],
                     owning_user=filt.get("owning_user", ""),
@@ -207,6 +218,8 @@ class GoldenFixtureTests(unittest.TestCase):
             self.assertAlmostEqual(report.plan_cny, exp["plan_cny"], places=3)
             self.assertAlmostEqual(report.on_demand_cny, exp["on_demand_cny"], places=3)
             self.assertAlmostEqual(report.total_cny, exp["total_cny"], places=3)
+            if "uses_enterprise_allowance" in exp:
+                self.assertEqual(report.uses_enterprise_allowance, exp["uses_enterprise_allowance"])
             self.assertEqual(len(report.events), len(exp["event_cny"]))
             for got, want in zip(report.events, exp["event_cny"]):
                 self.assertAlmostEqual(got.allocated_cny, want, places=3)

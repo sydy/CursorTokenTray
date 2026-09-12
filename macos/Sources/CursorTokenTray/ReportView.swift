@@ -8,6 +8,7 @@ final class ReportStore: ObservableObject {
     let app: AppStore
     @Published var teamScope = false
     @Published var kind = ""
+    @Published var category = ""
     @Published var model = ""
     @Published var cloud = ""
     @Published var chartHourly = false
@@ -26,6 +27,7 @@ final class ReportStore: ObservableObject {
     var filter: UsageReportFilter {
         UsageReportFilter(
             kind: kind,
+            category: category,
             model: model,
             headless: cloud == "local" ? false : cloud == "cloud" ? true : nil,
             owningUser: ""
@@ -178,6 +180,13 @@ struct ReportRootView: View {
                 Text("按需").tag(UsageEvents.kindOnDemand)
             }
             .frame(width: 140)
+            Picker("额度", selection: $store.category) {
+                Text("全部额度").tag("")
+                Text("First-party").tag(UsageEvents.categoryFirstParty)
+                Text("API").tag(UsageEvents.categoryAPI)
+                Text("Grok Bot").tag(UsageEvents.categoryGrokBot)
+            }
+            .frame(width: 150)
             Picker("模型", selection: $store.model) {
                 Text("全部模型").tag("")
                 ForEach(store.modelNames, id: \.self) { name in
@@ -202,13 +211,18 @@ struct ReportRootView: View {
     var kpiText: String {
         let report = store.report
         var mix = "套餐内 \(report.includedCount) · 免费 \(report.freeCount) · 按需 \(report.onDemandCount)"
+        mix += "    First-party \(report.firstPartyCount) · API \(report.apiCount) · Grok Bot \(report.grokBotCount)"
         if report.headlessCount > 0 { mix += " · 云端 \(report.headlessCount)" }
         let cost = report.hasCost ? "    费用 \(UsageParser.formatUSDCents(report.totalCents))" : ""
         var text = "请求 \(report.eventCount)    Token \(UsageParser.formatTokenCount(Double(report.totalTokens)))    \(mix)\(cost)"
+        if let usage = store.app.usage, usage.showsAmount {
+            text += "    企业额度 \(UsageParser.formatSpendRange(used: usage.usedCents, limit: usage.limitCents))"
+        }
         if report.planCny > 0 || report.onDemandCny > 0 {
             let expected = report.planCny + report.onDemandCny
             let rate = String(format: "%.2f", report.usdCnyRate)
-            text += "    预计实付 \(UsageEvents.formatCNY(expected))（月费 \(UsageEvents.formatCNY(report.planCny)) + 按需 \(UsageEvents.formatCNY(report.onDemandCny))）· 汇率 \(rate)"
+            let planLabel = report.usesEnterpriseAllowance ? "额度" : "月费"
+            text += "    预计实付 \(UsageEvents.formatCNY(expected))（\(planLabel) \(UsageEvents.formatCNY(report.planCny)) + 按需 \(UsageEvents.formatCNY(report.onDemandCny))）· 汇率 \(rate)"
         }
         return text
     }
