@@ -115,35 +115,23 @@ final class CompareStore: ObservableObject {
     }
 }
 
-struct CompareDisplayRow: Identifiable {
+enum CompareLineKind {
+    case header, account, category, total
+}
+
+struct CompareLine: Identifiable {
     var id: String
-    var isGroup: Bool
+    var kind: CompareLineKind
     var name: String
-    var channel: String
     var membership: String
     var window: String
-    var days: String
     var dailyHolding: String
-    var totalCny: String
+    var paid: String
     var requests: String
     var tokens: String
     var perMillion: String
     var perRequest: String
-    var fpCount: String
-    var fpTokens: String
-    var fpCny: String
-    var fpPerMillion: String
-    var fpPerRequest: String
-    var apiCount: String
-    var apiTokens: String
-    var apiCny: String
-    var apiPerMillion: String
-    var apiPerRequest: String
-    var grokCount: String
-    var grokTokens: String
-    var grokCny: String
-    var grokPerMillion: String
-    var grokPerRequest: String
+    var bestUnit: Bool
 }
 
 struct CompareRootView: View {
@@ -161,91 +149,241 @@ struct CompareRootView: View {
             Text(store.status)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("窗口按各账号自己的最新周期或有效期。日均持有 = 折合月费÷30。窗口实付把月费按窗口天数折算后再摊到套餐内请求；按需仍按费用×汇率。表内同时给出 First-party / API / Grok Bot 的次数、Token 与单位成本。")
+            Text("账号一行，First-party / API / Grok Bot 各占一行。日均持有 = 折合月费÷30。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            list
+            table
         }
         .padding(16)
-        .frame(minWidth: 880, minHeight: 560)
+        .frame(minWidth: 900, minHeight: 520)
         .onAppear { store.loadCache() }
     }
 
-    var list: some View {
-        List {
-            ForEach(store.report.groups, id: \.channel) { group in
-                Section(group.channelLabel) {
-                    ForEach(group.rows, id: \.accountId) { row in
-                        card(
-                            title: row.label,
-                            subtitle: [
-                                row.channelLabel,
-                                UsageParser.formatMembershipType(row.membershipType),
-                                "\(row.windowLabel) \(formatDays(row.windowDays))天",
-                            ].filter { !$0.isEmpty }.joined(separator: " · "),
-                            bold: false,
-                            dailyHolding: row.dailyHoldingCny,
-                            totalCny: row.totalCny,
-                            requests: row.eventCount,
-                            tokens: row.totalTokens,
-                            perMillion: row.cnyPerMillion,
-                            perRequest: row.cnyPerRequest,
-                            firstParty: row.firstParty,
-                            api: row.api,
-                            grok: row.grokBot
-                        )
-                    }
-                    card(
-                        title: "\(group.channelLabel)合计",
-                        subtitle: "",
-                        bold: true,
-                        dailyHolding: group.dailyHoldingCny,
-                        totalCny: group.totalCny,
-                        requests: group.eventCount,
-                        tokens: group.totalTokens,
-                        perMillion: group.cnyPerMillion,
-                        perRequest: group.cnyPerRequest,
-                        firstParty: group.firstParty,
-                        api: group.api,
-                        grok: group.grokBot
-                    )
-                }
+    var table: some View {
+        Table(lines) {
+            TableColumn("账号 / 分类") { line in
+                nameCell(line)
             }
+            .width(min: 168, ideal: 220)
+            TableColumn("窗口") { line in
+                cell(line.window, line)
+            }
+            .width(min: 110, ideal: 128)
+            TableColumn("日均持有") { line in
+                num(line.dailyHolding, line)
+            }
+            .width(min: 72, ideal: 84)
+            TableColumn("实付") { line in
+                num(line.paid, line)
+            }
+            .width(min: 72, ideal: 84)
+            TableColumn("请求") { line in
+                num(line.requests, line)
+            }
+            .width(min: 56, ideal: 68)
+            TableColumn("Token") { line in
+                num(line.tokens, line)
+            }
+            .width(min: 64, ideal: 80)
+            TableColumn("¥/百万") { line in
+                num(line.perMillion, line, best: line.bestUnit)
+            }
+            .width(min: 64, ideal: 76)
+            TableColumn("¥/次") { line in
+                num(line.perRequest, line)
+            }
+            .width(min: 56, ideal: 68)
         }
     }
 
-    func card(
-        title: String,
-        subtitle: String,
-        bold: Bool,
-        dailyHolding: Double,
-        totalCny: Double,
-        requests: Int,
-        tokens: Int,
-        perMillion: Double?,
-        perRequest: Double?,
-        firstParty: AccountCompareCategory,
-        api: AccountCompareCategory,
-        grok: AccountCompareCategory
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(bold ? .headline : .body.weight(.semibold))
-            if !subtitle.isEmpty {
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+    var lines: [CompareLine] {
+        let best = bestPerMillion
+        var out: [CompareLine] = []
+        for group in store.report.groups {
+            out.append(CompareLine(
+                id: "head-\(group.channel)",
+                kind: .header,
+                name: group.channelLabel,
+                membership: "",
+                window: "",
+                dailyHolding: "",
+                paid: "",
+                requests: "",
+                tokens: "",
+                perMillion: "",
+                perRequest: "",
+                bestUnit: false
+            ))
+            for row in group.rows {
+                let name = accountName(row)
+                out.append(line(
+                    id: "acc-\(row.accountId)",
+                    kind: .account,
+                    name: name,
+                    membership: UsageParser.formatMembershipType(row.membershipType),
+                    window: "\(row.windowLabel) \(formatDays(row.windowDays))天",
+                    dailyHolding: UsageEvents.formatCNY(row.dailyHoldingCny),
+                    paid: UsageEvents.formatCNY(row.totalCny),
+                    requests: formatCount(row.eventCount),
+                    tokens: UsageParser.formatTokenCount(Double(row.totalTokens)),
+                    perMillion: unit(row.cnyPerMillion),
+                    perRequest: unit(row.cnyPerRequest),
+                    bestUnit: isBest(row.cnyPerMillion, best)
+                ))
+                out.append(contentsOf: categoryLines(accountId: row.accountId, firstParty: row.firstParty, api: row.api, grok: row.grokBot))
             }
-            Text("日均持有 \(UsageEvents.formatCNY(dailyHolding))    窗口实付 \(UsageEvents.formatCNY(totalCny))    请求 \(requests)    Token \(UsageParser.formatTokenCount(Double(tokens)))    \(UsageEvents.formatCnyUnit(perMillion, suffix: "/百万"))    \(UsageEvents.formatCnyUnit(perRequest, suffix: "/次"))")
-                .font(.callout)
-            categoryLine("First-party", firstParty)
-            categoryLine("API", api)
-            categoryLine("Grok Bot", grok)
+            out.append(line(
+                id: "sum-\(group.channel)",
+                kind: .total,
+                name: "\(group.channelLabel)合计",
+                membership: "",
+                window: "",
+                dailyHolding: UsageEvents.formatCNY(group.dailyHoldingCny),
+                paid: UsageEvents.formatCNY(group.totalCny),
+                requests: formatCount(group.eventCount),
+                tokens: UsageParser.formatTokenCount(Double(group.totalTokens)),
+                perMillion: unit(group.cnyPerMillion),
+                perRequest: unit(group.cnyPerRequest),
+                bestUnit: false
+            ))
         }
-        .padding(.vertical, 4)
+        return out
     }
 
-    func categoryLine(_ name: String, _ cat: AccountCompareCategory) -> some View {
-        Text("\(name)  \(cat.count) 次 · \(UsageParser.formatTokenCount(Double(cat.tokens))) · \(UsageEvents.formatCNY(cat.cny)) · \(UsageEvents.formatCnyUnit(cat.cnyPerMillion, suffix: "/百万")) · \(UsageEvents.formatCnyUnit(cat.cnyPerRequest, suffix: "/次"))")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+    var bestPerMillion: Double? {
+        store.report.rows.compactMap(\.cnyPerMillion).min()
+    }
+
+    func categoryLines(accountId: String, firstParty: AccountCompareCategory, api: AccountCompareCategory, grok: AccountCompareCategory) -> [CompareLine] {
+        [
+            categoryLine(accountId: accountId, name: "First-party", cat: firstParty),
+            categoryLine(accountId: accountId, name: "API", cat: api),
+            categoryLine(accountId: accountId, name: "Grok Bot", cat: grok),
+        ]
+    }
+
+    func categoryLine(accountId: String, name: String, cat: AccountCompareCategory) -> CompareLine {
+        line(
+            id: "cat-\(accountId)-\(name)",
+            kind: .category,
+            name: name,
+            membership: "",
+            window: "",
+            dailyHolding: "",
+            paid: UsageEvents.formatCNY(cat.cny),
+            requests: formatCount(cat.count),
+            tokens: cat.tokens == 0 && cat.count == 0 ? "—" : UsageParser.formatTokenCount(Double(cat.tokens)),
+            perMillion: unit(cat.cnyPerMillion),
+            perRequest: unit(cat.cnyPerRequest),
+            bestUnit: false
+        )
+    }
+
+    func line(
+        id: String,
+        kind: CompareLineKind,
+        name: String,
+        membership: String,
+        window: String,
+        dailyHolding: String,
+        paid: String,
+        requests: String,
+        tokens: String,
+        perMillion: String,
+        perRequest: String,
+        bestUnit: Bool
+    ) -> CompareLine {
+        CompareLine(
+            id: id,
+            kind: kind,
+            name: name,
+            membership: membership,
+            window: window,
+            dailyHolding: dailyHolding,
+            paid: paid,
+            requests: requests,
+            tokens: tokens,
+            perMillion: perMillion,
+            perRequest: perRequest,
+            bestUnit: bestUnit
+        )
+    }
+
+    func nameCell(_ line: CompareLine) -> some View {
+        HStack(spacing: 6) {
+            Text(line.name)
+                .font(nameFont(line))
+            if !line.membership.isEmpty, line.membership.lowercased() != line.name.lowercased() {
+                Text(line.membership)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.leading, line.kind == .category ? 16 : 0)
+        .foregroundStyle(line.kind == .category ? Color.secondary : Color.primary)
+    }
+
+    func cell(_ text: String, _ line: CompareLine) -> some View {
+        Text(text)
+            .font(valueFont(line))
+            .foregroundStyle(line.kind == .category ? Color.secondary : Color.primary)
+    }
+
+    func num(_ text: String, _ line: CompareLine, best: Bool = false) -> some View {
+        Text(text)
+            .font(valueFont(line))
+            .monospacedDigit()
+            .foregroundStyle(best ? Color.green : (line.kind == .category ? Color.secondary : Color.primary))
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    func nameFont(_ line: CompareLine) -> Font {
+        switch line.kind {
+        case .header, .total: return .headline
+        case .account: return .body.weight(.semibold)
+        case .category: return .callout
+        }
+    }
+
+    func valueFont(_ line: CompareLine) -> Font {
+        switch line.kind {
+        case .header, .total: return .body.weight(.semibold)
+        case .account: return .body
+        case .category: return .callout
+        }
+    }
+
+    func accountName(_ row: AccountCompareRow) -> String {
+        if let acc = store.app.config.accounts.first(where: { $0.id == row.accountId }) {
+            let custom = acc.label.trimmingCharacters(in: .whitespaces)
+            if !custom.isEmpty { return custom }
+            return compactAccountId(acc.id)
+        }
+        let custom = row.label.trimmingCharacters(in: .whitespaces)
+        if !custom.isEmpty, custom != row.accountId { return custom }
+        return compactAccountId(row.accountId)
+    }
+
+    func compactAccountId(_ raw: String) -> String {
+        let aid = raw.trimmingCharacters(in: .whitespaces)
+        if aid.hasPrefix("user_"), aid.count > 18 {
+            var body = String(aid.dropFirst(5))
+            if body.hasPrefix("01") { body = String(body.dropFirst(2)) }
+            return String(body.prefix(5)) + "…" + String(body.suffix(2))
+        }
+        if aid.count > 14 { return String(aid.prefix(12)) + "…" }
+        return aid.isEmpty ? "未命名账号" : aid
+    }
+
+    func unit(_ amount: Double?) -> String {
+        UsageEvents.formatCnyUnit(amount, suffix: "")
+    }
+
+    func formatCount(_ value: Int) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        return f.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
     func formatDays(_ days: Double) -> String {
@@ -253,6 +391,11 @@ struct CompareRootView: View {
             return String(format: "%.0f", days.rounded())
         }
         return String(format: "%.2f", days)
+    }
+
+    func isBest(_ value: Double?, _ best: Double?) -> Bool {
+        guard let value, let best else { return false }
+        return abs(value - best) < 1e-9
     }
 }
 
@@ -268,13 +411,13 @@ final class CompareWindowController: NSObject, NSWindowDelegate {
         AppDelegate.ensureStatusItemVisible()
         if window == nil {
             let win = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1180, height: 640),
+                contentRect: NSRect(x: 0, y: 0, width: 1020, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             win.title = "账号对比"
-            win.minSize = NSSize(width: 1040, height: 520)
+            win.minSize = NSSize(width: 900, height: 480)
             win.isReleasedWhenClosed = false
             win.delegate = self
             window = win

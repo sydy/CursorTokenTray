@@ -13,8 +13,8 @@ struct SettingsRootView: View {
     @State private var channel = ""
     @State private var cnyRateText = "7.5"
     @State private var thresholdText = "50,20,5"
-    @State private var syncPath = ""
-    @State private var syncSecret = ""
+    @State private var cloudEmail = ""
+    @State private var cloudPassword = ""
     @State private var syncStatus = ""
     @State private var hint = ""
     @FocusState private var tokenFocused: Bool
@@ -42,8 +42,8 @@ struct SettingsRootView: View {
             channel = store.config.activeAccount?.channel ?? ""
             cnyRateText = formatDecimal(store.config.usdCnyRate)
             thresholdText = store.config.alertThresholds.map(String.init).joined(separator: ",")
-            syncPath = store.config.syncPath
-            syncSecret = ""
+            cloudEmail = store.config.cloudEmail
+            cloudPassword = ""
             syncStatus = store.config.syncLastError.isEmpty
                 ? (store.config.syncLastAt.isEmpty ? "" : "上次同步 " + store.config.syncLastAt)
                 : store.config.syncLastError
@@ -194,21 +194,28 @@ struct SettingsRootView: View {
 
     var syncPage: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("多端同步").font(.title3.bold())
-            Toggle("启用账号同步", isOn: syncEnabledBinding)
-            HStack {
-                TextField("同步文件夹（iCloud / 坚果云 / NAS）", text: $syncPath)
-                Button("选择…") { pickFolder() }
+            Text("云同步").font(.title3.bold())
+            if store.config.cloudLoggedIn {
+                Text("已登录  \(store.config.cloudEmail)")
+                HStack {
+                    Button("立即同步") { syncNow() }
+                    Button("退出登录") { logoutCloud() }
+                    Button("导出…") { exportFile() }
+                    Button("导入…") { importFile() }
+                }
+            } else {
+                TextField("邮箱", text: $cloudEmail)
+                SecureField("密码（至少 8 位，也用于加密）", text: $cloudPassword)
+                HStack {
+                    Button("登录") { authCloud(register: false) }
+                    Button("注册") { authCloud(register: true) }
+                    Button("导出…") { exportFile() }
+                    Button("导入…") { importFile() }
+                }
             }
-            SecureField(store.config.syncSecret.isEmpty ? "同步口令，两端必须相同" : "已保存，留空则不修改", text: $syncSecret)
-            Text("把文件夹放到云盘即可多电脑共用。文件用口令 AES-GCM 加密，请勿分享口令。")
+            Text("登录后自动同步账号和设置。数据用登录密码在本地加密，服务器看不到 Token。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack {
-                Button("立即同步") { syncNow() }
-                Button("导出…") { exportFile() }
-                Button("导入…") { importFile() }
-            }
             Text(syncStatus.isEmpty ? " " : syncStatus)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -322,19 +329,11 @@ struct SettingsRootView: View {
         )
     }
 
-    var syncEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { store.config.syncEnabled },
-            set: { v in
-                var c = store.config
-                c.syncEnabled = v
-                c.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
-                if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
-                    c.syncSecret = syncSecret.trimmingCharacters(in: .whitespaces)
-                }
-                store.applyConfig(c, refresh: false)
-            }
-        )
+    func exportPassphrase() -> String {
+        if !store.config.syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
+            return store.config.syncSecret
+        }
+        return cloudPassword.trimmingCharacters(in: .whitespaces)
     }
 
     func addToken() {
@@ -414,10 +413,6 @@ struct SettingsRootView: View {
             cfg.usdCnyRate = UsageEvents.clampUsdCnyRate(rate)
         }
         cfg.alertThresholds = ConfigStore.parseThresholds(thresholdText)
-        cfg.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
-        if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
-            cfg.syncSecret = syncSecret.trimmingCharacters(in: .whitespaces)
-        }
         if !tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             _ = try? cfg.upsertAccount(token: tokenText, activate: true)
         }
@@ -436,34 +431,57 @@ struct SettingsRootView: View {
         store.applyConfig(cfg, refresh: false)
     }
 
-    func applySyncFields(_ cfg: inout AppConfig) {
-        cfg.syncPath = syncPath.trimmingCharacters(in: .whitespaces)
-        if !syncSecret.trimmingCharacters(in: .whitespaces).isEmpty {
-            cfg.syncSecret = syncSecret.trimmingCharacters(in: .whitespaces)
+    func authCloud(register: Bool) {
+        let email = cloudEmail.trimmingCharacters(in: .whitespaces)
+        let password = cloudPassword.trimmingCharacters(in: .whitespaces)
+        if email.isEmpty || password.isEmpty {
+            syncStatus = "请填写邮箱和密码"
+            return
+        }
+        syncStatus = register ? "正在注册…" : "正在登录…"
+        var cfg = store.config
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = register
+                    ? try CloudSync.register(email: email, password: password)
+                    : try CloudSync.login(email: email, password: password)
+                CloudSync.applySession(&cfg, email: result.email.isEmpty ? email : result.email, password: password, access: result.access, refresh: result.refresh)
+                let status = AccountSync.reconcile(&cfg)
+                DispatchQueue.main.async {
+                    store.applyConfig(cfg, refresh: status.changed)
+                    syncStatus = status.message
+                    hint = status.message
+                    cloudPassword = ""
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    syncStatus = (error as? CursorAPIError)?.message ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func logoutCloud() {
+        var cfg = store.config
+        DispatchQueue.global(qos: .userInitiated).async {
+            CloudSync.logout(&cfg)
+            DispatchQueue.main.async {
+                store.applyConfig(cfg, refresh: false)
+                syncStatus = "已退出登录"
+            }
         }
     }
 
     func syncNow() {
+        syncStatus = "正在同步…"
         var cfg = store.config
-        applySyncFields(&cfg)
-        let status = AccountSync.reconcile(&cfg)
-        store.applyConfig(cfg, refresh: status.changed)
-        syncStatus = status.message
-        hint = status.ok ? status.message : status.message
-    }
-
-    func pickFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "选择"
-        panel.message = "选择同步文件夹（建议放到 iCloud Drive）"
-        if panel.runModal() == .OK, let url = panel.url {
-            syncPath = url.path
-            var cfg = store.config
-            applySyncFields(&cfg)
-            store.applyConfig(cfg, refresh: false)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = AccountSync.reconcile(&cfg)
+            DispatchQueue.main.async {
+                store.applyConfig(cfg, refresh: status.changed)
+                syncStatus = status.message
+                hint = status.message
+            }
         }
     }
 
@@ -475,9 +493,8 @@ struct SettingsRootView: View {
         if panel.runModal() != .OK { return }
         guard let url = panel.url else { return }
         var cfg = store.config
-        applySyncFields(&cfg)
         do {
-            let dest = try AccountSync.exportToFile(&cfg, path: url.path)
+            let dest = try AccountSync.exportToFile(&cfg, path: url.path, passphrase: exportPassphrase())
             store.applyConfig(cfg, refresh: false)
             syncStatus = "已导出到 " + dest
         } catch {
@@ -494,9 +511,8 @@ struct SettingsRootView: View {
         if panel.runModal() != .OK { return }
         guard let url = panel.url else { return }
         var cfg = store.config
-        applySyncFields(&cfg)
         do {
-            try AccountSync.importFromFile(&cfg, path: url.path)
+            try AccountSync.importFromFile(&cfg, path: url.path, passphrase: exportPassphrase())
             store.applyConfig(cfg, refresh: true)
             syncStatus = "已从文件合并账号"
             hint = "已导入"

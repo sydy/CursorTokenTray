@@ -78,13 +78,22 @@ public sealed class AppConfig
     public List<int> AlertNotifiedLevels { get; set; } = [];
     public bool ExhaustionNotified { get; set; }
     public bool SyncEnabled { get; set; }
-    public string SyncPath { get; set; } = "";
     public string SyncSecret { get; set; } = "";
     public string SyncDeviceId { get; set; } = "";
     public string SyncLastAt { get; set; } = "";
     public string SyncLastError { get; set; } = "";
     public bool SyncSecretDecryptFailed { get; set; }
     public string StoredSyncSecret { get; set; } = "";
+    public string CloudEmail { get; set; } = "";
+    public string CloudAccessToken { get; set; } = "";
+    public string CloudRefreshToken { get; set; } = "";
+    public int CloudRevision { get; set; }
+    public bool CloudAccessDecryptFailed { get; set; }
+    public bool CloudRefreshDecryptFailed { get; set; }
+    public string StoredCloudAccessToken { get; set; } = "";
+    public string StoredCloudRefreshToken { get; set; } = "";
+    public bool CloudLoggedIn =>
+        !string.IsNullOrWhiteSpace(CloudAccessToken) || !string.IsNullOrWhiteSpace(CloudRefreshToken);
     public List<DeletedAccount> DeletedAccounts { get; set; } = [];
     /// <summary>True when config.json existed but could not be parsed. Save will not clobber it unless the user adds an account.</summary>
     public bool LoadError { get; set; }
@@ -484,7 +493,6 @@ public static class ConfigStore
         MigrateLegacyActualCny(cfg, raw);
         if (cfg.Accounts.Any(a => a.TokenDecryptFailed)) cfg.DecryptError = true;
         cfg.SyncEnabled = Bool(raw, "sync_enabled", false);
-        cfg.SyncPath = Str(raw, "sync_path").Trim();
         if (raw.TryGetProperty("sync_secret", out var ss))
         {
             var stored = ss.GetString() ?? "";
@@ -500,6 +508,20 @@ public static class ConfigStore
         cfg.SyncDeviceId = Str(raw, "sync_device_id").Trim();
         cfg.SyncLastAt = Str(raw, "sync_last_at").Trim();
         cfg.SyncLastError = Str(raw, "sync_last_error");
+        cfg.CloudEmail = Str(raw, "cloud_email").Trim().ToLowerInvariant();
+        UnprotectField(raw, "cloud_access_token", v => cfg.CloudAccessToken = v, () =>
+        {
+            cfg.CloudAccessDecryptFailed = true;
+            cfg.StoredCloudAccessToken = Str(raw, "cloud_access_token");
+        });
+        UnprotectField(raw, "cloud_refresh_token", v => cfg.CloudRefreshToken = v, () =>
+        {
+            cfg.CloudRefreshDecryptFailed = true;
+            cfg.StoredCloudRefreshToken = Str(raw, "cloud_refresh_token");
+        });
+        if (raw.TryGetProperty("cloud_revision", out var cr) && cr.TryGetInt32(out var crv))
+            cfg.CloudRevision = Math.Max(0, crv);
+        if (!cfg.CloudLoggedIn) cfg.SyncEnabled = false;
         cfg.DeletedAccounts = ParseDeleted(raw);
         return NormalizeAccounts(cfg, raw);
     }
@@ -630,6 +652,15 @@ public static class ConfigStore
         return el.EnumerateArray().Select(x => x.TryGetInt32(out var n) ? n : (int?)null).Where(n => n is >= 1 and <= 100).Select(n => n!.Value).Distinct().OrderBy(x => x).ToList();
     }
 
+    static void UnprotectField(JsonElement raw, string key, Action<string> ok, Action fail)
+    {
+        if (!raw.TryGetProperty(key, out var v) || v.ValueKind != JsonValueKind.String) return;
+        var stored = v.GetString() ?? "";
+        if (stored.Length == 0) return;
+        if (TokenProtector.TryUnprotect(stored, out var plain)) ok(plain);
+        else fail();
+    }
+
     static bool Bool(JsonElement raw, string key, bool fallback) =>
         raw.TryGetProperty(key, out var v) ? v.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => fallback } : fallback;
 
@@ -696,11 +727,14 @@ public static class ConfigStore
         alert_notified_levels = cfg.AlertNotifiedLevels,
         exhaustion_notified = cfg.ExhaustionNotified,
         sync_enabled = cfg.SyncEnabled,
-        sync_path = cfg.SyncPath,
         sync_secret = TokenProtector.DiskToken(cfg.SyncSecret, cfg.StoredSyncSecret, cfg.SyncSecretDecryptFailed && string.IsNullOrEmpty(cfg.SyncSecret)),
         sync_device_id = cfg.SyncDeviceId,
         sync_last_at = cfg.SyncLastAt,
         sync_last_error = cfg.SyncLastError,
+        cloud_email = cfg.CloudEmail,
+        cloud_access_token = TokenProtector.DiskToken(cfg.CloudAccessToken, cfg.StoredCloudAccessToken, cfg.CloudAccessDecryptFailed && string.IsNullOrEmpty(cfg.CloudAccessToken)),
+        cloud_refresh_token = TokenProtector.DiskToken(cfg.CloudRefreshToken, cfg.StoredCloudRefreshToken, cfg.CloudRefreshDecryptFailed && string.IsNullOrEmpty(cfg.CloudRefreshToken)),
+        cloud_revision = cfg.CloudRevision,
         deleted_accounts = cfg.DeletedAccounts.Select(d => new Dictionary<string, object?>
         {
             ["id"] = d.Id,

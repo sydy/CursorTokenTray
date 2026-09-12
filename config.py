@@ -44,11 +44,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "alert_notified_levels": [],
     "exhaustion_notified": False,
     "sync_enabled": False,
-    "sync_path": "",
     "sync_secret": "",
     "sync_device_id": "",
     "sync_last_at": "",
     "sync_last_error": "",
+    "cloud_email": "",
+    "cloud_access_token": "",
+    "cloud_refresh_token": "",
+    "cloud_revision": 0,
     "deleted_accounts": [],
 }
 

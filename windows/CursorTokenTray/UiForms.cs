@@ -31,17 +31,25 @@ sealed class SettingsForm : Form
     readonly CheckBox _exhaust = new() { Text = "启用耗尽风险通知", AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
     readonly ComboBox _mode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     readonly CheckBox _auto = new() { Text = "开机自启", AutoSize = true, Margin = new Padding(0, 6, 0, 8) };
-    readonly CheckBox _syncEnable = new() { Text = "启用账号多端同步", AutoSize = true, Margin = new Padding(0, 8, 0, 4) };
-    readonly TextBox _syncPath = new() { Dock = DockStyle.Fill };
-    readonly TextBox _syncSecret = new() { Width = 220, UseSystemPasswordChar = true };
+    readonly TextBox _cloudEmail = new() { Width = 220 };
+    readonly TextBox _cloudPassword = new() { Width = 220, UseSystemPasswordChar = true };
+    readonly Label _cloudAccount = new() { AutoSize = true, Margin = new Padding(0, 4, 0, 4) };
     readonly Label _syncStatus = new() { AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 4, 0, 4) };
     readonly Label _syncHint = new()
     {
-        Text = "把同步文件夹放到 iCloud / OneDrive / 坚果云 等，两端填写相同口令。文件用口令加密，请勿分享口令。",
+        Text = "登录后自动同步账号和设置。数据用登录密码在本地加密，服务器看不到 Token。",
         AutoSize = true,
         ForeColor = Color.DimGray,
         Margin = new Padding(0, 4, 0, 8),
     };
+    readonly FlowLayoutPanel _cloudAuth = new() { AutoSize = true, WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
+    readonly FlowLayoutPanel _cloudActions = new() { AutoSize = true, WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
+    readonly Button _cloudLogin = ActionButton("登录");
+    readonly Button _cloudRegister = ActionButton("注册");
+    readonly Button _cloudLogout = ActionButton("退出登录");
+    readonly Button _syncNow = ActionButton("立即同步");
+    readonly Button _syncExport = ActionButton("导出…");
+    readonly Button _syncImport = ActionButton("导入…");
     readonly ComboBox _accounts = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
     readonly ComboBox _kind = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly DateTimePicker _startAt = new()
@@ -137,15 +145,14 @@ sealed class SettingsForm : Form
         _mode.Items.AddRange(["圆环百分比", "纯数字", "仅色点"]);
         _root.Controls.Add(FieldRow("托盘图标", _mode));
         _root.Controls.Add(_auto);
-        _root.Controls.Add(Caption("多端同步"));
-        _root.Controls.Add(_syncEnable);
-        var browse = ActionButton("浏览…");
-        _root.Controls.Add(FieldRow("同步文件夹", PathRow(_syncPath, browse)));
-        _root.Controls.Add(FieldRow("同步口令", _syncSecret));
-        var syncNow = ActionButton("立即同步");
-        var syncExport = ActionButton("导出…");
-        var syncImport = ActionButton("导入…");
-        _root.Controls.Add(Flow(syncNow, syncExport, syncImport));
+        _root.Controls.Add(Caption("云同步"));
+        _root.Controls.Add(_cloudAccount);
+        _root.Controls.Add(FieldRow("邮箱", _cloudEmail));
+        _root.Controls.Add(FieldRow("密码", _cloudPassword));
+        _cloudAuth.Controls.AddRange([_cloudLogin, _cloudRegister]);
+        _cloudActions.Controls.AddRange([_syncNow, _cloudLogout, _syncExport, _syncImport]);
+        _root.Controls.Add(_cloudAuth);
+        _root.Controls.Add(_cloudActions);
         _root.Controls.Add(_syncStatus);
         _root.Controls.Add(_syncHint);
         var cancel = ActionButton("取消");
@@ -200,10 +207,12 @@ sealed class SettingsForm : Form
         cancel.Click += (_, _) => Close();
         apply.Click += (_, _) => Persist(false);
         save.Click += (_, _) => { Persist(true); Close(); };
-        browse.Click += (_, _) => PickFolder();
-        syncNow.Click += (_, _) => DoSync();
-        syncExport.Click += (_, _) => DoExport();
-        syncImport.Click += (_, _) => DoImportFile();
+        _cloudLogin.Click += async (_, _) => await DoCloudAuth(register: false);
+        _cloudRegister.Click += async (_, _) => await DoCloudAuth(register: true);
+        _cloudLogout.Click += async (_, _) => await DoCloudLogout();
+        _syncNow.Click += async (_, _) => await DoSync();
+        _syncExport.Click += (_, _) => DoExport();
+        _syncImport.Click += (_, _) => DoImportFile();
         ResumeLayout(false);
         if (startImport) BeginInvoke(async () => await DoImport("cursor-app"));
     }
@@ -411,10 +420,15 @@ sealed class SettingsForm : Form
             _exhaust.Checked = cfg.NotifyExhaustionRisk;
             _mode.SelectedIndex = cfg.TrayDisplayMode switch { "number" => 1, "dot" => 2, _ => 0 };
             _auto.Checked = cfg.AutostartEnabled;
-            _syncEnable.Checked = cfg.SyncEnabled;
-            _syncPath.Text = cfg.SyncPath;
-            _syncSecret.Text = "";
-            _syncSecret.PlaceholderText = string.IsNullOrEmpty(cfg.SyncSecret) ? "两端必须相同，用于加密同步文件" : "已保存，留空则不修改";
+            _cloudEmail.Text = cfg.CloudEmail;
+            _cloudPassword.Text = "";
+            _cloudPassword.PlaceholderText = cfg.CloudLoggedIn ? "已保存，登录后用于加密" : "至少 8 位，也用于加密同步数据";
+            _cloudAccount.Text = cfg.CloudLoggedIn ? "已登录  " + cfg.CloudEmail : "未登录";
+            _cloudEmail.Enabled = !cfg.CloudLoggedIn;
+            _cloudPassword.Enabled = !cfg.CloudLoggedIn;
+            _cloudAuth.Visible = !cfg.CloudLoggedIn;
+            _cloudLogout.Visible = cfg.CloudLoggedIn;
+            _syncNow.Visible = cfg.CloudLoggedIn;
             _syncStatus.Text = SyncStatusText(cfg);
             WriteKindFrom(cfg.ActiveAccount);
         }
@@ -533,7 +547,7 @@ sealed class SettingsForm : Form
     {
         if (!string.IsNullOrWhiteSpace(cfg.SyncLastError)) return cfg.SyncLastError;
         if (!string.IsNullOrWhiteSpace(cfg.SyncLastAt)) return "上次同步 " + cfg.SyncLastAt;
-        return cfg.SyncEnabled ? "尚未同步" : "";
+        return cfg.CloudLoggedIn ? "尚未同步" : "";
     }
 
     void AddToken()
@@ -646,7 +660,6 @@ sealed class SettingsForm : Form
         _cfg.NotifyExhaustionRisk = _exhaust.Checked;
         _cfg.TrayDisplayMode = _mode.SelectedIndex switch { 1 => "number", 2 => "dot", _ => "ring" };
         _cfg.AutostartEnabled = _auto.Checked;
-        ReadSyncFields();
         ReadKindInto(_cfg.ActiveAccount);
         if (!string.IsNullOrWhiteSpace(_token.Text))
             try { _cfg.UpsertAccount(_token.Text, activate: true); } catch { }
@@ -654,40 +667,57 @@ sealed class SettingsForm : Form
         LoadFrom(_cfg);
     }
 
-    void ReadSyncFields()
+    string ExportPassphrase()
     {
-        _cfg.SyncEnabled = _syncEnable.Checked;
-        _cfg.SyncPath = _syncPath.Text.Trim();
-        if (!string.IsNullOrWhiteSpace(_syncSecret.Text))
-            _cfg.SyncSecret = _syncSecret.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(_cfg.SyncSecret)) return _cfg.SyncSecret;
+        if (!string.IsNullOrWhiteSpace(_cloudPassword.Text)) return _cloudPassword.Text.Trim();
+        return "";
     }
 
-    void PickFolder()
+    async Task DoCloudAuth(bool register)
     {
-        using var dlg = new FolderBrowserDialog
+        var email = _cloudEmail.Text.Trim();
+        var password = _cloudPassword.Text.Trim();
+        if (email.Length == 0 || password.Length == 0)
         {
-            Description = "选择同步文件夹（建议放到 iCloud / OneDrive / 坚果云）",
-            UseDescriptionForTitle = true,
-        };
-        if (!string.IsNullOrWhiteSpace(_syncPath.Text) && Directory.Exists(_syncPath.Text))
-            dlg.SelectedPath = _syncPath.Text;
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        _syncPath.Text = dlg.SelectedPath;
+            _syncStatus.Text = "请填写邮箱和密码";
+            return;
+        }
+        _syncStatus.Text = register ? "正在注册…" : "正在登录…";
+        try
+        {
+            var result = register
+                ? await CloudSync.RegisterAsync(email, password)
+                : await CloudSync.LoginAsync(email, password);
+            CloudSync.ApplySession(_cfg, result.Email.Length > 0 ? result.Email : email, password, result.Access, result.Refresh);
+            var status = await CloudSync.ReconcileAsync(_cfg);
+            _syncStatus.Text = status.Ok ? status.Message : status.Message;
+            NotifySaved();
+            LoadFrom(_cfg);
+        }
+        catch (Exception ex) { _syncStatus.Text = ex.Message; }
     }
 
-    void DoSync()
+    async Task DoCloudLogout()
     {
-        ReadSyncFields();
-        var status = AccountSync.Reconcile(_cfg);
+        await CloudSync.LogoutAsync(_cfg);
+        _syncStatus.Text = "已退出登录";
+        NotifySaved();
+        LoadFrom(_cfg);
+    }
+
+    async Task DoSync()
+    {
+        var status = await CloudSync.ReconcileAsync(_cfg);
         _syncStatus.Text = status.Message;
-        _status.Text = status.Ok ? status.Message : status.Message;
+        _status.Text = status.Message;
         NotifySaved();
         LoadFrom(_cfg);
     }
 
     void DoExport()
     {
-        ReadSyncFields();
+        var secret = ExportPassphrase();
         using var dlg = new SaveFileDialog
         {
             Filter = "同步文件|*.sync|JSON|*.json",
@@ -697,7 +727,7 @@ sealed class SettingsForm : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            var dest = AccountSync.ExportToFile(_cfg, dlg.FileName);
+            var dest = AccountSync.ExportToFile(_cfg, dlg.FileName, secret);
             _syncStatus.Text = "已导出到 " + dest;
         }
         catch (Exception ex) { _syncStatus.Text = ex.Message; }
@@ -705,7 +735,7 @@ sealed class SettingsForm : Form
 
     void DoImportFile()
     {
-        ReadSyncFields();
+        var secret = ExportPassphrase();
         using var dlg = new OpenFileDialog
         {
             Filter = "同步文件|*.sync;*.json|所有文件|*.*",
@@ -714,7 +744,7 @@ sealed class SettingsForm : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            AccountSync.ImportFromFile(_cfg, dlg.FileName);
+            AccountSync.ImportFromFile(_cfg, dlg.FileName, secret);
             _syncStatus.Text = "已从文件合并账号";
             NotifySaved();
             LoadFrom(_cfg);

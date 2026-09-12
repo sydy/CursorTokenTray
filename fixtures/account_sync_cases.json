@@ -356,6 +356,71 @@
         "auth_error_notified": true,
         "low_quota_notified": true
       }
+    },
+    {
+      "name": "newer_remote_settings_win",
+      "local": {
+        "updated_at": "2026-09-01T00:00:00.000Z",
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "个人",
+            "token": "tok-a",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": [],
+        "settings": {
+          "refresh_interval_minutes": 10,
+          "alert_thresholds": [50, 20, 5],
+          "notify_enabled": true,
+          "notify_exhaustion_risk": true,
+          "tray_display_mode": "ring",
+          "monthly_plan_usd": 20,
+          "usd_cny_rate": 7.5
+        }
+      },
+      "remote": {
+        "updated_at": "2026-09-10T00:00:00.000Z",
+        "active_account_id": "user_01A",
+        "accounts": [
+          {
+            "id": "user_01A",
+            "label": "个人",
+            "token": "tok-a",
+            "membership_type": "pro",
+            "sync_updated_at": "2026-09-01T00:00:00.000Z"
+          }
+        ],
+        "deleted": [],
+        "settings": {
+          "refresh_interval_minutes": 15,
+          "alert_thresholds": [40, 10],
+          "notify_enabled": false,
+          "notify_exhaustion_risk": false,
+          "tray_display_mode": "number",
+          "monthly_plan_usd": 60,
+          "usd_cny_rate": 7.2
+        }
+      },
+      "expected": {
+        "active_account_id": "user_01A",
+        "ids": ["user_01A"],
+        "labels": { "user_01A": "个人" },
+        "tokens": { "user_01A": "tok-a" },
+        "deleted_ids": [],
+        "settings": {
+          "refresh_interval_minutes": 15,
+          "alert_thresholds": [40, 10],
+          "notify_enabled": false,
+          "notify_exhaustion_risk": false,
+          "tray_display_mode": "number",
+          "monthly_plan_usd": 60,
+          "usd_cny_rate": 7.2
+        }
+      }
     }
   ],
   "crypto": {

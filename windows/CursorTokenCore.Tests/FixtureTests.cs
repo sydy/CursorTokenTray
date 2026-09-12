@@ -951,6 +951,14 @@ public class FixtureTests
             foreach (var kv in expected.GetProperty("tokens").EnumerateObject())
                 Assert.Equal(kv.Value.GetString(), merged.Accounts.First(a => a.Id == kv.Name).Token);
             Assert.Equal(expected.GetProperty("deleted_ids").EnumerateArray().Select(x => x.GetString()!).ToList(), merged.Deleted.Select(d => d.Id).ToList());
+            if (expected.TryGetProperty("settings", out var expSettings))
+            {
+                Assert.NotNull(merged.Settings);
+                Assert.Equal(expSettings.GetProperty("refresh_interval_minutes").GetInt32(), merged.Settings!.RefreshIntervalMinutes);
+                Assert.Equal(expSettings.GetProperty("tray_display_mode").GetString(), merged.Settings.TrayDisplayMode);
+                Assert.Equal(expSettings.GetProperty("notify_enabled").GetBoolean(), merged.Settings.NotifyEnabled);
+                Assert.Equal(expSettings.GetProperty("monthly_plan_usd").GetDouble(), merged.Settings.MonthlyPlanUsd);
+            }
             _ = name;
         }
         var crypto = root.GetProperty("crypto");

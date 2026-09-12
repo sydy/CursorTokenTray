@@ -26,6 +26,17 @@ public sealed class SyncAccount
     public string SyncUpdatedAt { get; set; } = "";
 }
 
+public sealed class SyncSettings
+{
+    public int RefreshIntervalMinutes { get; set; } = 10;
+    public List<int> AlertThresholds { get; set; } = [50, 20, 5];
+    public bool NotifyEnabled { get; set; } = true;
+    public bool NotifyExhaustionRisk { get; set; } = true;
+    public string TrayDisplayMode { get; set; } = "ring";
+    public double MonthlyPlanUsd { get; set; }
+    public double UsdCnyRate { get; set; } = UsageEvents.DefaultUsdCnyRate;
+}
+
 public sealed class SyncSnapshot
 {
     public int Version { get; set; } = 1;
@@ -34,6 +45,7 @@ public sealed class SyncSnapshot
     public string ActiveAccountId { get; set; } = "";
     public List<SyncAccount> Accounts { get; set; } = [];
     public List<DeletedAccount> Deleted { get; set; } = [];
+    public SyncSettings? Settings { get; set; }
 }
 
 public sealed class SyncStatus
@@ -48,6 +60,7 @@ public sealed class SyncStatus
 public static class AccountSync
 {
     public const string Format = "cursortokentray.accounts.v1";
+    public const string FormatV2 = "cursortokentray.sync.v2";
     public const string Filename = "CursorTokenTray.accounts.sync";
     public const string Kdf = "pbkdf2-sha256";
     public const int DefaultIterations = 210_000;
@@ -172,6 +185,48 @@ public static class AccountSync
         SyncUpdatedAt = (account.SyncUpdatedAt ?? "").Trim(),
     };
 
+    public static SyncSettings SnapshotSettings(AppConfig cfg) => new()
+    {
+        RefreshIntervalMinutes = Math.Max(1, cfg.RefreshIntervalMinutes),
+        AlertThresholds = cfg.AlertThresholds.Count == 0 ? [50, 20, 5] : [.. cfg.AlertThresholds],
+        NotifyEnabled = cfg.NotifyEnabled,
+        NotifyExhaustionRisk = cfg.NotifyExhaustionRisk,
+        TrayDisplayMode = cfg.TrayDisplayMode is "ring" or "number" or "dot" ? cfg.TrayDisplayMode : "ring",
+        MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(cfg.MonthlyPlanUsd),
+        UsdCnyRate = UsageEvents.ClampUsdCnyRate(cfg.UsdCnyRate),
+    };
+
+    public static SyncSettings SnapshotSettings(SyncSettings settings) => new()
+    {
+        RefreshIntervalMinutes = Math.Max(1, settings.RefreshIntervalMinutes),
+        AlertThresholds = settings.AlertThresholds.Count == 0 ? [50, 20, 5] : [.. settings.AlertThresholds],
+        NotifyEnabled = settings.NotifyEnabled,
+        NotifyExhaustionRisk = settings.NotifyExhaustionRisk,
+        TrayDisplayMode = settings.TrayDisplayMode is "ring" or "number" or "dot" ? settings.TrayDisplayMode : "ring",
+        MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(settings.MonthlyPlanUsd),
+        UsdCnyRate = UsageEvents.ClampUsdCnyRate(settings.UsdCnyRate),
+    };
+
+    public static void ApplySettings(AppConfig cfg, SyncSettings? settings)
+    {
+        if (settings is null) return;
+        var row = SnapshotSettings(settings);
+        cfg.RefreshIntervalMinutes = row.RefreshIntervalMinutes;
+        cfg.AlertThresholds = row.AlertThresholds;
+        cfg.NotifyEnabled = row.NotifyEnabled;
+        cfg.NotifyExhaustionRisk = row.NotifyExhaustionRisk;
+        cfg.TrayDisplayMode = row.TrayDisplayMode;
+        cfg.MonthlyPlanUsd = row.MonthlyPlanUsd;
+        cfg.UsdCnyRate = row.UsdCnyRate;
+    }
+
+    public static string SettingsIdentity(SyncSettings? settings)
+    {
+        if (settings is null) return "";
+        var row = SnapshotSettings(settings);
+        return $"{row.RefreshIntervalMinutes}\n{string.Join(",", row.AlertThresholds)}\n{row.NotifyEnabled}\n{row.NotifyExhaustionRisk}\n{row.TrayDisplayMode}\n{row.MonthlyPlanUsd}\n{row.UsdCnyRate}";
+    }
+
     public static SyncSnapshot SnapshotFromConfig(AppConfig cfg)
     {
         var accounts = new List<SyncAccount>();
@@ -189,6 +244,7 @@ public static class AccountSync
             ActiveAccountId = cfg.ActiveAccountId ?? "",
             Accounts = accounts,
             Deleted = SanitizeDeleted(cfg.DeletedAccounts),
+            Settings = SnapshotSettings(cfg),
         };
     }
 
@@ -198,7 +254,7 @@ public static class AccountSync
             .Select(a => $"{a.Id}\n{a.Label}\n{a.Token}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}");
         var deleted = snap.Deleted.OrderBy(d => d.Id, StringComparer.Ordinal)
             .Select(d => $"{d.Id}\n{d.DeletedAt}");
-        return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}";
+        return $"{snap.ActiveAccountId}\n{string.Join("|", accounts)}\n{string.Join("|", deleted)}\n{SettingsIdentity(snap.Settings)}";
     }
 
     public static SyncSnapshot MergeSnapshots(SyncSnapshot local, SyncSnapshot remote)
@@ -230,7 +286,11 @@ public static class AccountSync
         foreach (var id in tombstones.Keys.ToList())
             if (chosen.ContainsKey(id)) tombstones.Remove(id);
 
-        var active = CompareIso(remote.UpdatedAt, local.UpdatedAt) > 0 ? remote.ActiveAccountId : local.ActiveAccountId;
+        var remoteNewer = CompareIso(remote.UpdatedAt, local.UpdatedAt) > 0;
+        var active = remoteNewer ? remote.ActiveAccountId : local.ActiveAccountId;
+        var settings = remoteNewer
+            ? remote.Settings ?? local.Settings
+            : local.Settings ?? remote.Settings;
         if (!chosen.ContainsKey(active ?? ""))
             active = chosen.Keys.OrderBy(x => x, StringComparer.Ordinal).FirstOrDefault() ?? "";
 
@@ -243,6 +303,7 @@ public static class AccountSync
             Accounts = chosen.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value).ToList(),
             Deleted = tombstones.OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .Select(kv => new DeletedAccount { Id = kv.Key, DeletedAt = kv.Value }).ToList(),
+            Settings = settings is null ? null : SnapshotSettings(settings),
         };
     }
 
@@ -251,6 +312,7 @@ public static class AccountSync
         string Before() => string.Join("|", cfg.Accounts.Select(a =>
             $"{a.Id}\n{a.Token}\n{a.Label}\n{a.MembershipType}\n{a.AccountKind}\n{a.TempStartAt}\n{a.TempValidDays}\n{a.TempValidHours}\n{a.ActualCny}\n{a.Channel}\n{a.SyncUpdatedAt}"));
         var before = Before();
+        var beforeSettings = SettingsIdentity(SnapshotSettings(cfg));
         var existing = cfg.Accounts.ToDictionary(a => a.Id, StringComparer.Ordinal);
         var merged = new List<Account>();
         foreach (var row in snap.Accounts)
@@ -292,8 +354,9 @@ public static class AccountSync
         var ids = merged.Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
         if (ids.Contains(snap.ActiveAccountId)) cfg.ActiveAccountId = snap.ActiveAccountId;
         else cfg.ActiveAccountId = merged.Count > 0 ? merged[0].Id : "";
+        ApplySettings(cfg, snap.Settings);
         cfg.SyncLegacyFields();
-        return before != Before();
+        return before != Before() || beforeSettings != SettingsIdentity(SnapshotSettings(cfg));
     }
 
     public static byte[] DeriveKey(string passphrase, byte[] salt, int iterations = DefaultIterations)
@@ -332,7 +395,14 @@ public static class AccountSync
         var deleted = string.Join(",", snap.Deleted.Select(d =>
             $"{{\"deleted_at\":{Q(d.DeletedAt)},\"id\":{Q(d.Id)}}}")
         );
-        return $"{{\"accounts\":[{accounts}],\"active_account_id\":{Q(snap.ActiveAccountId)},\"deleted\":[{deleted}],\"device_id\":{Q(snap.DeviceId)},\"updated_at\":{Q(snap.UpdatedAt)},\"version\":{snap.Version}}}";
+        var settings = "";
+        if (snap.Settings is { } s)
+        {
+            var row = SnapshotSettings(s);
+            var thresholds = string.Join(",", row.AlertThresholds);
+            settings = $",\"settings\":{{\"alert_thresholds\":[{thresholds}],\"monthly_plan_usd\":{CanonicalNumber(row.MonthlyPlanUsd)},\"notify_enabled\":{(row.NotifyEnabled ? "true" : "false")},\"notify_exhaustion_risk\":{(row.NotifyExhaustionRisk ? "true" : "false")},\"refresh_interval_minutes\":{row.RefreshIntervalMinutes},\"tray_display_mode\":{Q(row.TrayDisplayMode)},\"usd_cny_rate\":{CanonicalNumber(row.UsdCnyRate)}}}";
+        }
+        return $"{{\"accounts\":[{accounts}],\"active_account_id\":{Q(snap.ActiveAccountId)},\"deleted\":[{deleted}],\"device_id\":{Q(snap.DeviceId)}{settings},\"updated_at\":{Q(snap.UpdatedAt)},\"version\":{snap.Version}}}";
     }
 
     public static Dictionary<string, object> EncryptEnvelope(SyncSnapshot payload, string passphrase, byte[]? salt = null, byte[]? nonce = null, int iterations = DefaultIterations)
@@ -351,7 +421,7 @@ public static class AccountSync
         Buffer.BlockCopy(tag, 0, blob, ciphertext.Length, tag.Length);
         return new Dictionary<string, object>
         {
-            ["format"] = Format,
+            ["format"] = payload.Settings is null ? Format : FormatV2,
             ["kdf"] = Kdf,
             ["iterations"] = iterations,
             ["salt"] = Convert.ToBase64String(saltB),
@@ -362,7 +432,8 @@ public static class AccountSync
 
     public static SyncSnapshot DecryptEnvelope(JsonElement envelope, string passphrase)
     {
-        if (Str(envelope, "format") != Format) throw new CursorApiException("不是 CursorTokenTray 账号同步文件");
+        var format = Str(envelope, "format");
+        if (format != Format && format != FormatV2) throw new CursorApiException("不是 CursorTokenTray 账号同步文件");
         if (Str(envelope, "kdf") != Kdf) throw new CursorApiException("不支持的同步文件密钥算法");
         byte[] salt, nonce, blob;
         int iterations;
@@ -430,6 +501,21 @@ public static class AccountSync
                 rows.Add(new DeletedAccount { Id = Str(item, "id").Trim(), DeletedAt = Str(item, "deleted_at").Trim() });
             snap.Deleted = SanitizeDeleted(rows);
         }
+        if (raw.TryGetProperty("settings", out var set) && set.ValueKind == JsonValueKind.Object)
+        {
+            var mode = Str(set, "tray_display_mode").Trim().ToLowerInvariant();
+            var thresholds = ConfigStore.ParseThresholds(set.TryGetProperty("alert_thresholds", out var at) ? at : default);
+            snap.Settings = SnapshotSettings(new SyncSettings
+            {
+                RefreshIntervalMinutes = Math.Max(1, IntVal(set, "refresh_interval_minutes") ?? 10),
+                AlertThresholds = thresholds,
+                NotifyEnabled = set.TryGetProperty("notify_enabled", out var ne) && ne.ValueKind == JsonValueKind.False ? false : true,
+                NotifyExhaustionRisk = set.TryGetProperty("notify_exhaustion_risk", out var nr) && nr.ValueKind == JsonValueKind.False ? false : true,
+                TrayDisplayMode = mode is "ring" or "number" or "dot" ? mode : "ring",
+                MonthlyPlanUsd = UsageEvents.ClampMonthlyPlanUsd(DoubleVal(set, "monthly_plan_usd")),
+                UsdCnyRate = UsageEvents.ClampUsdCnyRate(DoubleVal(set, "usd_cny_rate") == 0 ? UsageEvents.DefaultUsdCnyRate : DoubleVal(set, "usd_cny_rate")),
+            });
+        }
         return snap;
     }
 
@@ -494,61 +580,13 @@ public static class AccountSync
 
     public static string SyncReady(AppConfig cfg)
     {
-        if (!cfg.SyncEnabled) return "未启用多端同步";
-        if (string.IsNullOrWhiteSpace(cfg.SyncPath)) return "请选择同步文件夹";
-        if (string.IsNullOrWhiteSpace(cfg.SyncSecret)) return "请设置同步口令";
+        if (!cfg.SyncEnabled || !cfg.CloudLoggedIn) return "请先登录云同步";
+        if (string.IsNullOrWhiteSpace(cfg.SyncSecret)) return "请重新登录以解锁同步密钥";
         return "";
     }
 
-    public static SyncStatus Reconcile(AppConfig cfg, DateTimeOffset? now = null, bool write = true)
-    {
-        var status = new SyncStatus();
-        var reason = SyncReady(cfg);
-        if (reason.Length > 0)
-        {
-            status.Message = reason;
-            cfg.SyncLastError = reason;
-            return status;
-        }
-        var path = ResolveSyncPath(cfg.SyncPath);
-        status.Path = path;
-        EnsureDeviceId(cfg);
-        var stamp = NowIso(now);
-        var local = SnapshotFromConfig(cfg);
-        local.DeviceId = cfg.SyncDeviceId;
-        try
-        {
-            var envelope = ReadEnvelope(path);
-            var remote = envelope is { } env
-                ? DecryptEnvelope(env, cfg.SyncSecret)
-                : new SyncSnapshot();
-            var merged = MergeSnapshots(local, remote);
-            var changed = ApplySnapshotToConfig(cfg, merged);
-            if (write && SnapshotIdentity(merged) != SnapshotIdentity(remote))
-            {
-                merged.UpdatedAt = stamp;
-                merged.DeviceId = cfg.SyncDeviceId;
-                WriteEnvelope(path, EncryptEnvelope(merged, cfg.SyncSecret));
-                status.Pushed = true;
-            }
-            cfg.SyncLastAt = stamp;
-            cfg.SyncLastError = "";
-            status.Ok = true;
-            status.Changed = changed;
-            status.Message = changed && status.Pushed ? "已合并并对齐同步文件"
-                : changed ? "已从同步文件导入账号"
-                : status.Pushed ? "已写入同步文件"
-                : "账号已与同步文件一致";
-            return status;
-        }
-        catch (Exception ex)
-        {
-            var message = string.IsNullOrWhiteSpace(ex.Message) ? "同步失败" : ex.Message;
-            cfg.SyncLastError = message;
-            status.Message = message;
-            return status;
-        }
-    }
+    public static SyncStatus Reconcile(AppConfig cfg, DateTimeOffset? now = null, bool write = true) =>
+        CloudSync.Reconcile(cfg, now, write);
 
     public static string ExportToFile(AppConfig cfg, string path, string? passphrase = null)
     {
