@@ -183,8 +183,13 @@ sealed class FlyoutForm : Form
         var gap = Px(FlyoutLayout.ColumnGap);
         var leftW = Px(FlyoutLayout.LeftWidth);
         var radius = Px(FlyoutLayout.CornerRadius);
-        using (var path = RoundRect(new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f), radius))
-        using (var border = new Pen(pal.Border, Math.Max(1f, s)))
+        var penWidth = Math.Max(1f, s);
+        using (var fill = RoundRect(new RectangleF(0, 0, Width, Height), radius))
+        using (var bg = new SolidBrush(pal.Window))
+            g.FillPath(bg, fill);
+        var stroke = FlyoutLayout.InnerStroke(Width, Height, radius, penWidth);
+        using (var path = RoundRect(new RectangleF(stroke.X, stroke.Y, stroke.Width, stroke.Height), stroke.Radius))
+        using (var border = new Pen(pal.Border, penWidth))
             g.DrawPath(border, path);
 
         _hits.Clear();
@@ -477,8 +482,12 @@ sealed class FlyoutForm : Form
     {
         if (!IsHandleCreated || Width <= 0 || Height <= 0) return;
         var radius = UiLayout.ScalePx(FlyoutLayout.CornerRadius, DeviceDpi);
-        using var path = RoundRect(new RectangleF(0, 0, Width, Height), radius);
-        var region = new Region(path);
+        var d = FlyoutLayout.RoundRegionDiameter(radius);
+        var (right, bottom) = FlyoutLayout.RoundRegionExtent(Width, Height);
+        var hrgn = CreateRoundRectRgn(0, 0, right, bottom, d, d);
+        if (hrgn == IntPtr.Zero) return;
+        var region = Region.FromHrgn(hrgn);
+        DeleteObject(hrgn);
         var old = Region;
         Region = region;
         old?.Dispose();
@@ -488,9 +497,11 @@ sealed class FlyoutForm : Form
     {
         try
         {
+            // Win11 DWMWCP_ROUND is ~8px and fights the 16px GDI region, leaving
+            // square ears where the two clips disagree. We own the 16px shape.
             const int DwmwaWindowCornerPreference = 33;
-            const int DwmwcpRound = 2;
-            var pref = DwmwcpRound;
+            const int DwmwcpDoNotRound = 1;
+            var pref = DwmwcpDoNotRound;
             _ = DwmSetWindowAttribute(Handle, DwmwaWindowCornerPreference, ref pref, sizeof(int));
         }
         catch { }
@@ -596,6 +607,12 @@ sealed class FlyoutForm : Form
 
     [DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [DllImport("gdi32.dll")]
+    static extern IntPtr CreateRoundRectRgn(int nLeftRect, int nTopRect, int nRightRect, int nBottomRect, int nWidthEllipse, int nHeightEllipse);
+
+    [DllImport("gdi32.dll")]
+    static extern bool DeleteObject(IntPtr hObject);
 
     readonly record struct HitTarget(string Id, Rectangle Rect);
 }

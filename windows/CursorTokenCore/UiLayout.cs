@@ -235,6 +235,36 @@ public static class FlyoutLayout
     public const int ToolButtonIcon = 14;
     public const int ToolButtonIconGap = 4;
 
+    /// <summary>
+    /// Ellipse diameter for GDI <c>CreateRoundRectRgn</c>. A GraphicsPath region
+    /// rasterizes each corner with a 1px square ear.
+    /// </summary>
+    public static int RoundRegionDiameter(int radius) => Math.Max(2, radius * 2);
+
+    /// <summary>
+    /// Exclusive right/bottom for <c>CreateRoundRectRgn</c>. The extra pixel is
+    /// GDI's convention and keeps the far edge from being clipped.
+    /// </summary>
+    public static (int Right, int Bottom) RoundRegionExtent(int width, int height)
+        => (Math.Max(0, width) + 1, Math.Max(0, height) + 1);
+
+    /// <summary>
+    /// Center-line of a rounded stroke drawn inside the window, like SwiftUI
+    /// <c>strokeBorder</c>. A centered stroke is clipped by the window region
+    /// and flattens the corner curve.
+    /// </summary>
+    public static (float X, float Y, float Width, float Height, float Radius) InnerStroke(
+        float width, float height, float radius, float penWidth)
+    {
+        var inset = Math.Max(0.5f, penWidth / 2f);
+        return (
+            inset,
+            inset,
+            Math.Max(0f, width - inset * 2f),
+            Math.Max(0f, height - inset * 2f),
+            Math.Max(1f, radius - inset));
+    }
+
     public readonly record struct ToolButtonFrame(float X, float Y, float Width, float Height);
 
     /// <summary>

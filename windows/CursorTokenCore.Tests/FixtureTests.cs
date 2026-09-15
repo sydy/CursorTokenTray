@@ -963,6 +963,28 @@ public class FixtureTests
     }
 
     [Fact]
+    public void FlyoutInnerStrokeStaysInsideTheWindowRadius()
+    {
+        var stroke = FlyoutLayout.InnerStroke(500, 280, 16, 1);
+        Assert.Equal(0.5f, stroke.X);
+        Assert.Equal(0.5f, stroke.Y);
+        Assert.Equal(499f, stroke.Width);
+        Assert.Equal(279f, stroke.Height);
+        Assert.Equal(15.5f, stroke.Radius);
+
+        var fat = FlyoutLayout.InnerStroke(500, 280, 16, 2);
+        Assert.Equal(1f, fat.X);
+        Assert.Equal(498f, fat.Width);
+        Assert.Equal(15f, fat.Radius);
+
+        var (right, bottom) = FlyoutLayout.RoundRegionExtent(500, 280);
+        Assert.Equal(501, right);
+        Assert.Equal(281, bottom);
+        Assert.Equal(32, FlyoutLayout.RoundRegionDiameter(16));
+        Assert.Equal(2, FlyoutLayout.RoundRegionDiameter(0));
+    }
+
+    [Fact]
     public void FlyoutToolButtonsSizeToLabelAndShareTheBar()
     {
         var shortBtn = FlyoutLayout.ToolButtonSize(16, 12, hasIcon: true, scale: 1);
